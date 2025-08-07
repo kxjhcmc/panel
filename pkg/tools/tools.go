@@ -2,168 +2,189 @@
 package tools
 
 import (
+	"context"
 	"errors"
-	"os"
-	"os/exec"
-	"strconv"
+	"fmt"
+	stdnet "net"
+	"net/http"
+	"slices"
 	"strings"
 	"time"
 
-	"github.com/gookit/color"
+	"github.com/go-resty/resty/v2"
 	"github.com/shirou/gopsutil/cpu"
 	"github.com/shirou/gopsutil/disk"
 	"github.com/shirou/gopsutil/host"
 	"github.com/shirou/gopsutil/load"
 	"github.com/shirou/gopsutil/mem"
 	"github.com/shirou/gopsutil/net"
+
+	"github.com/tnborg/panel/pkg/shell"
+	"github.com/tnborg/panel/pkg/types"
 )
 
-// MonitoringInfo 监控信息
-type MonitoringInfo struct {
-	Cpus      []cpu.InfoStat                 `json:"cpus"`
-	Percent   []float64                      `json:"percent"`
-	Load      *load.AvgStat                  `json:"load"`
-	Host      *host.InfoStat                 `json:"host"`
-	Mem       *mem.VirtualMemoryStat         `json:"mem"`
-	Swap      *mem.SwapMemoryStat            `json:"swap"`
-	Net       []net.IOCountersStat           `json:"net"`
-	DiskIO    map[string]disk.IOCountersStat `json:"disk_io"`
-	Disk      []disk.PartitionStat           `json:"disk"`
-	DiskUsage map[string]*disk.UsageStat     `json:"disk_usage"`
-}
-
-// GetMonitoringInfo 获取监控数据
-func GetMonitoringInfo() MonitoringInfo {
-	var res MonitoringInfo
+// CurrentInfo 获取监控数据
+func CurrentInfo(nets, disks []string) types.CurrentInfo {
+	var res types.CurrentInfo
 	res.Cpus, _ = cpu.Info()
-	res.Percent, _ = cpu.Percent(time.Second, false)
+	res.Percents, _ = cpu.Percent(100*time.Millisecond, true)
+	percent, _ := cpu.Percent(100*time.Millisecond, false)
+	if len(percent) > 0 {
+		res.Percent = percent[0]
+	}
 	res.Load, _ = load.Avg()
 	res.Host, _ = host.Info()
 	res.Mem, _ = mem.VirtualMemory()
 	res.Swap, _ = mem.SwapMemory()
-	res.Net, _ = net.IOCounters(true)
-	res.DiskIO, _ = disk.IOCounters()
-	res.Disk, _ = disk.Partitions(true)
-
-	res.DiskUsage = make(map[string]*disk.UsageStat)
-	for _, partition := range res.Disk {
-		if strings.HasPrefix(partition.Mountpoint, "/dev") || strings.HasPrefix(partition.Mountpoint, "/sys") || strings.HasPrefix(partition.Mountpoint, "/proc") || strings.HasPrefix(partition.Mountpoint, "/run") || strings.HasPrefix(partition.Mountpoint, "/boot") || strings.HasPrefix(partition.Mountpoint, "/usr") || strings.HasPrefix(partition.Mountpoint, "/var") {
-			continue
+	// 硬盘IO
+	ioCounters, _ := disk.IOCounters(disks...)
+	for _, info := range ioCounters {
+		res.DiskIO = append(res.DiskIO, info)
+	}
+	// 硬盘使用
+	var excludes = []string{"/dev", "/boot", "/sys", "/dev", "/run", "/proc", "/usr", "/var", "/snap"}
+	excludes = append(excludes, "/mnt/cdrom") // CDROM
+	excludes = append(excludes, "/mnt/wsl")   // Windows WSL
+	res.Disk, _ = disk.Partitions(false)
+	res.Disk = slices.DeleteFunc(res.Disk, func(d disk.PartitionStat) bool {
+		for _, exclude := range excludes {
+			if strings.HasPrefix(d.Mountpoint, exclude) {
+				return true
+			}
+			// 去除内存盘和overlay容器盘
+			if slices.Contains([]string{"tmpfs", "overlay"}, d.Fstype) {
+				continue
+			}
 		}
+		return false
+	})
+	// 分区使用
+	for _, partition := range res.Disk {
 		usage, _ := disk.Usage(partition.Mountpoint)
-		res.DiskUsage[partition.Mountpoint] = usage
+		res.DiskUsage = append(res.DiskUsage, *usage)
+	}
+	// 网络
+	if len(nets) == 0 {
+		netInfo, _ := net.IOCounters(false)
+		res.Net = netInfo
+	} else {
+		var netStats []net.IOCountersStat
+		netInfo, _ := net.IOCounters(true)
+		for _, state := range netInfo {
+			if slices.Contains(nets, state.Name) {
+				netStats = append(netStats, state)
+			}
+		}
+		res.Net = netStats
 	}
 
+	res.Time = time.Now()
 	return res
 }
 
-type PanelInfo struct {
-	Name        string `json:"name"`
-	Version     string `json:"version"`
-	DownloadUrl string `json:"download_url"`
-	Body        string `json:"body"`
-	Date        string `json:"date"`
+// RestartPanel 重启面板
+func RestartPanel() {
+	_ = shell.ExecfAsync("sleep 1 && systemctl restart panel")
 }
 
-// GetLatestPanelVersion 获取最新版本
-func GetLatestPanelVersion() (PanelInfo, error) {
-	var info PanelInfo
+// IsChina 是否中国大陆
+func IsChina() bool {
+	client := resty.New()
+	client.SetLogger(NoopLogger{})
+	client.SetDisableWarn(true)
+	client.SetTimeout(3 * time.Second)
+	client.SetRetryCount(3)
 
-	cmd := exec.Command("/bin/bash", "-c", "curl \"https://api.github.com/repos/haozi-team/panel/releases/latest\"")
-	output, err := cmd.Output()
-	if err != nil {
-		return info, errors.New("获取最新版本失败")
-	}
-
-	file, err := os.CreateTemp("", "panel")
-	if err != nil {
-		return info, errors.New("创建临时文件失败")
-	}
-	defer os.Remove(file.Name())
-	_, err = file.Write(output)
-	if err != nil {
-		return info, errors.New("写入临时文件失败")
-	}
-	err = file.Close()
-	if err != nil {
-		return info, errors.New("关闭临时文件失败")
-	}
-	fileName := file.Name()
-
-	name := exec.Command("/bin/bash", "-c", "jq -r '.name' "+fileName)
-	version := exec.Command("/bin/bash", "-c", "jq -r '.tag_name' "+fileName)
-	body := exec.Command("/bin/bash", "-c", "jq -r '.body' "+fileName)
-	date := exec.Command("/bin/bash", "-c", "jq -r '.published_at' "+fileName)
-	nameOutput, _ := name.Output()
-	versionOutput, _ := version.Output()
-	bodyOutput, _ := body.Output()
-	dateOutput, _ := date.Output()
-	info.Name = strings.TrimSpace(string(nameOutput))
-	info.Version = strings.TrimSpace(string(versionOutput))
-	info.Body = strings.TrimSpace(string(bodyOutput))
-	info.Date = strings.TrimSpace(string(dateOutput))
-	if IsArm() {
-		downloadUrl := exec.Command("/bin/bash", "-c", "jq -r '.assets[] | select(.name | contains(\"arm64\")) | .browser_download_url' "+fileName)
-		downloadUrlOutput, _ := downloadUrl.Output()
-		info.DownloadUrl = strings.TrimSpace(string(downloadUrlOutput))
-	} else {
-		downloadUrl := exec.Command("/bin/bash", "-c", "jq -r '.assets[] | select(.name | contains(\"amd64v2\")) | .browser_download_url' "+fileName)
-		downloadUrlOutput, _ := downloadUrl.Output()
-		info.DownloadUrl = strings.TrimSpace(string(downloadUrlOutput))
+	resp, err := client.R().Get("https://www.qualcomm.cn/cdn-cgi/trace")
+	if err != nil || !resp.IsSuccess() {
+		return false
 	}
 
-	return info, nil
+	if strings.Contains(resp.String(), "loc=CN") {
+		return true
+	}
+
+	return false
 }
 
-// UpdatePanel 更新面板
-func UpdatePanel(proxy bool) error {
-	panelInfo, err := GetLatestPanelVersion()
+// GetPublicIPv4 获取公网IPv4
+func GetPublicIPv4() (string, error) {
+	client := resty.New()
+	client.SetLogger(NoopLogger{})
+	client.SetDisableWarn(true)
+	client.SetTimeout(3 * time.Second)
+	client.SetRetryCount(3)
+	client.SetTransport(&http.Transport{
+		DialContext: func(ctx context.Context, network string, addr string) (stdnet.Conn, error) {
+			return (&stdnet.Dialer{}).DialContext(ctx, "tcp4", addr)
+		},
+	})
+
+	resp, err := client.R().Get("https://www.qualcomm.cn/cdn-cgi/trace")
+	if err != nil || !resp.IsSuccess() {
+		return "", errors.New("failed to get public ipv4 address")
+	}
+
+	return strings.TrimPrefix(strings.Split(resp.String(), "\n")[2], "ip="), nil
+}
+
+// GetPublicIPv6 获取公网IPv6
+func GetPublicIPv6() (string, error) {
+	client := resty.New()
+	client.SetLogger(NoopLogger{})
+	client.SetDisableWarn(true)
+	client.SetTimeout(3 * time.Second)
+	client.SetRetryCount(3)
+	client.SetTransport(&http.Transport{
+		DialContext: func(ctx context.Context, network string, addr string) (stdnet.Conn, error) {
+			return (&stdnet.Dialer{}).DialContext(ctx, "tcp6", addr)
+		},
+	})
+
+	resp, err := client.R().Get("https://www.qualcomm.cn/cdn-cgi/trace")
+	if err != nil || !resp.IsSuccess() {
+		return "", errors.New("failed to get public ipv6 address")
+	}
+
+	return strings.TrimPrefix(strings.Split(resp.String(), "\n")[2], "ip="), nil
+}
+
+// GetLocalIPv4 获取本地IPv4
+func GetLocalIPv4() (string, error) {
+	conn, err := stdnet.Dial("udp", "119.29.29.29:53")
 	if err != nil {
-		return err
+		return "", err
+	}
+	defer func(conn stdnet.Conn) {
+		_ = conn.Close()
+	}(conn)
+
+	local := conn.LocalAddr().(*stdnet.UDPAddr)
+	return local.IP.String(), nil
+}
+
+// GetLocalIPv6 获取本地IPv6
+func GetLocalIPv6() (string, error) {
+	conn, err := stdnet.Dial("udp", "[2402:4e00::]:53")
+	if err != nil {
+		return "", err
+	}
+	defer func(conn stdnet.Conn) {
+		_ = conn.Close()
+	}(conn)
+
+	local := conn.LocalAddr().(*stdnet.UDPAddr)
+	return local.IP.String(), nil
+}
+
+// FormatBytes 格式化bytes
+func FormatBytes(size float64) string {
+	units := []string{"B", "KB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB"}
+
+	i := 0
+	for ; size >= 1024 && i < len(units); i++ {
+		size /= 1024
 	}
 
-	color.Greenln("最新版本: " + panelInfo.Version)
-	color.Greenln("下载链接: " + panelInfo.DownloadUrl)
-	color.Greenln("使用代理: " + strconv.FormatBool(proxy))
-
-	color.Greenln("备份面板配置...")
-	Exec("cp -f /www/panel/database/panel.db /tmp/panel.db.bak")
-	Exec("cp -f /www/panel/panel.conf /tmp/panel.conf.bak")
-	if !Exists("/tmp/panel.db.bak") || !Exists("/tmp/panel.conf.bak") {
-		return errors.New("备份面板配置失败")
-	}
-	color.Greenln("备份完成")
-
-	color.Greenln("清理旧版本...")
-	Exec("rm -rf /www/panel/*")
-	color.Greenln("清理完成")
-
-	color.Greenln("正在下载...")
-	if proxy {
-		Exec("wget -O /www/panel/panel.zip https://ghproxy.com/" + panelInfo.DownloadUrl)
-	} else {
-		Exec("wget -O /www/panel/panel.zip " + panelInfo.DownloadUrl)
-	}
-	color.Greenln("下载完成")
-
-	color.Greenln("更新新版本...")
-	Exec("cd /www/panel && unzip -o panel.zip && rm -rf panel.zip && chmod 700 panel && bash scripts/update_panel.sh")
-	color.Greenln("更新完成")
-
-	color.Greenln("恢复面板配置...")
-	Exec("cp -f /tmp/panel.db.bak /www/panel/database/panel.db")
-	Exec("cp -f /tmp/panel.conf.bak /www/panel/panel.conf")
-	if !Exists("/www/panel/database/panel.db") || !Exists("/www/panel/panel.conf") {
-		return errors.New("恢复面板配置失败")
-	}
-	Exec("/www/panel/panel --env=panel.conf artisan migrate")
-	color.Greenln("恢复完成")
-
-	Exec("panel writeSetting version " + panelInfo.Version)
-
-	color.Greenln("重启面板...")
-	Exec("systemctl restart panel")
-	color.Greenln("重启完成")
-
-	return nil
+	return fmt.Sprintf("%.2f %s", size, units[i])
 }

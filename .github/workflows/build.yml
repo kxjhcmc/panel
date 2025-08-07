@@ -5,28 +5,92 @@ on:
       - main
   pull_request:
 jobs:
-  build:
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: latest
+          run_install: true
+          package_json_file: web/package.json
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'pnpm'
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: Build frontend
+        working-directory: web
+        run: |
+          cp .env.production .env
+          cp settings/proxy-config.example.ts settings/proxy-config.ts
+          pnpm run gettext:compile
+          pnpm build
+      - name: Upload frontend
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend
+          path: web/dist/
+  backend:
+    needs: frontend
     runs-on: ubuntu-latest
     strategy:
       matrix:
         goarch: [ amd64, arm64 ]
       fail-fast: true
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Setup Go
+        uses: actions/setup-go@v5
         with:
           cache: true
           go-version: 'stable'
       - name: Install dependencies
         run: go mod tidy
+      - name: Download frontend
+        uses: actions/download-artifact@v5
+        with:
+          name: frontend
+          path: pkg/embed/frontend
+      - name: Set build info
+        run: |
+          echo "VERSION=$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//' || echo '0.0.0')" >> $GITHUB_ENV
+          echo "BUILD_TIME=$(date -u '+%F %T UTC')" >> $GITHUB_ENV
+          echo "COMMIT_HASH=$(git rev-parse --short HEAD)" >> $GITHUB_ENV
+          echo "GO_VERSION=$(go version | cut -d' ' -f3)" >> $GITHUB_ENV
+          echo "BUILD_ID=${{ github.run_id }}" >> $GITHUB_ENV
+          echo "BUILD_USER=$(whoami)" >> $GITHUB_ENV
+          echo "BUILD_HOST=$(hostname)" >> $GITHUB_ENV
       - name: Build ${{ matrix.goarch }}
         env:
           CGO_ENABLED: 0
           GOOS: linux
           GOARCH: ${{ matrix.goarch }}
-        run: go build -ldflags '-s -w --extldflags "-static -fpic"' -o panel-${{ matrix.goarch }}
+        run: |
+          LDFLAGS="-s -w --extldflags '-static'"
+          LDFLAGS="${LDFLAGS} -X 'github.com/tnborg/panel/internal/app.Version=${VERSION}'"
+          LDFLAGS="${LDFLAGS} -X 'github.com/tnborg/panel/internal/app.BuildTime=${BUILD_TIME}'"
+          LDFLAGS="${LDFLAGS} -X 'github.com/tnborg/panel/internal/app.CommitHash=${COMMIT_HASH}'"
+          LDFLAGS="${LDFLAGS} -X 'github.com/tnborg/panel/internal/app.GoVersion=${GO_VERSION}'"
+          LDFLAGS="${LDFLAGS} -X 'github.com/tnborg/panel/internal/app.BuildID=${BUILD_ID}'"
+          LDFLAGS="${LDFLAGS} -X 'github.com/tnborg/panel/internal/app.BuildUser=${BUILD_USER}'"
+          LDFLAGS="${LDFLAGS} -X 'github.com/tnborg/panel/internal/app.BuildHost=${BUILD_HOST}'"
+          go build -ldflags "${LDFLAGS}" -o web-${{ matrix.goarch }} ./cmd/web
+          go build -ldflags "${LDFLAGS}" -o cli-${{ matrix.goarch }} ./cmd/cli
+      - name: Compress ${{ matrix.goarch }}
+        run: |
+          upx --best --lzma web-${{ matrix.goarch }}
+          upx --best --lzma cli-${{ matrix.goarch }}
       - name: Upload artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
-          name: panel-${{ matrix.goarch }}
-          path: panel-${{ matrix.goarch }}
+          name: backend-${{ matrix.goarch }}
+          path: |
+            web-${{ matrix.goarch }}
+            cli-${{ matrix.goarch }}

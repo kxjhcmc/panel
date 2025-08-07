@@ -1,8 +1,10 @@
+version: 2
 project_name: panel
+
 builds:
-  -
-    id: panel
-    binary: panel
+  - id: web
+    main: ./cmd/web
+    binary: web
     env:
       - CGO_ENABLED=0
     goos:
@@ -10,25 +12,58 @@ builds:
     goarch:
       - amd64
       - arm64
-    goamd64:
-      - v2
-      - v3
     ldflags:
-      - -s -w --extldflags "-static -fpic"
+      - -s -w --extldflags "-static"
+      - -X 'github.com/tnborg/panel/internal/app.Version={{ .Version }}'
+      - -X 'github.com/tnborg/panel/internal/app.BuildTime={{ .Now.Format "2006-01-02 15:04:05 MST" }}'
+      - -X 'github.com/tnborg/panel/internal/app.CommitHash={{ .ShortCommit }}'
+      - -X 'github.com/tnborg/panel/internal/app.GoVersion={{ .Env.GOVERSION }}'
+      - -X 'github.com/tnborg/panel/internal/app.BuildID={{ .Env.GITHUB_RUN_ID }}'
+      - -X 'github.com/tnborg/panel/internal/app.BuildUser={{ .Env.USER }}'
+      - -X 'github.com/tnborg/panel/internal/app.BuildHost={{ .Env.HOSTNAME }}'
+  - id: cli
+    main: ./cmd/cli
+    binary: cli
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w --extldflags "-static"
+      - -X 'github.com/tnborg/panel/internal/app.Version={{ .Version }}'
+      - -X 'github.com/tnborg/panel/internal/app.BuildTime={{ .Now.Format "2006-01-02 15:04:05 MST" }}'
+      - -X 'github.com/tnborg/panel/internal/app.CommitHash={{ .ShortCommit }}'
+      - -X 'github.com/tnborg/panel/internal/app.GoVersion={{ .Env.GOVERSION }}'
+      - -X 'github.com/tnborg/panel/internal/app.BuildID={{ .Env.GITHUB_RUN_ID }}'
+      - -X 'github.com/tnborg/panel/internal/app.BuildUser={{ .Env.USER }}'
+      - -X 'github.com/tnborg/panel/internal/app.BuildHost={{ .Env.HOSTNAME }}'
+
+upx:
+  - enabled: true
+    # Filter by build ID.
+    ids:
+      - web
+      - cli
+    # Compress argument.
+    # Valid options are from '1' (faster) to '9' (better), and 'best'.
+    compress: best
+    # Whether to try LZMA (slower).
+    lzma: true
+    # Whether to try all methods and filters (slow).
+    brute: false
+
 archives:
-  -
-    id: panel-archive
-    builds:
-      - panel
-    format: zip
+  - id: panel
+    ids:
+      - web
+      - cli
+    formats: ["zip"]
     wrap_in_directory: false
-    strip_parent_binary_folder: true
-    rlcp: true
+    strip_binary_directory: true
     files:
       - LICENSE
-      - public/*
+      - config.example.yml
       - storage/*
-      - database/*
-      - scripts/*
-      - resources/*
-      - panel-example.conf

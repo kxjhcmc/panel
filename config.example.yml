@@ -1,0 +1,15 @@
+app:
+  debug: false
+  key: a-long-string-with-32-characters
+  locale: zh_CN
+  timezone: Asia/Shanghai
+  root: /www
+http:
+  debug: false
+  port: 8888
+  entrance: /
+  tls: true
+database:
+  debug: false
+session:
+  lifetime: 120

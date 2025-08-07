@@ -1,7 +1,6 @@
 name: ✨ 功能请求 (Feature Request)
 description: 为这个项目提出一个想法 (Suggest an idea for this project)
-title: "✨ [Feature] "
-labels: [ "✏️ Feature", "enhancement" ]
+type: ✨ Feature
 
 body:
   - type: markdown
@@ -25,7 +24,7 @@ body:
     attributes:
       label: 描述功能 (Describe Feature)
       description: |
-        简明概要地描述你的新功能，以及它将解决什么问题。
+        简明概要地描述您的新功能，以及它将解决什么问题。
         Briefly describe your new feature and what problem it will solve.
     validations:
       required: true
@@ -51,14 +50,5 @@ body:
         Environment? Browser? Software version? Related configuration? Link? References?
         任何能让我们对该功能的实现有更多帮助的东西。
         Anything that can help us more with the implementation of this feature.
-    validations:
-      required: false
-  - type: textarea
-    id: yellows
-    attributes:
-      label: 来点色图 (Porn Pictures)
-      description: |
-        如果你不提供色图而你的 Issue 中又有其他不符合标准的地方，那么你的 Issue 可能会被直接关闭。
-        If you don't provide some porn pictures and there are other non-conformities in your issue, then your issue may be closed directly.
     validations:
       required: false

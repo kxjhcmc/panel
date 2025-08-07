@@ -1,16 +1,33 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
-    "config:base"
+    "config:recommended"
   ],
   "labels": [
     "🤖 Dependencies"
   ],
   "commitMessagePrefix": "chore(deps): ",
-  "customEnvVariables": {
-    "GOPROXY": "https://goproxy.cn,direct"
+  "lockFileMaintenance": {
+    "enabled": true,
+    "automerge": true
   },
+  "platformAutomerge": true,
   "postUpdateOptions": [
-    "gomodTidy"
-  ]
+    "gomodTidy",
+    "gomodUpdateImportPaths",
+    "pnpmDedupe"
+  ],
+  "packageRules": [
+    {
+      "groupName": "non-major dependencies",
+      "matchUpdateTypes": [
+        "digest",
+        "pin",
+        "patch",
+        "minor"
+      ],
+      "automerge": true
+    }
+  ],
+  "ignoreDeps": []
 }

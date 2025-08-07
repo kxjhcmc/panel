@@ -7,20 +7,54 @@ on:
 permissions:
   contents: read
 jobs:
-  lint:
-    name: lint
+  golangci:
+    name: golanci-lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Go
+        uses: actions/setup-go@v5
         with:
+          cache: true
           go-version: 'stable'
-          cache: false
-      - name: Lint
-        uses: golangci/golangci-lint-action@v3
+      - name: Run golangci-lint
+        uses: golangci/golangci-lint-action@v8
         with:
           skip-cache: true
-          skip-pkg-cache: true
-          skip-build-cache: true
           version: latest
           args: --timeout=30m ./...
+  govulncheck:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          cache: true
+          go-version: 'stable'
+      - name: Install Govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+      - name: Run Govulncheck
+        run: govulncheck ./...
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: latest
+          run_install: true
+          package_json_file: web/package.json
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'pnpm'
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: Run pnpm lint
+        working-directory: web
+        run: pnpm lint
