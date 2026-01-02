@@ -3,7 +3,6 @@ defineOptions({
   name: 'apps-postgresql-index'
 })
 
-import Editor from '@guolao/vue-monaco-editor'
 import { NButton, NDataTable } from 'naive-ui'
 import { useGettext } from 'vue3-gettext'
 
@@ -60,36 +59,12 @@ const handleClearLog = async () => {
 
 <template>
   <common-page show-footer>
-    <template #action>
-      <n-button
-        v-if="currentTab == 'config'"
-        class="ml-16"
-        type="primary"
-        @click="handleSaveConfig"
-      >
-        <the-icon :size="18" icon="material-symbols:save-outline" />
-        {{ $gettext('Save') }}
-      </n-button>
-      <n-button
-        v-if="currentTab == 'user-config'"
-        class="ml-16"
-        type="primary"
-        @click="handleSaveUserConfig"
-      >
-        <the-icon :size="18" icon="material-symbols:save-outline" />
-        {{ $gettext('Save') }}
-      </n-button>
-      <n-button v-if="currentTab == 'log'" class="ml-16" type="primary" @click="handleClearLog">
-        <the-icon :size="18" icon="material-symbols:delete-outline" />
-        {{ $gettext('Clear Log') }}
-      </n-button>
-    </template>
     <n-tabs v-model:value="currentTab" type="line" animated>
       <n-tab-pane name="status" :tab="$gettext('Running Status')">
         <service-status service="postgresql" show-reload />
       </n-tab-pane>
       <n-tab-pane name="config" :tab="$gettext('Main Configuration')">
-        <n-space vertical>
+        <n-flex vertical>
           <n-alert type="warning">
             {{
               $gettext(
@@ -97,22 +72,16 @@ const handleClearLog = async () => {
               )
             }}
           </n-alert>
-          <Editor
-            v-model:value="config"
-            language="ini"
-            theme="vs-dark"
-            height="60vh"
-            mt-8
-            :options="{
-              automaticLayout: true,
-              formatOnType: true,
-              formatOnPaste: true
-            }"
-          />
-        </n-space>
+          <common-editor v-model:value="config" height="60vh" />
+          <n-flex>
+            <n-button type="primary" @click="handleSaveConfig">
+              {{ $gettext('Save') }}
+            </n-button>
+          </n-flex>
+        </n-flex>
       </n-tab-pane>
       <n-tab-pane name="user-config" :tab="$gettext('User Configuration')">
-        <n-space vertical>
+        <n-flex vertical>
           <n-alert type="warning">
             {{
               $gettext(
@@ -120,19 +89,13 @@ const handleClearLog = async () => {
               )
             }}
           </n-alert>
-          <Editor
-            v-model:value="userConfig"
-            language="ini"
-            theme="vs-dark"
-            height="60vh"
-            mt-8
-            :options="{
-              automaticLayout: true,
-              formatOnType: true,
-              formatOnPaste: true
-            }"
-          />
-        </n-space>
+          <common-editor v-model:value="userConfig" height="60vh" />
+          <n-flex>
+            <n-button type="primary" @click="handleSaveUserConfig">
+              {{ $gettext('Save') }}
+            </n-button>
+          </n-flex>
+        </n-flex>
       </n-tab-pane>
       <n-tab-pane name="load" :tab="$gettext('Load Status')">
         <n-data-table
@@ -145,7 +108,14 @@ const handleClearLog = async () => {
         />
       </n-tab-pane>
       <n-tab-pane name="run-log" :tab="$gettext('Runtime Logs')">
-        <realtime-log service="postgresql" />
+        <n-flex vertical>
+          <n-flex>
+            <n-button type="primary" @click="handleClearLog">
+              {{ $gettext('Clear Log') }}
+            </n-button>
+          </n-flex>
+          <realtime-log service="postgresql" />
+        </n-flex>
       </n-tab-pane>
       <n-tab-pane name="slow-log" :tab="$gettext('Slow Logs')">
         <realtime-log :path="log" />

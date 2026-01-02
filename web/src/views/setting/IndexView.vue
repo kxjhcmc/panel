@@ -2,11 +2,11 @@
 defineOptions({
   name: 'setting-index'
 })
+
 import { NButton } from 'naive-ui'
 import { useGettext } from 'vue3-gettext'
 
 import setting from '@/api/panel/setting'
-import TheIcon from '@/components/custom/TheIcon.vue'
 import { useThemeStore } from '@/store'
 import CreateModal from '@/views/setting/CreateModal.vue'
 import SettingBase from '@/views/setting/SettingBase.vue'
@@ -28,6 +28,7 @@ const { data: model } = useRequest(setting.list, {
     offline_mode: false,
     two_fa: false,
     lifetime: 0,
+    ip_header: '',
     bind_domain: [],
     bind_ip: [],
     bind_ua: [],
@@ -40,6 +41,9 @@ const { data: model } = useRequest(setting.list, {
 })
 
 const handleSave = () => {
+  if (model.value.entrance.trim() === '') {
+    model.value.entrance = '/'
+  }
   useRequest(setting.update(model.value)).onSuccess(() => {
     window.$message.success($gettext('Saved successfully'))
     if (model.value.locale !== themeStore.locale) {
@@ -58,28 +62,29 @@ const handleCreate = () => {
 </script>
 
 <template>
-  <common-page show-footer>
-    <template #action>
-      <n-button v-if="currentTab != 'user'" type="primary" @click="handleSave">
-        <the-icon :size="18" icon="material-symbols:save-outline" />
-        {{ $gettext('Save') }}
-      </n-button>
-      <n-button v-if="currentTab == 'user'" type="primary" @click="handleCreate">
-        <the-icon :size="18" icon="material-symbols:add" />
-        {{ $gettext('Create User') }}
-      </n-button>
+  <common-page show-header show-footer>
+    <template #tabbar>
+      <n-tabs v-model:value="currentTab" animated>
+        <n-tab name="base" :tab="$gettext('Basic')" />
+        <n-tab name="safe" :tab="$gettext('Safe')" />
+        <n-tab name="user" :tab="$gettext('User')" />
+      </n-tabs>
     </template>
-    <n-tabs v-model:value="currentTab" type="line" animated>
-      <n-tab-pane name="base" :tab="$gettext('Basic')">
-        <setting-base v-model:model="model" />
-      </n-tab-pane>
-      <n-tab-pane name="safe" :tab="$gettext('Safe')">
-        <setting-safe v-model:model="model" />
-      </n-tab-pane>
-      <n-tab-pane name="user" :tab="$gettext('User')">
-        <setting-user />
-      </n-tab-pane>
-    </n-tabs>
+    <n-flex vertical>
+      <n-flex>
+        <n-button v-if="currentTab == 'user'" type="primary" @click="handleCreate">
+          {{ $gettext('Create User') }}
+        </n-button>
+      </n-flex>
+      <setting-base v-if="currentTab === 'base'" v-model:model="model" />
+      <setting-safe v-if="currentTab === 'safe'" v-model:model="model" />
+      <setting-user v-if="currentTab === 'user'" />
+      <n-flex>
+        <n-button v-if="currentTab != 'user'" type="primary" @click="handleSave">
+          {{ $gettext('Save') }}
+        </n-button>
+      </n-flex>
+    </n-flex>
   </common-page>
   <create-modal v-model:show="createModal" />
 </template>

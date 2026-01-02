@@ -11,7 +11,6 @@ import (
 	"github.com/libdns/cloudflare"
 	"github.com/libdns/cloudns"
 	"github.com/libdns/gcore"
-	"github.com/libdns/hetzner"
 	"github.com/libdns/huaweicloud"
 	"github.com/libdns/libdns"
 	"github.com/libdns/namesilo"
@@ -21,8 +20,8 @@ import (
 	"github.com/mholt/acmez/v3/acme"
 	"golang.org/x/net/publicsuffix"
 
-	"github.com/tnborg/panel/pkg/shell"
-	"github.com/tnborg/panel/pkg/systemctl"
+	"github.com/acepanel/panel/pkg/shell"
+	"github.com/acepanel/panel/pkg/systemctl"
 )
 
 type httpSolver struct {
@@ -143,8 +142,10 @@ func (s *dnsSolver) getDNSProvider() (DNSProvider, error) {
 	switch s.dns {
 	case AliYun:
 		dns = &alidns.Provider{
-			AccKeyID:     s.param.AK,
-			AccKeySecret: s.param.SK,
+			CredentialInfo: alidns.CredentialInfo{
+				AccessKeyID:     s.param.AK,
+				AccessKeySecret: s.param.SK,
+			},
 		}
 	case Tencent:
 		dns = &tencentcloud.Provider{
@@ -190,10 +191,6 @@ func (s *dnsSolver) getDNSProvider() (DNSProvider, error) {
 				AuthPassword: s.param.SK,
 			}
 		}
-	case Hetzner:
-		dns = &hetzner.Provider{
-			AuthAPIToken: s.param.AK,
-		}
 	default:
 		return nil, fmt.Errorf("unsupported DNS provider: %s", s.dns)
 	}
@@ -213,7 +210,6 @@ const (
 	Porkbun    DnsType = "porkbun"
 	NameSilo   DnsType = "namesilo"
 	ClouDNS    DnsType = "cloudns"
-	Hetzner    DnsType = "hetzner"
 )
 
 type DNSParam struct {

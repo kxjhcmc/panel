@@ -7,7 +7,7 @@ export default {
   path: '/database',
   component: Layout,
   meta: {
-    order: 2
+    order: 4
   },
   children: [
     {
@@ -16,7 +16,7 @@ export default {
       component: () => import('./IndexView.vue'),
       meta: {
         title: 'Database',
-        icon: 'mdi:database',
+        icon: 'mdi:database-outline',
         role: ['admin'],
         requireAuth: true
       }

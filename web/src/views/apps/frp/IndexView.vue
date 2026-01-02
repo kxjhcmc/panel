@@ -3,7 +3,6 @@ defineOptions({
   name: 'apps-frp-index'
 })
 
-import Editor from '@guolao/vue-monaco-editor'
 import { NButton } from 'naive-ui'
 import { useGettext } from 'vue3-gettext'
 
@@ -44,22 +43,10 @@ onMounted(() => {
           <n-card :title="$gettext('Modify Configuration')">
             <template #header-extra>
               <n-button type="primary" @click="handleSaveConfig('frps')">
-                <the-icon :size="18" icon="material-symbols:save-outline-rounded" />
                 {{ $gettext('Save') }}
               </n-button>
             </template>
-            <Editor
-              v-model:value="config.frps"
-              language="ini"
-              theme="vs-dark"
-              height="60vh"
-              mt-8
-              :options="{
-                automaticLayout: true,
-                formatOnType: true,
-                formatOnPaste: true
-              }"
-            />
+            <common-editor v-model:value="config.frps" height="60vh" />
           </n-card>
         </n-flex>
       </n-tab-pane>
@@ -69,22 +56,10 @@ onMounted(() => {
           <n-card :title="$gettext('Modify Configuration')">
             <template #header-extra>
               <n-button type="primary" @click="handleSaveConfig('frpc')">
-                <the-icon :size="18" icon="material-symbols:save-outline-rounded" />
                 {{ $gettext('Save') }}
               </n-button>
             </template>
-            <Editor
-              v-model:value="config.frpc"
-              language="ini"
-              theme="vs-dark"
-              height="60vh"
-              mt-8
-              :options="{
-                automaticLayout: true,
-                formatOnType: true,
-                formatOnPaste: true
-              }"
-            />
+            <common-editor v-model:value="config.frpc" height="60vh" />
           </n-card>
         </n-flex>
       </n-tab-pane>

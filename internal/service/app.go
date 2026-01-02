@@ -2,13 +2,14 @@ package service
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/leonelquinteros/gotext"
 	"github.com/libtnb/chix"
 
-	"github.com/tnborg/panel/internal/biz"
-	"github.com/tnborg/panel/internal/http/request"
-	"github.com/tnborg/panel/pkg/types"
+	"github.com/acepanel/panel/internal/biz"
+	"github.com/acepanel/panel/internal/http/request"
+	"github.com/acepanel/panel/pkg/types"
 )
 
 type AppService struct {
@@ -50,29 +51,36 @@ func (s *AppService) List(w http.ResponseWriter, r *http.Request) {
 			updateExist = s.appRepo.UpdateExist(item.Slug)
 			show = installedAppMap[item.Slug].Show
 		}
-		apps = append(apps, types.AppCenter{
-			Icon:        item.Icon,
-			Name:        item.Name,
-			Description: item.Description,
-			Slug:        item.Slug,
-			Channels: []struct {
-				Slug      string `json:"slug"`
-				Name      string `json:"name"`
-				Panel     string `json:"panel"`
-				Install   string `json:"-"`
-				Uninstall string `json:"-"`
-				Update    string `json:"-"`
-				Subs      []struct {
-					Log     string `json:"log"`
-					Version string `json:"version"`
-				} `json:"subs"`
-			}(item.Channels),
+
+		app := types.AppCenter{
+			Icon:             item.Icon,
+			Name:             item.Name,
+			Description:      item.Description,
+			Slug:             item.Slug,
 			Installed:        installed,
 			InstalledChannel: installedChannel,
 			InstalledVersion: installedVersion,
 			UpdateExist:      updateExist,
 			Show:             show,
-		})
+		}
+
+		for _, c := range item.Channels {
+			app.Channels = append(app.Channels, struct {
+				Slug    string `json:"slug"`
+				Name    string `json:"name"`
+				Panel   string `json:"panel"`
+				Version string `json:"version"`
+				Log     string `json:"log"`
+			}{
+				Slug:    c.Slug,
+				Name:    c.Name,
+				Panel:   c.Panel,
+				Version: c.Version,
+				Log:     c.Log,
+			})
+		}
+
+		apps = append(apps, app)
 	}
 
 	paged, total := Paginate(r, apps)
@@ -144,28 +152,27 @@ func (s *AppService) UpdateShow(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *AppService) IsInstalled(w http.ResponseWriter, r *http.Request) {
-	req, err := Bind[request.AppSlug](r)
+	req, err := Bind[request.AppSlugs](r)
 	if err != nil {
 		Error(w, http.StatusUnprocessableEntity, "%v", err)
 		return
 	}
 
-	app, err := s.appRepo.Get(req.Slug)
-	if err != nil {
-		Error(w, http.StatusInternalServerError, "%v", err)
-		return
+	flag := false
+	slugs := strings.Split(req.Slugs, ",")
+	for _, item := range slugs {
+		installed, err := s.appRepo.IsInstalled(item)
+		if err != nil {
+			Error(w, http.StatusInternalServerError, "%v", err)
+			return
+		}
+		if installed {
+			flag = true
+			break
+		}
 	}
 
-	installed, err := s.appRepo.IsInstalled(req.Slug)
-	if err != nil {
-		Error(w, http.StatusInternalServerError, "%v", err)
-		return
-	}
-
-	Success(w, chix.M{
-		"name":      app.Name,
-		"installed": installed,
-	})
+	Success(w, flag)
 }
 
 func (s *AppService) UpdateCache(w http.ResponseWriter, r *http.Request) {

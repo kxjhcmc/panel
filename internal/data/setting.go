@@ -12,15 +12,15 @@ import (
 	"go.yaml.in/yaml/v3"
 	"gorm.io/gorm"
 
-	"github.com/tnborg/panel/internal/app"
-	"github.com/tnborg/panel/internal/biz"
-	"github.com/tnborg/panel/internal/http/request"
-	"github.com/tnborg/panel/pkg/cert"
-	"github.com/tnborg/panel/pkg/firewall"
-	"github.com/tnborg/panel/pkg/io"
-	"github.com/tnborg/panel/pkg/os"
-	"github.com/tnborg/panel/pkg/systemctl"
-	"github.com/tnborg/panel/pkg/types"
+	"github.com/acepanel/panel/internal/app"
+	"github.com/acepanel/panel/internal/biz"
+	"github.com/acepanel/panel/internal/http/request"
+	"github.com/acepanel/panel/pkg/cert"
+	"github.com/acepanel/panel/pkg/firewall"
+	"github.com/acepanel/panel/pkg/io"
+	"github.com/acepanel/panel/pkg/os"
+	"github.com/acepanel/panel/pkg/systemctl"
+	"github.com/acepanel/panel/pkg/types"
 )
 
 type settingRepo struct {
@@ -241,6 +241,7 @@ func (r *settingRepo) GetPanel() (*request.SettingPanel, error) {
 		OfflineMode: offlineMode,
 		AutoUpdate:  autoUpdate,
 		Lifetime:    uint(r.conf.Int("session.lifetime")),
+		IPHeader:    r.conf.String("http.ip_header"),
 		BindDomain:  r.conf.Strings("http.bind_domain"),
 		BindIP:      r.conf.Strings("http.bind_ip"),
 		BindUA:      r.conf.Strings("http.bind_ua"),
@@ -316,8 +317,8 @@ func (r *settingRepo) UpdatePanel(req *request.SettingPanel) (bool, error) {
 			fw := firewall.NewFirewall()
 			err = fw.Port(firewall.FireInfo{
 				Type:      firewall.TypeNormal,
-				PortStart: config.HTTP.Port,
-				PortEnd:   config.HTTP.Port,
+				PortStart: req.Port,
+				PortEnd:   req.Port,
 				Direction: firewall.DirectionIn,
 				Strategy:  firewall.StrategyAccept,
 			}, firewall.OperationAdd)
@@ -331,6 +332,7 @@ func (r *settingRepo) UpdatePanel(req *request.SettingPanel) (bool, error) {
 	config.HTTP.Port = req.Port
 	config.HTTP.Entrance = req.Entrance
 	config.HTTP.TLS = req.HTTPS
+	config.HTTP.IPHeader = req.IPHeader
 	config.HTTP.BindDomain = req.BindDomain
 	config.HTTP.BindIP = req.BindIP
 	config.HTTP.BindUA = req.BindUA

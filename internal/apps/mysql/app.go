@@ -10,15 +10,15 @@ import (
 	"github.com/leonelquinteros/gotext"
 	"github.com/spf13/cast"
 
-	"github.com/tnborg/panel/internal/app"
-	"github.com/tnborg/panel/internal/biz"
-	"github.com/tnborg/panel/internal/service"
-	"github.com/tnborg/panel/pkg/db"
-	"github.com/tnborg/panel/pkg/io"
-	"github.com/tnborg/panel/pkg/shell"
-	"github.com/tnborg/panel/pkg/systemctl"
-	"github.com/tnborg/panel/pkg/tools"
-	"github.com/tnborg/panel/pkg/types"
+	"github.com/acepanel/panel/internal/app"
+	"github.com/acepanel/panel/internal/biz"
+	"github.com/acepanel/panel/internal/service"
+	"github.com/acepanel/panel/pkg/db"
+	"github.com/acepanel/panel/pkg/io"
+	"github.com/acepanel/panel/pkg/shell"
+	"github.com/acepanel/panel/pkg/systemctl"
+	"github.com/acepanel/panel/pkg/tools"
+	"github.com/acepanel/panel/pkg/types"
 )
 
 type App struct {
@@ -37,7 +37,7 @@ func (s *App) Route(r chi.Router) {
 	r.Get("/load", s.Load)
 	r.Get("/config", s.GetConfig)
 	r.Post("/config", s.UpdateConfig)
-	r.Post("/clear_error_log", s.ClearErrorLog)
+	r.Post("/clear_log", s.ClearLog)
 	r.Get("/slow_log", s.SlowLog)
 	r.Post("/clear_slow_log", s.ClearSlowLog)
 	r.Get("/root_password", s.GetRootPassword)
@@ -159,8 +159,8 @@ func (s *App) Load(w http.ResponseWriter, r *http.Request) {
 	service.Success(w, load)
 }
 
-// ClearErrorLog 清空错误日志
-func (s *App) ClearErrorLog(w http.ResponseWriter, r *http.Request) {
+// ClearLog 清空日志
+func (s *App) ClearLog(w http.ResponseWriter, r *http.Request) {
 	if err := systemctl.LogClear("mysqld"); err != nil {
 		service.Error(w, http.StatusInternalServerError, "%v", err)
 		return
@@ -212,9 +212,7 @@ func (s *App) SetRootPassword(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	} else {
-		defer func(mysql *db.MySQL) {
-			_ = mysql.Close()
-		}(mysql)
+		defer mysql.Close()
 		if err = mysql.UserPassword("root", req.Password, "localhost"); err != nil {
 			service.Error(w, http.StatusInternalServerError, "%v", err)
 			return

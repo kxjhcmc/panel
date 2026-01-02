@@ -3,22 +3,17 @@ import type { InputInst } from 'naive-ui'
 import { useGettext } from 'vue3-gettext'
 
 import { checkPath } from '@/utils/file'
-import SearchModal from '@/views/file/SearchModal.vue'
 
 const { $gettext } = useGettext()
-const path = defineModel<string>('path', { type: String, required: true })
+const path = defineModel<string>('path', { type: String, required: true }) // 当前路径
+const keyword = defineModel<string>('keyword', { type: String, default: '' }) // 搜索关键词
+const sub = defineModel<boolean>('sub', { type: Boolean, default: false }) // 搜索是否包括子目录
 const isInput = ref(false)
 const pathInput = ref<InputInst | null>(null)
 const input = ref('www')
 
 const history: string[] = []
 let current = -1
-
-const searchShow = ref(false)
-const search = ref({
-  keyword: '',
-  sub: false
-})
 
 const handleInput = () => {
   isInput.value = true
@@ -92,7 +87,7 @@ const handlePushHistory = (path: string) => {
 }
 
 const handleSearch = () => {
-  searchShow.value = true
+  window.$bus.emit('file:search')
 }
 
 watch(
@@ -104,27 +99,27 @@ watch(
 )
 
 onMounted(() => {
-  window.$bus.on('push-history', handlePushHistory)
+  window.$bus.on('file:push-history', handlePushHistory)
 })
 
 onUnmounted(() => {
-  window.$bus.off('push-history')
+  window.$bus.off('file:push-history')
 })
 </script>
 
 <template>
   <n-flex>
     <n-button @click="handleBack">
-      <icon-bi-arrow-left />
+      <i-mdi-arrow-left :size="16" />
     </n-button>
     <n-button @click="handleForward">
-      <icon-bi-arrow-right />
+      <i-mdi-arrow-right :size="16" />
     </n-button>
     <n-button @click="handleUp">
-      <icon-bi-arrow-up />
+      <i-mdi-arrow-up :size="16" />
     </n-button>
     <n-button @click="handleRefresh">
-      <icon-bi-arrow-clockwise />
+      <i-mdi-refresh :size="16" />
     </n-button>
     <n-input-group flex-1>
       <n-tag size="large" v-if="!isInput" flex-1 @click="handleInput">
@@ -151,24 +146,18 @@ onUnmounted(() => {
       />
     </n-input-group>
     <n-input-group w-400>
-      <n-input v-model:value="search.keyword" :placeholder="$gettext('Enter search content')">
+      <n-input v-model:value="keyword" :placeholder="$gettext('Enter search content')">
         <template #suffix>
-          <n-checkbox v-model:checked="search.sub">
+          <n-checkbox v-model:checked="sub">
             {{ $gettext('Include subdirectories') }}
           </n-checkbox>
         </template>
       </n-input>
       <n-button type="primary" @click="handleSearch">
-        <icon-bi-search />
+        <i-mdi-search :size="16" />
       </n-button>
     </n-input-group>
   </n-flex>
-  <search-modal
-    v-model:show="searchShow"
-    v-model:path="path"
-    v-model:keyword="search.keyword"
-    v-model:sub="search.sub"
-  />
 </template>
 
 <style scoped lang="scss"></style>

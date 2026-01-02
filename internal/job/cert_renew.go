@@ -6,9 +6,9 @@ import (
 
 	"gorm.io/gorm"
 
-	"github.com/tnborg/panel/internal/app"
-	"github.com/tnborg/panel/internal/biz"
-	pkgcert "github.com/tnborg/panel/pkg/cert"
+	"github.com/acepanel/panel/internal/app"
+	"github.com/acepanel/panel/internal/biz"
+	pkgcert "github.com/acepanel/panel/pkg/cert"
 )
 
 // CertRenew 证书续签
@@ -33,7 +33,7 @@ func (r *CertRenew) Run() {
 
 	var certs []biz.Cert
 	if err := r.db.Preload("Website").Preload("Account").Preload("DNS").Find(&certs).Error; err != nil {
-		r.log.Warn("[Cert Renew] failed to get certs", slog.Any("err", err))
+		r.log.Warn("[CertRenew] failed to get certs", slog.Any("err", err))
 		return
 	}
 
@@ -54,7 +54,7 @@ func (r *CertRenew) Run() {
 
 		_, err = r.certRepo.Renew(cert.ID)
 		if err != nil {
-			r.log.Warn("[Cert Renew] failed to renew cert", slog.Any("err", err))
+			r.log.Warn("[CertRenew] failed to renew cert", slog.Any("err", err))
 		}
 	}
 }

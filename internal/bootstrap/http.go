@@ -10,8 +10,8 @@ import (
 	"github.com/knadh/koanf/v2"
 	"github.com/leonelquinteros/gotext"
 
-	"github.com/tnborg/panel/internal/http/middleware"
-	"github.com/tnborg/panel/internal/route"
+	"github.com/acepanel/panel/internal/http/middleware"
+	"github.com/acepanel/panel/internal/route"
 )
 
 func NewRouter(t *gotext.Locale, middlewares *middleware.Middlewares, http *route.Http, ws *route.Ws) (*chi.Mux, error) {
@@ -27,15 +27,13 @@ func NewRouter(t *gotext.Locale, middlewares *middleware.Middlewares, http *rout
 	return r, nil
 }
 
-func NewHttp(conf *koanf.Koanf, r *chi.Mux) (*hlfhr.Server, error) {
+func NewHttp(conf *koanf.Koanf, mux *chi.Mux) (*hlfhr.Server, error) {
 	srv := hlfhr.New(&http.Server{
 		Addr:           fmt.Sprintf(":%d", conf.MustInt("http.port")),
-		Handler:        http.AllowQuerySemicolons(r),
+		Handler:        mux,
 		MaxHeaderBytes: 2048 << 20,
 	})
-	srv.HttpOnHttpsPortErrorHandler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		hlfhr.RedirectToHttps(w, r, http.StatusTemporaryRedirect)
-	})
+	srv.Listen80RedirectTo443 = true
 
 	if conf.Bool("http.tls") {
 		srv.TLSConfig = &tls.Config{

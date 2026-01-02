@@ -18,15 +18,14 @@ import (
 	"github.com/leonelquinteros/gotext"
 	"github.com/libtnb/chix"
 	"github.com/libtnb/utils/file"
-	"github.com/spf13/cast"
 
-	"github.com/tnborg/panel/internal/app"
-	"github.com/tnborg/panel/internal/biz"
-	"github.com/tnborg/panel/internal/http/request"
-	"github.com/tnborg/panel/pkg/io"
-	"github.com/tnborg/panel/pkg/os"
-	"github.com/tnborg/panel/pkg/shell"
-	"github.com/tnborg/panel/pkg/tools"
+	"github.com/acepanel/panel/internal/app"
+	"github.com/acepanel/panel/internal/biz"
+	"github.com/acepanel/panel/internal/http/request"
+	"github.com/acepanel/panel/pkg/io"
+	"github.com/acepanel/panel/pkg/os"
+	"github.com/acepanel/panel/pkg/shell"
+	"github.com/acepanel/panel/pkg/tools"
 )
 
 type FileService struct {
@@ -218,7 +217,7 @@ func (s *FileService) Move(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		if io.IsDir(item.Source) && strings.HasPrefix(item.Target, item.Source) {
+		if io.IsDir(item.Source) && strings.HasPrefix(item.Target, item.Source+"/") {
 			Error(w, http.StatusForbidden, s.t.Get("please don't do this"))
 			return
 		}
@@ -247,7 +246,7 @@ func (s *FileService) Copy(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		if io.IsDir(item.Source) && strings.HasPrefix(item.Target, item.Source) {
+		if io.IsDir(item.Source) && strings.HasPrefix(item.Target, item.Source+"/") {
 			Error(w, http.StatusForbidden, s.t.Get("please don't do this"))
 			return
 		}
@@ -395,27 +394,6 @@ func (s *FileService) UnCompress(w http.ResponseWriter, r *http.Request) {
 	Success(w, nil)
 }
 
-func (s *FileService) Search(w http.ResponseWriter, r *http.Request) {
-	req, err := Bind[request.FileSearch](r)
-	if err != nil {
-		Error(w, http.StatusInternalServerError, "%v", err)
-		return
-	}
-
-	results, err := io.SearchX(req.Path, req.Keyword, req.Sub)
-	if err != nil {
-		Error(w, http.StatusInternalServerError, "%v", err)
-		return
-	}
-
-	paged, total := Paginate(r, s.formatInfo(results))
-
-	Success(w, chix.M{
-		"total": total,
-		"items": paged,
-	})
-}
-
 func (s *FileService) List(w http.ResponseWriter, r *http.Request) {
 	req, err := Bind[request.FileList](r)
 	if err != nil {
@@ -423,10 +401,19 @@ func (s *FileService) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	list, err := stdos.ReadDir(req.Path)
-	if err != nil {
-		Error(w, http.StatusInternalServerError, "%v", err)
-		return
+	var list []stdos.DirEntry
+	if req.Keyword != "" {
+		list, err = io.SearchX(req.Path, req.Keyword, req.Sub)
+		if err != nil {
+			Error(w, http.StatusInternalServerError, "%v", err)
+			return
+		}
+	} else {
+		list, err = stdos.ReadDir(req.Path)
+		if err != nil {
+			Error(w, http.StatusInternalServerError, "%v", err)
+			return
+		}
 	}
 
 	switch req.Sort {
@@ -464,7 +451,10 @@ func (s *FileService) formatDir(base string, entries []stdos.DirEntry) []any {
 	for item := range slices.Values(entries) {
 		info, err := item.Info()
 		if err != nil {
-			continue
+			continue // 直接跳过，不返回错误，不然很烦人的
+		}
+		if de, ok := item.(*io.SearchEntry); ok {
+			base = filepath.Dir(de.Path())
 		}
 
 		stat := info.Sys().(*syscall.Stat_t)
@@ -485,42 +475,6 @@ func (s *FileService) formatDir(base string, entries []stdos.DirEntry) []any {
 			"modify":   info.ModTime().Format(time.DateTime),
 		})
 	}
-
-	return paths
-}
-
-// formatInfo 格式化文件信息
-func (s *FileService) formatInfo(infos map[string]stdos.FileInfo) []map[string]any {
-	var paths []map[string]any
-	for path, info := range infos {
-		stat := info.Sys().(*syscall.Stat_t)
-		paths = append(paths, map[string]any{
-			"name":     info.Name(),
-			"full":     path,
-			"size":     tools.FormatBytes(float64(info.Size())),
-			"mode_str": info.Mode().String(),
-			"mode":     fmt.Sprintf("%04o", info.Mode().Perm()),
-			"owner":    os.GetUser(stat.Uid),
-			"group":    os.GetGroup(stat.Gid),
-			"uid":      stat.Uid,
-			"gid":      stat.Gid,
-			"hidden":   io.IsHidden(info.Name()),
-			"symlink":  io.IsSymlink(info.Mode()),
-			"link":     io.GetSymlink(path),
-			"dir":      info.IsDir(),
-			"modify":   info.ModTime().Format(time.DateTime),
-		})
-	}
-
-	slices.SortFunc(paths, func(a, b map[string]any) int {
-		if cast.ToBool(a["dir"]) && !cast.ToBool(b["dir"]) {
-			return -1
-		}
-		if !cast.ToBool(a["dir"]) && cast.ToBool(b["dir"]) {
-			return 1
-		}
-		return strings.Compare(strings.ToLower(cast.ToString(a["name"])), strings.ToLower(cast.ToString(b["name"])))
-	})
 
 	return paths
 }

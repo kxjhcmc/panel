@@ -13,13 +13,13 @@ import (
 	"github.com/shirou/gopsutil/disk"
 	"gorm.io/gorm"
 
-	"github.com/tnborg/panel/internal/app"
-	"github.com/tnborg/panel/internal/biz"
-	"github.com/tnborg/panel/pkg/db"
-	"github.com/tnborg/panel/pkg/io"
-	"github.com/tnborg/panel/pkg/shell"
-	"github.com/tnborg/panel/pkg/tools"
-	"github.com/tnborg/panel/pkg/types"
+	"github.com/acepanel/panel/internal/app"
+	"github.com/acepanel/panel/internal/biz"
+	"github.com/acepanel/panel/pkg/db"
+	"github.com/acepanel/panel/pkg/io"
+	"github.com/acepanel/panel/pkg/shell"
+	"github.com/acepanel/panel/pkg/tools"
+	"github.com/acepanel/panel/pkg/types"
 )
 
 type backupRepo struct {
@@ -256,9 +256,7 @@ func (r *backupRepo) createMySQL(to string, name string) error {
 	if err != nil {
 		return err
 	}
-	defer func(mysql *db.MySQL) {
-		_ = mysql.Close()
-	}(mysql)
+	defer mysql.Close()
 	if exist, _ := mysql.DatabaseExists(name); !exist {
 		return errors.New(r.t.Get("database does not exist: %s", name))
 	}
@@ -302,10 +300,8 @@ func (r *backupRepo) createPostgres(to string, name string) error {
 	if err != nil {
 		return err
 	}
-	defer func(postgres *db.Postgres) {
-		_ = postgres.Close()
-	}(postgres)
-	if exist, _ := postgres.DatabaseExist(name); !exist {
+	defer postgres.Close()
+	if exist, _ := postgres.DatabaseExists(name); !exist {
 		return errors.New(r.t.Get("database does not exist: %s", name))
 	}
 	size, err := postgres.DatabaseSize(name)
@@ -418,9 +414,7 @@ func (r *backupRepo) restoreMySQL(backup, target string) error {
 	if err != nil {
 		return err
 	}
-	defer func(mysql *db.MySQL) {
-		_ = mysql.Close()
-	}(mysql)
+	defer mysql.Close()
 	if exist, _ := mysql.DatabaseExists(target); !exist {
 		return errors.New(r.t.Get("database does not exist: %s", target))
 	}
@@ -460,10 +454,8 @@ func (r *backupRepo) restorePostgres(backup, target string) error {
 	if err != nil {
 		return err
 	}
-	defer func(postgres *db.Postgres) {
-		_ = postgres.Close()
-	}(postgres)
-	if exist, _ := postgres.DatabaseExist(target); !exist {
+	defer postgres.Close()
+	if exist, _ := postgres.DatabaseExists(target); !exist {
 		return errors.New(r.t.Get("database does not exist: %s", target))
 	}
 
@@ -798,7 +790,7 @@ func (r *backupRepo) UpdatePanel(version, url, checksum string) error {
 	if app.IsCli {
 		fmt.Println(r.t.Get("|-Run post-update script..."))
 	}
-	if _, err := shell.Execf("curl -sSLOm 10 https://dl.cdn.haozi.net/panel/auto_update.sh | bash"); err != nil {
+	if _, err := shell.Execf("curl -sSLm 10 https://dl.cdn.haozi.net/panel/auto_update.sh | bash"); err != nil {
 		return errors.New(r.t.Get("|-Run post-update script failed: %v", err))
 	}
 	if _, err := shell.Execf(`wget -O /etc/systemd/system/panel.service https://dl.cdn.haozi.net/panel/panel.service && sed -i "s|/www|%s|g" /etc/systemd/system/panel.service`, app.Root); err != nil {

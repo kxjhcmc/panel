@@ -6,10 +6,10 @@ import (
 	"github.com/leonelquinteros/gotext"
 	"github.com/libtnb/chix"
 
-	"github.com/tnborg/panel/internal/biz"
-	"github.com/tnborg/panel/internal/http/request"
-	"github.com/tnborg/panel/pkg/acme"
-	"github.com/tnborg/panel/pkg/types"
+	"github.com/acepanel/panel/internal/biz"
+	"github.com/acepanel/panel/internal/http/request"
+	"github.com/acepanel/panel/pkg/acme"
+	"github.com/acepanel/panel/pkg/types"
 )
 
 type CertService struct {
@@ -91,10 +91,6 @@ func (s *CertService) DNSProviders(w http.ResponseWriter, r *http.Request) {
 		{
 			Label: s.t.Get("ClouDNS"),
 			Value: string(acme.ClouDNS),
-		},
-		{
-			Label: s.t.Get("Hetzner"),
-			Value: string(acme.Hetzner),
 		},
 	})
 }

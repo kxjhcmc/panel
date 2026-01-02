@@ -1,15 +1,11 @@
 <script setup lang="ts">
-import cronstrue from 'cronstrue'
-import 'cronstrue/locales/zh_CN'
-
-import Editor from '@guolao/vue-monaco-editor'
 import { NButton, NDataTable, NInput, NPopconfirm, NSwitch, NTag } from 'naive-ui'
 import { useGettext } from 'vue3-gettext'
 
 import cron from '@/api/panel/cron'
 import file from '@/api/panel/file'
-import { decodeBase64, formatDateTime, renderIcon } from '@/utils'
-import { CronNaive } from '@vue-js-cron/naive-ui'
+import CronPreview from '@/components/common/CronPreview.vue'
+import { decodeBase64, formatDateTime } from '@/utils'
 
 const { $gettext } = useGettext()
 const logPath = ref('')
@@ -35,7 +31,7 @@ const columns: any = [
   {
     title: $gettext('Task Type'),
     key: 'type',
-    width: 100,
+    width: 200,
     resizable: true,
     render(row: any) {
       return h(
@@ -72,11 +68,11 @@ const columns: any = [
   {
     title: $gettext('Task Schedule'),
     key: 'time',
-    width: 200,
+    width: 300,
     resizable: true,
     ellipsis: { tooltip: true },
     render(row: any) {
-      return cronstrue.toString(row.time, { locale: 'zh_CN' })
+      return h(CronPreview, { cron: row.time })
     }
   },
   {
@@ -117,8 +113,7 @@ const columns: any = [
             }
           },
           {
-            default: () => $gettext('Logs'),
-            icon: renderIcon('majesticons:eye-line', { size: 14 })
+            default: () => $gettext('Logs')
           }
         ),
         h(
@@ -130,8 +125,7 @@ const columns: any = [
             onClick: () => handleEdit(row)
           },
           {
-            default: () => $gettext('Edit'),
-            icon: renderIcon('material-symbols:edit-outline', { size: 14 })
+            default: () => $gettext('Edit')
           }
         ),
         h(
@@ -152,8 +146,7 @@ const columns: any = [
                   style: 'margin-left: 15px;'
                 },
                 {
-                  default: () => $gettext('Delete'),
-                  icon: renderIcon('material-symbols:delete-outline', { size: 14 })
+                  default: () => $gettext('Delete')
                 }
               )
             }
@@ -183,7 +176,7 @@ const handleStatusChange = (row: any) => {
 
 const handleEdit = (row: any) => {
   useRequest(cron.get(row.id)).onSuccess(({ data }) => {
-    useRequest(file.content(data.shell)).onSuccess(({ data }) => {
+    useRequest(file.content(encodeURIComponent(data.shell))).onSuccess(({ data }) => {
       editTask.value.id = row.id
       editTask.value.name = row.name
       editTask.value.time = row.time
@@ -204,6 +197,7 @@ const saveTaskEdit = async () => {
   useRequest(
     cron.update(editTask.value.id, editTask.value.name, editTask.value.time, editTask.value.script)
   ).onSuccess(() => {
+    editModal.value = false
     window.$message.success($gettext('Modified successfully'))
     window.$bus.emit('task:refresh-cron')
   })
@@ -247,31 +241,22 @@ onUnmounted(() => {
     v-model:show="editModal"
     preset="card"
     :title="$gettext('Edit Task')"
-    style="width: 80vw"
+    style="width: 60vw"
     size="huge"
     :bordered="false"
     :segmented="false"
-    @close="saveTaskEdit"
   >
-    <n-form inline>
+    <n-form>
       <n-form-item :label="$gettext('Task Name')">
         <n-input v-model:value="editTask.name" :placeholder="$gettext('Task Name')" />
       </n-form-item>
       <n-form-item :label="$gettext('Task Schedule')">
-        <cron-naive v-model="editTask.time" locale="zh-cn"></cron-naive>
+        <cron-selector v-model:value="editTask.time"></cron-selector>
       </n-form-item>
     </n-form>
-    <Editor
-      v-model:value="editTask.script"
-      language="shell"
-      theme="vs-dark"
-      height="60vh"
-      mt-8
-      :options="{
-        automaticLayout: true,
-        formatOnType: true,
-        formatOnPaste: true
-      }"
-    />
+    <common-editor v-model:value="editTask.script" lang="sh" height="40vh" />
+    <n-button type="info" @click="saveTaskEdit" mt-10 block>
+      {{ $gettext('Save') }}
+    </n-button>
   </n-modal>
 </template>

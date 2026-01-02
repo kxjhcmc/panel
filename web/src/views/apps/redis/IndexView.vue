@@ -3,7 +3,6 @@ defineOptions({
   name: 'apps-redis-index'
 })
 
-import Editor from '@guolao/vue-monaco-editor'
 import { NButton, NDataTable } from 'naive-ui'
 import { useGettext } from 'vue3-gettext'
 
@@ -45,23 +44,12 @@ const handleSaveConfig = () => {
 
 <template>
   <common-page show-footer>
-    <template #action>
-      <n-button
-        v-if="currentTab == 'config'"
-        class="ml-16"
-        type="primary"
-        @click="handleSaveConfig"
-      >
-        <the-icon :size="18" icon="material-symbols:save-outline" />
-        {{ $gettext('Save') }}
-      </n-button>
-    </template>
     <n-tabs v-model:value="currentTab" type="line" animated>
       <n-tab-pane name="status" :tab="$gettext('Running Status')">
         <service-status service="redis" />
       </n-tab-pane>
       <n-tab-pane name="config" :tab="$gettext('Main Configuration')">
-        <n-space vertical>
+        <n-flex vertical>
           <n-alert type="warning">
             {{
               $gettext(
@@ -69,19 +57,13 @@ const handleSaveConfig = () => {
               )
             }}
           </n-alert>
-          <Editor
-            v-model:value="config"
-            language="ini"
-            theme="vs-dark"
-            height="60vh"
-            mt-8
-            :options="{
-              automaticLayout: true,
-              formatOnType: true,
-              formatOnPaste: true
-            }"
-          />
-        </n-space>
+          <common-editor v-model:value="config" height="60vh" />
+          <n-flex>
+            <n-button type="primary" @click="handleSaveConfig">
+              {{ $gettext('Save') }}
+            </n-button>
+          </n-flex>
+        </n-flex>
       </n-tab-pane>
       <n-tab-pane name="load" :tab="$gettext('Load Status')">
         <n-data-table

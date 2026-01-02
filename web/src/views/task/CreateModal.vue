@@ -1,10 +1,9 @@
 <script setup lang="ts">
 import app from '@/api/panel/app'
 import cron from '@/api/panel/cron'
-import dashboard from '@/api/panel/dashboard'
+import home from '@/api/panel/home'
 import website from '@/api/panel/website'
-import Editor from '@guolao/vue-monaco-editor'
-import { CronNaive } from '@vue-js-cron/naive-ui'
+import CronSelector from '@/components/common/CronSelector.vue'
 import { NInput } from 'naive-ui'
 import { useGettext } from 'vue3-gettext'
 
@@ -25,7 +24,7 @@ const createModel = ref({
 
 const websites = ref<any>([])
 
-const { data: installedDbAndPhp } = useRequest(dashboard.installedDbAndPhp, {
+const { data: installedDbAndPhp } = useRequest(home.installedDbAndPhp, {
   initialData: {
     db: [
       {
@@ -67,8 +66,8 @@ watch(createModel, (value) => {
 
 onMounted(() => {
   useRequest(app.isInstalled('nginx')).onSuccess(({ data }) => {
-    if (data.installed) {
-      useRequest(website.list(1, 10000)).onSuccess(({ data }: { data: any }) => {
+    if (data) {
+      useRequest(website.list('all', 1, 10000)).onSuccess(({ data }: { data: any }) => {
         for (const item of data.items) {
           websites.value.push({
             label: item.name,
@@ -108,22 +107,11 @@ onMounted(() => {
         <n-input v-model:value="createModel.name" :placeholder="$gettext('Task Name')" />
       </n-form-item>
       <n-form-item :label="$gettext('Task Schedule')">
-        <cron-naive v-model="createModel.time" locale="zh-cn"></cron-naive>
+        <cron-selector v-model:value="createModel.time" />
       </n-form-item>
       <div v-if="createModel.type === 'shell'">
         <n-text>{{ $gettext('Script Content') }}</n-text>
-        <Editor
-          v-model:value="createModel.script"
-          language="shell"
-          theme="vs-dark"
-          height="40vh"
-          mt-8
-          :options="{
-            automaticLayout: true,
-            formatOnType: true,
-            formatOnPaste: true
-          }"
-        />
+        <common-editor v-model:value="createModel.script" lang="sh" height="40vh" />
       </div>
       <n-form-item v-if="createModel.type === 'backup'" :label="$gettext('Backup Type')">
         <n-radio-group v-model:value="createModel.backup_type">
@@ -165,13 +153,9 @@ onMounted(() => {
         <n-input-number v-model:value="createModel.save" />
       </n-form-item>
     </n-form>
-    <n-row :gutter="[0, 24]" pt-20>
-      <n-col :span="24">
-        <n-button type="info" block :loading="loading" @click="handleSubmit">
-          {{ $gettext('Submit') }}
-        </n-button>
-      </n-col>
-    </n-row>
+    <n-button type="info" :loading="loading" @click="handleSubmit" mt-10 block>
+      {{ $gettext('Submit') }}
+    </n-button>
   </n-modal>
 </template>
 

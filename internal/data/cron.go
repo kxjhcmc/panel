@@ -4,20 +4,18 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"strconv"
-	"time"
 
 	"github.com/leonelquinteros/gotext"
 	"github.com/libtnb/utils/str"
 	"gorm.io/gorm"
 
-	"github.com/tnborg/panel/internal/app"
-	"github.com/tnborg/panel/internal/biz"
-	"github.com/tnborg/panel/internal/http/request"
-	"github.com/tnborg/panel/pkg/io"
-	"github.com/tnborg/panel/pkg/os"
-	"github.com/tnborg/panel/pkg/shell"
-	"github.com/tnborg/panel/pkg/systemctl"
+	"github.com/acepanel/panel/internal/app"
+	"github.com/acepanel/panel/internal/biz"
+	"github.com/acepanel/panel/internal/http/request"
+	"github.com/acepanel/panel/pkg/io"
+	"github.com/acepanel/panel/pkg/os"
+	"github.com/acepanel/panel/pkg/shell"
+	"github.com/acepanel/panel/pkg/systemctl"
 )
 
 type cronRepo struct {
@@ -91,13 +89,7 @@ panel-cli cutoff clear -t website -f '%s' -s '%d' -p '%s'
 
 	shellDir := fmt.Sprintf("%s/server/cron/", app.Root)
 	shellLogDir := fmt.Sprintf("%s/server/cron/logs/", app.Root)
-	if !io.Exists(shellDir) {
-		return errors.New(r.t.Get("cron directory %s not exists", shellDir))
-	}
-	if !io.Exists(shellLogDir) {
-		return errors.New(r.t.Get("cron log directory %s not exists", shellLogDir))
-	}
-	shellFile := strconv.Itoa(int(time.Now().Unix())) + str.Random(16)
+	shellFile := str.Random(16)
 	if err := io.Write(filepath.Join(shellDir, shellFile+".sh"), script, 0700); err != nil {
 		return errors.New(err.Error())
 	}

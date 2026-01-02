@@ -14,7 +14,6 @@ export default {
       component: () => import('./IndexView.vue'),
       meta: {
         title: 'PostgreSQL',
-        icon: 'logos:postgresql',
         role: ['admin'],
         requireAuth: true
       }

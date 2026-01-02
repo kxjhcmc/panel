@@ -3,7 +3,7 @@ package biz
 import (
 	"time"
 
-	"github.com/tnborg/panel/internal/http/request"
+	"github.com/acepanel/panel/internal/http/request"
 )
 
 type SettingKey string
@@ -19,6 +19,7 @@ const (
 	SettingKeyMySQLRootPassword SettingKey = "mysql_root_password"
 	SettingKeyOfflineMode       SettingKey = "offline_mode"
 	SettingKeyAutoUpdate        SettingKey = "auto_update"
+	SettingKeyWebServer         SettingKey = "web_server"
 )
 
 type Setting struct {

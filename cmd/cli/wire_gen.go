@@ -7,34 +7,34 @@
 package main
 
 import (
-	"github.com/tnborg/panel/internal/app"
-	"github.com/tnborg/panel/internal/apps/codeserver"
-	"github.com/tnborg/panel/internal/apps/docker"
-	"github.com/tnborg/panel/internal/apps/fail2ban"
-	"github.com/tnborg/panel/internal/apps/frp"
-	"github.com/tnborg/panel/internal/apps/gitea"
-	"github.com/tnborg/panel/internal/apps/memcached"
-	"github.com/tnborg/panel/internal/apps/minio"
-	"github.com/tnborg/panel/internal/apps/mysql"
-	"github.com/tnborg/panel/internal/apps/nginx"
-	"github.com/tnborg/panel/internal/apps/php74"
-	"github.com/tnborg/panel/internal/apps/php80"
-	"github.com/tnborg/panel/internal/apps/php81"
-	"github.com/tnborg/panel/internal/apps/php82"
-	"github.com/tnborg/panel/internal/apps/php83"
-	"github.com/tnborg/panel/internal/apps/php84"
-	"github.com/tnborg/panel/internal/apps/phpmyadmin"
-	"github.com/tnborg/panel/internal/apps/podman"
-	"github.com/tnborg/panel/internal/apps/postgresql"
-	"github.com/tnborg/panel/internal/apps/pureftpd"
-	"github.com/tnborg/panel/internal/apps/redis"
-	"github.com/tnborg/panel/internal/apps/rsync"
-	"github.com/tnborg/panel/internal/apps/s3fs"
-	"github.com/tnborg/panel/internal/apps/supervisor"
-	"github.com/tnborg/panel/internal/bootstrap"
-	"github.com/tnborg/panel/internal/data"
-	"github.com/tnborg/panel/internal/route"
-	"github.com/tnborg/panel/internal/service"
+	"github.com/acepanel/panel/internal/app"
+	"github.com/acepanel/panel/internal/apps/codeserver"
+	"github.com/acepanel/panel/internal/apps/docker"
+	"github.com/acepanel/panel/internal/apps/fail2ban"
+	"github.com/acepanel/panel/internal/apps/frp"
+	"github.com/acepanel/panel/internal/apps/gitea"
+	"github.com/acepanel/panel/internal/apps/memcached"
+	"github.com/acepanel/panel/internal/apps/minio"
+	"github.com/acepanel/panel/internal/apps/mysql"
+	"github.com/acepanel/panel/internal/apps/nginx"
+	"github.com/acepanel/panel/internal/apps/php74"
+	"github.com/acepanel/panel/internal/apps/php80"
+	"github.com/acepanel/panel/internal/apps/php81"
+	"github.com/acepanel/panel/internal/apps/php82"
+	"github.com/acepanel/panel/internal/apps/php83"
+	"github.com/acepanel/panel/internal/apps/php84"
+	"github.com/acepanel/panel/internal/apps/phpmyadmin"
+	"github.com/acepanel/panel/internal/apps/podman"
+	"github.com/acepanel/panel/internal/apps/postgresql"
+	"github.com/acepanel/panel/internal/apps/pureftpd"
+	"github.com/acepanel/panel/internal/apps/redis"
+	"github.com/acepanel/panel/internal/apps/rsync"
+	"github.com/acepanel/panel/internal/apps/s3fs"
+	"github.com/acepanel/panel/internal/apps/supervisor"
+	"github.com/acepanel/panel/internal/bootstrap"
+	"github.com/acepanel/panel/internal/data"
+	"github.com/acepanel/panel/internal/route"
+	"github.com/acepanel/panel/internal/service"
 )
 
 import (
@@ -53,15 +53,15 @@ func initCli() (*app.Cli, error) {
 	if err != nil {
 		return nil, err
 	}
-	logger := bootstrap.NewLog(koanf)
-	db, err := bootstrap.NewDB(koanf, logger)
+	db, err := bootstrap.NewDB(koanf)
 	if err != nil {
 		return nil, err
 	}
+	logger := bootstrap.NewLog(koanf)
 	cacheRepo := data.NewCacheRepo(db)
 	queue := bootstrap.NewQueue()
 	taskRepo := data.NewTaskRepo(locale, db, logger, queue)
-	appRepo := data.NewAppRepo(locale, koanf, db, cacheRepo, taskRepo)
+	appRepo := data.NewAppRepo(locale, koanf, db, logger, cacheRepo, taskRepo)
 	userRepo := data.NewUserRepo(locale, db)
 	settingRepo := data.NewSettingRepo(locale, db, koanf, taskRepo)
 	databaseServerRepo := data.NewDatabaseServerRepo(locale, db, logger)
@@ -69,7 +69,7 @@ func initCli() (*app.Cli, error) {
 	databaseRepo := data.NewDatabaseRepo(locale, db, databaseServerRepo, databaseUserRepo)
 	certRepo := data.NewCertRepo(locale, db, logger)
 	certAccountRepo := data.NewCertAccountRepo(locale, db, userRepo, logger)
-	websiteRepo := data.NewWebsiteRepo(locale, db, cacheRepo, databaseRepo, databaseServerRepo, databaseUserRepo, certRepo, certAccountRepo)
+	websiteRepo := data.NewWebsiteRepo(locale, db, cacheRepo, databaseRepo, databaseServerRepo, databaseUserRepo, certRepo, certAccountRepo, settingRepo)
 	backupRepo := data.NewBackupRepo(locale, db, settingRepo, websiteRepo)
 	cliService := service.NewCliService(locale, koanf, db, appRepo, cacheRepo, userRepo, settingRepo, backupRepo, websiteRepo, databaseServerRepo)
 	cli := route.NewCli(locale, cliService)

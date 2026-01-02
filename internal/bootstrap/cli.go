@@ -6,8 +6,8 @@ import (
 	"github.com/leonelquinteros/gotext"
 	"github.com/urfave/cli/v3"
 
-	"github.com/tnborg/panel/internal/app"
-	"github.com/tnborg/panel/internal/route"
+	"github.com/acepanel/panel/internal/app"
+	"github.com/acepanel/panel/internal/route"
 )
 
 func NewCli(t *gotext.Locale, cmd *route.Cli) *cli.Command {
@@ -30,13 +30,13 @@ func NewCli(t *gotext.Locale, cmd *route.Cli) *cli.Command {
 	cli.SubcommandHelpTemplate = strings.ReplaceAll(cli.SubcommandHelpTemplate, "COMMANDS", t.Get("COMMANDS"))
 	cli.SubcommandHelpTemplate = strings.ReplaceAll(cli.SubcommandHelpTemplate, "OPTIONS", t.Get("OPTIONS"))
 
-	cli.RootCommandHelpTemplate += "\n" + t.Get("Website：https://panel.haozi.net")
-	cli.RootCommandHelpTemplate += "\n" + t.Get("Forum：https://bbs.haozi.net")
+	cli.RootCommandHelpTemplate += "\n" + t.Get("Website：https://acepanel.net")
+	cli.RootCommandHelpTemplate += "\n" + t.Get("Forum：https://tom.moe")
 	cli.RootCommandHelpTemplate += "\n" + t.Get("QQ Group：12370907") + "\n"
 
 	return &cli.Command{
 		Name:     "panel-cli",
-		Usage:    t.Get("Rat Panel CLI Tool"),
+		Usage:    t.Get("AcePanel CLI Tool"),
 		Version:  app.Version,
 		Commands: cmd.Commands(),
 	}

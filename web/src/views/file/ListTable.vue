@@ -31,7 +31,9 @@ import type { Marked } from '@/views/file/types'
 
 const { $gettext } = useGettext()
 const sort = ref<string>('')
-const path = defineModel<string>('path', { type: String, required: true })
+const path = defineModel<string>('path', { type: String, required: true }) // 当前路径
+const keyword = defineModel<string>('keyword', { type: String, default: '' }) // 搜索关键词
+const sub = defineModel<boolean>('sub', { type: Boolean, default: false }) // 搜索是否包括子目录
 const selected = defineModel<any[]>('selected', { type: Array, default: () => [] })
 const marked = defineModel<Marked[]>('marked', { type: Array, default: () => [] })
 const markedType = defineModel<string>('markedType', { type: String, required: true })
@@ -106,9 +108,9 @@ const columns: DataTableColumns<RowData> = [
     defaultSortOrder: false,
     sorter: 'default',
     render(row) {
-      let icon = 'bi:file-earmark'
+      let icon = 'mdi:file-outline'
       if (row.dir) {
-        icon = 'bi:folder'
+        icon = 'mdi:folder-outline'
       } else {
         icon = getIconByExt(getExt(row.name))
       }
@@ -127,7 +129,7 @@ const columns: DataTableColumns<RowData> = [
           }
         },
         () => [
-          h(TheIcon, { icon, size: 24, color: `var(--primary-color)` }),
+          h(TheIcon, { icon, size: 24 }),
           h(NEllipsis, null, {
             default: () => {
               if (row.symlink) {
@@ -389,7 +391,8 @@ const rowProps = (row: any) => {
 }
 
 const { loading, data, page, total, pageSize, pageCount, refresh } = usePagination(
-  (page, pageSize) => file.list(path.value, page, pageSize, sort.value),
+  (page, pageSize) =>
+    file.list(encodeURIComponent(path.value), keyword.value, sub.value, sort.value, page, pageSize),
   {
     initialData: { total: 0, list: [] },
     initialPageSize: 100,
@@ -498,7 +501,7 @@ const handlePaste = () => {
       window.$dialog.warning({
         title: $gettext('Warning'),
         content: $gettext(
-          'There are items with the same name. %{ items } Do you want to overwrite?',
+          'There are items with the same name %{ items } Do you want to overwrite?',
           {
             items: `${paths
               .filter((item) => item.force)
@@ -633,15 +636,21 @@ const handleSorterChange = (sorter: {
       switch (sorter.order) {
         case 'ascend':
           sort.value = 'asc'
-          refresh()
+          nextTick(() => {
+            refresh()
+          })
           break
         case 'descend':
           sort.value = 'desc'
-          refresh()
+          nextTick(() => {
+            refresh()
+          })
           break
         default:
           sort.value = ''
-          refresh()
+          nextTick(() => {
+            refresh()
+          })
           break
       }
     }
@@ -649,15 +658,29 @@ const handleSorterChange = (sorter: {
 }
 
 onMounted(() => {
+  // 监听路径变化并刷新列表
   watch(
     path,
     () => {
       selected.value = []
-      refresh()
-      window.$bus.emit('push-history', path.value)
+      keyword.value = ''
+      sub.value = false
+      nextTick(() => {
+        refresh()
+      })
+      window.$bus.emit('file:push-history', path.value)
     },
     { immediate: true }
   )
+  // 监听搜索事件
+  window.$bus.on('file:search', () => {
+    selected.value = []
+    nextTick(() => {
+      refresh()
+    })
+    window.$bus.emit('file:push-history', path.value)
+  })
+  // 监听刷新事件
   window.$bus.on('file:refresh', refresh)
 })
 

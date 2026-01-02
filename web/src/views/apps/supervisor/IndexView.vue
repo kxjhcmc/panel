@@ -3,13 +3,11 @@ defineOptions({
   name: 'apps-supervisor-index'
 })
 
-import Editor from '@guolao/vue-monaco-editor'
 import { NButton, NDataTable, NInput, NPopconfirm } from 'naive-ui'
 import { useGettext } from 'vue3-gettext'
 
 import supervisor from '@/api/apps/supervisor'
 import ServiceStatus from '@/components/common/ServiceStatus.vue'
-import { renderIcon } from '@/utils'
 
 const { $gettext } = useGettext()
 const currentTab = ref('status')
@@ -88,8 +86,7 @@ const processColumns: any = [
             onClick: () => handleShowProcessLog(row)
           },
           {
-            default: () => $gettext('Logs'),
-            icon: renderIcon('material-symbols:visibility', { size: 14 })
+            default: () => $gettext('Logs')
           }
         ),
         h(
@@ -101,8 +98,7 @@ const processColumns: any = [
             onClick: () => handleEditProcess(row.name)
           },
           {
-            default: () => $gettext('Configure'),
-            icon: renderIcon('material-symbols:settings-outline', { size: 14 })
+            default: () => $gettext('Configure')
           }
         ),
         row.status != 'RUNNING'
@@ -116,8 +112,7 @@ const processColumns: any = [
                 onClick: () => handleProcessStart(row.name)
               },
               {
-                default: () => $gettext('Start'),
-                icon: renderIcon('material-symbols:play-arrow-outline', { size: 18 })
+                default: () => $gettext('Start')
               }
             )
           : null,
@@ -142,8 +137,7 @@ const processColumns: any = [
                       style: 'margin-left: 15px'
                     },
                     {
-                      default: () => $gettext('Stop'),
-                      icon: renderIcon('material-symbols:stop-outline', { size: 18 })
+                      default: () => $gettext('Stop')
                     }
                   )
                 }
@@ -171,8 +165,7 @@ const processColumns: any = [
                       style: 'margin-left: 15px'
                     },
                     {
-                      default: () => $gettext('Restart'),
-                      icon: renderIcon('material-symbols:replay', { size: 18 })
+                      default: () => $gettext('Restart')
                     }
                   )
                 }
@@ -199,8 +192,7 @@ const processColumns: any = [
                   style: 'margin-left: 15px'
                 },
                 {
-                  default: () => $gettext('Delete'),
-                  icon: renderIcon('material-symbols:delete-outline', { size: 14 })
+                  default: () => $gettext('Delete')
                 }
               )
             }
@@ -302,36 +294,17 @@ onUnmounted(() => {
 
 <template>
   <common-page show-footer>
-    <template #action>
-      <n-button
-        v-if="currentTab == 'config'"
-        class="ml-16"
-        type="primary"
-        @click="handleSaveConfig"
-      >
-        <the-icon :size="18" icon="material-symbols:save-outline" />
-        {{ $gettext('Save') }}
-      </n-button>
-      <n-button
-        v-if="currentTab == 'processes'"
-        class="ml-16"
-        type="primary"
-        @click="createProcessModal = true"
-      >
-        <the-icon :size="18" icon="material-symbols:add" />
-        {{ $gettext('Add Process') }}
-      </n-button>
-      <n-button v-if="currentTab == 'log'" class="ml-16" type="primary" @click="handleClearLog">
-        <the-icon :size="18" icon="material-symbols:delete-outline" />
-        {{ $gettext('Clear Log') }}
-      </n-button>
-    </template>
     <n-tabs v-model:value="currentTab" type="line" animated>
       <n-tab-pane name="status" :tab="$gettext('Running Status')">
         <service-status v-if="serviceName != ''" :service="serviceName" />
       </n-tab-pane>
       <n-tab-pane name="processes" :tab="$gettext('Process Management')">
         <n-flex vertical>
+          <n-flex>
+            <n-button type="primary" @click="createProcessModal = true">
+              {{ $gettext('Add Process') }}
+            </n-button>
+          </n-flex>
           <n-data-table
             striped
             remote
@@ -355,7 +328,7 @@ onUnmounted(() => {
         </n-flex>
       </n-tab-pane>
       <n-tab-pane name="config" :tab="$gettext('Main Configuration')">
-        <n-space vertical>
+        <n-flex vertical>
           <n-alert type="warning">
             {{
               $gettext(
@@ -363,25 +336,26 @@ onUnmounted(() => {
               )
             }}
           </n-alert>
-          <Editor
-            v-model:value="config"
-            language="ini"
-            theme="vs-dark"
-            height="60vh"
-            mt-8
-            :options="{
-              automaticLayout: true,
-              formatOnType: true,
-              formatOnPaste: true
-            }"
-          />
-        </n-space>
+          <common-editor v-model:value="config" height="60vh" />
+          <n-flex>
+            <n-button type="primary" @click="handleSaveConfig">
+              {{ $gettext('Save') }}
+            </n-button>
+          </n-flex>
+        </n-flex>
       </n-tab-pane>
       <n-tab-pane name="run-log" :tab="$gettext('Runtime Logs')">
         <realtime-log service="supervisor" />
       </n-tab-pane>
       <n-tab-pane name="log" :tab="$gettext('Daemon Logs')">
-        <realtime-log path="/var/log/supervisor/supervisord.log" />
+        <n-flex vertical>
+          <n-flex>
+            <n-button type="primary" @click="handleClearLog">
+              {{ $gettext('Clear Log') }}
+            </n-button>
+          </n-flex>
+          <realtime-log path="/var/log/supervisor/supervisord.log" />
+        </n-flex>
       </n-tab-pane>
     </n-tabs>
   </common-page>
@@ -445,17 +419,6 @@ onUnmounted(() => {
     :segmented="false"
     @close="handleSaveProcessConfig"
   >
-    <Editor
-      v-model:value="editProcessModel.config"
-      language="ini"
-      theme="vs-dark"
-      height="60vh"
-      mt-8
-      :options="{
-        automaticLayout: true,
-        formatOnType: true,
-        formatOnPaste: true
-      }"
-    />
+    <common-editor v-model:value="editProcessModel.config" height="60vh" />
   </n-modal>
 </template>

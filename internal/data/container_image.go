@@ -1,41 +1,45 @@
 package data
 
 import (
-	"fmt"
+	"context"
+	"encoding/base64"
+	"encoding/json"
 	"slices"
 	"strings"
 	"time"
 
-	"github.com/go-resty/resty/v2"
+	"github.com/moby/moby/api/types/registry"
+	"github.com/moby/moby/client"
 
-	"github.com/tnborg/panel/internal/biz"
-	"github.com/tnborg/panel/internal/http/request"
-	"github.com/tnborg/panel/pkg/shell"
-	"github.com/tnborg/panel/pkg/tools"
-	"github.com/tnborg/panel/pkg/types"
-	"github.com/tnborg/panel/pkg/types/docker/image"
+	"github.com/acepanel/panel/internal/biz"
+	"github.com/acepanel/panel/internal/http/request"
+	"github.com/acepanel/panel/pkg/tools"
+	"github.com/acepanel/panel/pkg/types"
 )
 
-type containerImageRepo struct {
-	client *resty.Client
-}
+type containerImageRepo struct{}
 
 func NewContainerImageRepo() biz.ContainerImageRepo {
-	return &containerImageRepo{
-		client: getDockerClient("/var/run/docker.sock"),
-	}
+	return &containerImageRepo{}
 }
 
 // List 列出镜像
 func (r *containerImageRepo) List() ([]types.ContainerImage, error) {
-	var resp []image.Image
-	_, err := r.client.R().SetResult(&resp).SetQueryParam("all", "true").Get("/images/json")
+	apiClient, err := getDockerClient("/var/run/docker.sock")
+	if err != nil {
+		return nil, err
+	}
+	defer func(apiClient *client.Client) { _ = apiClient.Close() }(apiClient)
+
+	resp, err := apiClient.ImageList(context.Background(), client.ImageListOptions{
+		All: true,
+	})
 	if err != nil {
 		return nil, err
 	}
 
 	var images []types.ContainerImage
-	for _, item := range resp {
+	for _, item := range resp.Items {
 		images = append(images, types.ContainerImage{
 			ID:          item.ID,
 			Containers:  item.Containers,
@@ -56,33 +60,59 @@ func (r *containerImageRepo) List() ([]types.ContainerImage, error) {
 
 // Pull 拉取镜像
 func (r *containerImageRepo) Pull(req *request.ContainerImagePull) error {
-	var sb strings.Builder
-
-	if req.Auth {
-		sb.WriteString(fmt.Sprintf("docker login -u %s -p %s", req.Username, req.Password))
-		if _, err := shell.Exec(sb.String()); err != nil {
-			return fmt.Errorf("login failed: %w", err)
-		}
-		sb.Reset()
-	}
-
-	sb.WriteString(fmt.Sprintf("docker pull %s", req.Name))
-
-	if _, err := shell.Exec(sb.String()); err != nil {
+	apiClient, err := getDockerClient("/var/run/docker.sock")
+	if err != nil {
 		return err
 	}
+	defer func(apiClient *client.Client) { _ = apiClient.Close() }(apiClient)
 
-	return nil
+	options := client.ImagePullOptions{}
+	if req.Auth {
+		authConfig := registry.AuthConfig{
+			Username: req.Username,
+			Password: req.Password,
+		}
+		encodedJSON, err := json.Marshal(authConfig)
+		if err != nil {
+			return err
+		}
+		authStr := base64.URLEncoding.EncodeToString(encodedJSON)
+		options.RegistryAuth = authStr
+	}
+
+	out, err := apiClient.ImagePull(context.Background(), req.Name, options)
+	if err != nil {
+		return err
+	}
+	defer func(out client.ImagePullResponse) { _ = out.Close() }(out)
+
+	// TODO 实现流式显示拉取进度
+	return out.Wait(context.Background())
 }
 
 // Remove 删除镜像
 func (r *containerImageRepo) Remove(id string) error {
-	_, err := shell.ExecfWithTimeout(2*time.Minute, "docker rmi %s", id)
+	apiClient, err := getDockerClient("/var/run/docker.sock")
+	if err != nil {
+		return err
+	}
+	defer func(apiClient *client.Client) { _ = apiClient.Close() }(apiClient)
+
+	_, err = apiClient.ImageRemove(context.Background(), id, client.ImageRemoveOptions{
+		Force:         true,
+		PruneChildren: true,
+	})
 	return err
 }
 
 // Prune 清理未使用的镜像
 func (r *containerImageRepo) Prune() error {
-	_, err := shell.ExecfWithTimeout(2*time.Minute, "docker image prune -f")
+	apiClient, err := getDockerClient("/var/run/docker.sock")
+	if err != nil {
+		return err
+	}
+	defer func(apiClient *client.Client) { _ = apiClient.Close() }(apiClient)
+
+	_, err = apiClient.ImagePrune(context.Background(), client.ImagePruneOptions{})
 	return err
 }

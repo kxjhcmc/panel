@@ -6,10 +6,10 @@ import (
 
 	"github.com/libtnb/chix"
 
-	"github.com/tnborg/panel/internal/app"
-	"github.com/tnborg/panel/internal/biz"
-	"github.com/tnborg/panel/internal/http/request"
-	"github.com/tnborg/panel/pkg/io"
+	"github.com/acepanel/panel/internal/app"
+	"github.com/acepanel/panel/internal/biz"
+	"github.com/acepanel/panel/internal/http/request"
+	"github.com/acepanel/panel/pkg/io"
 )
 
 type WebsiteService struct {
@@ -83,14 +83,15 @@ func (s *WebsiteService) UpdateCert(w http.ResponseWriter, r *http.Request) {
 	Success(w, nil)
 }
 
+// List 网站列表
 func (s *WebsiteService) List(w http.ResponseWriter, r *http.Request) {
-	req, err := Bind[request.Paginate](r)
+	req, err := Bind[request.WebsiteList](r)
 	if err != nil {
 		Error(w, http.StatusUnprocessableEntity, "%v", err)
 		return
 	}
 
-	websites, total, err := s.websiteRepo.List(req.Page, req.Limit)
+	websites, total, err := s.websiteRepo.List(req.Type, req.Page, req.Limit)
 	if err != nil {
 		Error(w, http.StatusInternalServerError, "%v", err)
 		return
@@ -111,7 +112,7 @@ func (s *WebsiteService) Create(w http.ResponseWriter, r *http.Request) {
 
 	if len(req.Path) == 0 {
 		req.Path, _ = s.settingRepo.Get(biz.SettingKeyWebsitePath)
-		req.Path = filepath.Join(req.Path, req.Name)
+		req.Path = filepath.Join(req.Path, req.Name, "public")
 	}
 
 	if _, err = s.websiteRepo.Create(req); err != nil {

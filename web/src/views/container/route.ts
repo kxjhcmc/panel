@@ -7,7 +7,7 @@ export default {
   path: '/container',
   component: Layout,
   meta: {
-    order: 40
+    order: 20
   },
   children: [
     {

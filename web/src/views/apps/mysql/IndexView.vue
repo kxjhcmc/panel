@@ -3,7 +3,6 @@ defineOptions({
   name: 'apps-mysql-index'
 })
 
-import Editor from '@guolao/vue-monaco-editor'
 import { NButton, NDataTable, NInput } from 'naive-ui'
 import { useGettext } from 'vue3-gettext'
 
@@ -48,8 +47,8 @@ const handleSaveConfig = () => {
   })
 }
 
-const handleClearErrorLog = () => {
-  useRequest(mysql.clearErrorLog()).onSuccess(() => {
+const handleClearLog = () => {
+  useRequest(mysql.clearLog()).onSuccess(() => {
     window.$message.success($gettext('Cleared successfully'))
   })
 }
@@ -68,49 +67,16 @@ const handleSetRootPassword = async () => {
 
 <template>
   <common-page show-footer>
-    <template #action>
-      <n-button
-        v-if="currentTab == 'config'"
-        class="ml-16"
-        type="primary"
-        @click="handleSaveConfig"
-      >
-        <the-icon :size="18" icon="material-symbols:save-outline" />
-        {{ $gettext('Save') }}
-      </n-button>
-      <n-button
-        v-if="currentTab == 'error-log'"
-        class="ml-16"
-        type="primary"
-        @click="handleClearErrorLog"
-      >
-        <the-icon :size="18" icon="material-symbols:delete-outline" />
-        {{ $gettext('Clear Log') }}
-      </n-button>
-      <n-button
-        v-if="currentTab == 'slow-log'"
-        class="ml-16"
-        type="primary"
-        @click="handleClearSlowLog"
-      >
-        <the-icon :size="18" icon="material-symbols:delete-outline" />
-        {{ $gettext('Clear Slow Log') }}
-      </n-button>
-    </template>
     <n-tabs v-model:value="currentTab" type="line" animated>
       <n-tab-pane name="status" :tab="$gettext('Running Status')">
         <n-flex vertical>
           <service-status service="mysqld" />
           <n-card :title="$gettext('Root Password')">
             <n-flex vertical>
-              <n-input
-                v-model:value="rootPassword"
-                type="password"
-                show-password-on="click"
-              ></n-input>
-              <n-button type="primary" @click="handleSetRootPassword">{{
-                $gettext('Save Changes')
-              }}</n-button>
+              <n-input v-model:value="rootPassword" type="password" show-password-on="click" />
+              <n-button type="primary" @click="handleSetRootPassword">
+                {{ $gettext('Save Changes') }}
+              </n-button>
             </n-flex>
           </n-card>
         </n-flex>
@@ -124,18 +90,12 @@ const handleSetRootPassword = async () => {
               )
             }}
           </n-alert>
-          <Editor
-            v-model:value="config"
-            language="ini"
-            theme="vs-dark"
-            height="60vh"
-            mt-8
-            :options="{
-              automaticLayout: true,
-              formatOnType: true,
-              formatOnPaste: true
-            }"
-          />
+          <common-editor v-model:value="config" height="60vh" />
+          <n-flex>
+            <n-button type="primary" @click="handleSaveConfig">
+              {{ $gettext('Save') }}
+            </n-button>
+          </n-flex>
         </n-flex>
       </n-tab-pane>
       <n-tab-pane name="load" :tab="$gettext('Load Status')">
@@ -149,9 +109,15 @@ const handleSetRootPassword = async () => {
         />
       </n-tab-pane>
       <n-tab-pane name="run-log" :tab="$gettext('Runtime Logs')">
+        <n-button type="primary" @click="handleClearLog">
+          {{ $gettext('Clear Log') }}
+        </n-button>
         <realtime-log service="mysqld" />
       </n-tab-pane>
       <n-tab-pane name="slow-log" :tab="$gettext('Slow Query Log')">
+        <n-button type="primary" @click="handleClearSlowLog">
+          {{ $gettext('Clear Slow Log') }}
+        </n-button>
         <realtime-log :path="slowLog" />
       </n-tab-pane>
     </n-tabs>

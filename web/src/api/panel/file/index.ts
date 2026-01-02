@@ -30,10 +30,13 @@ export default {
     http.Post('/file/compress', { dir, paths, file }),
   // 解压文件
   unCompress: (file: string, path: string): any => http.Post('/file/un_compress', { file, path }),
-  // 搜索文件
-  search: (path: string, keyword: string, sub: boolean, page: number, limit: number): any =>
-    http.Get('/file/search', { params: { path, keyword, sub, page, limit } }),
   // 获取文件列表
-  list: (path: string, page: number, limit: number, sort: string): any =>
-    http.Get('/file/list', { params: { path, page, limit, sort } })
+  list: (
+    path: string,
+    keyword: string,
+    sub: boolean,
+    sort: string,
+    page: number,
+    limit: number
+  ): any => http.Get('/file/list', { params: { path, keyword, sub, sort, page, limit } })
 }

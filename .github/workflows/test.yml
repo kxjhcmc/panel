@@ -4,19 +4,24 @@ on:
     branches:
       - main
   pull_request:
+permissions:
+  contents: read
 jobs:
   unit:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
       - name: Setup Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v6
         with:
           cache: true
           go-version: 'stable'
       - name: Install dependencies
         run: sudo apt-get install -y curl jq
+      # https://github.com/golang/go/issues/75031
+      - name: Set toolchain version
+        run: go env -w GOTOOLCHAIN=go1.25.1+auto
       - name: Set up environment
         run: |
           cp config.example.yml config.yml
@@ -25,5 +30,6 @@ jobs:
       - name: Upload coverage report to Codecov
         uses: codecov/codecov-action@v5
         with:
-          file: ./coverage.out
-          token: ${{ secrets.CODECOV }}
+          disable_search: true
+          files: coverage.out
+          token: ${{ secrets.CODECOV_TOKEN }}

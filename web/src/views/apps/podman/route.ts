@@ -14,7 +14,6 @@ export default {
       component: () => import('./IndexView.vue'),
       meta: {
         title: 'Podman',
-        icon: 'devicon:podman',
         role: ['admin'],
         requireAuth: true
       }

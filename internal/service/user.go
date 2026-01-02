@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/knadh/koanf/v2"
 	"github.com/leonelquinteros/gotext"
@@ -19,9 +20,9 @@ import (
 	"github.com/pquerna/otp/totp"
 	"github.com/spf13/cast"
 
-	"github.com/tnborg/panel/internal/biz"
-	"github.com/tnborg/panel/internal/http/request"
-	"github.com/tnborg/panel/pkg/rsacrypto"
+	"github.com/acepanel/panel/internal/biz"
+	"github.com/acepanel/panel/internal/http/request"
+	"github.com/acepanel/panel/pkg/rsacrypto"
 )
 
 type UserService struct {
@@ -98,13 +99,24 @@ func (s *UserService) Login(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 安全登录下，将当前客户端与会话绑定
-	// 安全登录只在未启用面板 HTTPS 时生效
-	ip, _, err := net.SplitHostPort(strings.TrimSpace(r.RemoteAddr))
-	if err != nil {
+	// 重新生成会话 ID
+	if err = sess.Regenerate(true); err != nil {
 		Error(w, http.StatusInternalServerError, "%v", err)
 		return
 	}
+
+	// 安全登录下，将当前客户端与会话绑定
+	// 安全登录只在未启用面板 HTTPS 时生效
+	ip := r.RemoteAddr
+	ipHeader := s.conf.String("http.ip_header")
+	if ipHeader != "" && r.Header.Get(ipHeader) != "" {
+		ip = strings.Split(r.Header.Get(ipHeader), ",")[0]
+	}
+	ip, _, err = net.SplitHostPort(strings.TrimSpace(ip))
+	if err != nil {
+		ip = r.RemoteAddr
+	}
+
 	if req.SafeLogin && !s.conf.Bool("http.tls") {
 		sess.Put("safe_login", true)
 		sess.Put("safe_client", fmt.Sprintf("%x", sha256.Sum256([]byte(ip))))
@@ -114,6 +126,7 @@ func (s *UserService) Login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sess.Put("user_id", user.ID)
+	sess.Put("refresh_at", time.Now().Unix())
 	sess.Forget("key")
 	Success(w, nil)
 }
@@ -128,6 +141,12 @@ func (s *UserService) Logout(w http.ResponseWriter, r *http.Request) {
 	sess.Forget("key")
 	sess.Forget("safe_login")
 	sess.Forget("safe_client")
+
+	// 重新生成会话 ID
+	if err = sess.Regenerate(true); err != nil {
+		Error(w, http.StatusInternalServerError, "%v", err)
+		return
+	}
 
 	Success(w, nil)
 }

@@ -13,8 +13,7 @@ export default {
       path: '',
       component: () => import('./IndexView.vue'),
       meta: {
-        title: 'Percona (MySQL)',
-        icon: 'logos:percona',
+        title: 'MySQL',
         role: ['admin'],
         requireAuth: true
       }

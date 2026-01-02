@@ -3,7 +3,6 @@ defineOptions({
   name: 'apps-minio-index'
 })
 
-import Editor from '@guolao/vue-monaco-editor'
 import { NButton } from 'naive-ui'
 import { useGettext } from 'vue3-gettext'
 
@@ -26,18 +25,12 @@ const handleSaveEnv = () => {
 
 <template>
   <common-page show-footer>
-    <template #action>
-      <n-button v-if="currentTab == 'env'" class="ml-16" type="primary" @click="handleSaveEnv">
-        <the-icon :size="18" icon="material-symbols:save-outline" />
-        {{ $gettext('Save') }}
-      </n-button>
-    </template>
     <n-tabs v-model:value="currentTab" type="line" animated>
       <n-tab-pane name="status" :tab="$gettext('Running Status')">
         <service-status service="minio" />
       </n-tab-pane>
       <n-tab-pane name="env" :tab="$gettext('Environment Variables')">
-        <n-space vertical>
+        <n-flex vertical>
           <n-alert type="warning">
             {{
               $gettext(
@@ -45,19 +38,13 @@ const handleSaveEnv = () => {
               )
             }}
           </n-alert>
-          <Editor
-            v-model:value="env"
-            language="ini"
-            theme="vs-dark"
-            height="60vh"
-            mt-8
-            :options="{
-              automaticLayout: true,
-              formatOnType: true,
-              formatOnPaste: true
-            }"
-          />
-        </n-space>
+          <common-editor v-model:value="env" height="60vh" />
+          <n-flex>
+            <n-button type="primary" @click="handleSaveEnv">
+              {{ $gettext('Save') }}
+            </n-button>
+          </n-flex>
+        </n-flex>
       </n-tab-pane>
       <n-tab-pane name="run-log" :tab="$gettext('Runtime Logs')">
         <realtime-log service="minio" />

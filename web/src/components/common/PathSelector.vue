@@ -45,9 +45,9 @@ const columns: DataTableColumns<RowData> = [
     defaultSortOrder: false,
     sorter: 'default',
     render(row) {
-      let icon = 'bi:file-earmark'
+      let icon = 'mdi:file-outline'
       if (row.dir) {
-        icon = 'bi:folder'
+        icon = 'mdi:folder-outline'
       } else {
         icon = getIconByExt(getExt(row.name))
       }
@@ -65,7 +65,7 @@ const columns: DataTableColumns<RowData> = [
           }
         },
         () => [
-          h(TheIcon, { icon, size: 24, color: `var(--primary-color)` }),
+          h(TheIcon, { icon, size: 24 }),
           h(NEllipsis, null, {
             default: () => {
               if (row.symlink) {
@@ -126,7 +126,8 @@ const columns: DataTableColumns<RowData> = [
 ]
 
 const { loading, data, page, total, pageSize, pageCount, refresh } = usePagination(
-  (page, pageSize) => file.list(path.value, page, pageSize, sort.value),
+  (page, pageSize) =>
+    file.list(encodeURIComponent(path.value), '', false, sort.value, page, pageSize),
   {
     initialData: { total: 0, list: [] },
     initialPageSize: 100,
@@ -260,7 +261,7 @@ const handleClose = () => {
         <n-button type="primary"> {{ $gettext('Create') }} </n-button>
       </n-popselect>
       <n-button @click="handleUp">
-        <icon-bi-arrow-up />
+        <i-mdi-arrow-up :size="16" />
       </n-button>
       <n-input-group flex-1>
         <n-tag size="large" v-if="!isInput" flex-1 @click="handleInput">
@@ -287,7 +288,7 @@ const handleClose = () => {
         />
       </n-input-group>
       <n-button @click="refresh">
-        <icon-bi-arrow-clockwise />
+        <i-mdi-refresh :size="16" />
       </n-button>
     </n-flex>
     <n-data-table

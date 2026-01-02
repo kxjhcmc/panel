@@ -11,13 +11,13 @@ import (
 	"github.com/libtnb/chix"
 	"github.com/spf13/cast"
 
-	"github.com/tnborg/panel/internal/app"
-	"github.com/tnborg/panel/internal/http/request"
-	"github.com/tnborg/panel/pkg/io"
-	"github.com/tnborg/panel/pkg/ntp"
-	"github.com/tnborg/panel/pkg/shell"
-	"github.com/tnborg/panel/pkg/tools"
-	"github.com/tnborg/panel/pkg/types"
+	"github.com/acepanel/panel/internal/app"
+	"github.com/acepanel/panel/internal/http/request"
+	"github.com/acepanel/panel/pkg/io"
+	"github.com/acepanel/panel/pkg/ntp"
+	"github.com/acepanel/panel/pkg/shell"
+	"github.com/acepanel/panel/pkg/tools"
+	"github.com/acepanel/panel/pkg/types"
 )
 
 type ToolboxSystemService struct {
@@ -258,7 +258,10 @@ func (s *ToolboxSystemService) SyncTime(w http.ResponseWriter, r *http.Request) 
 
 // GetHostname 获取主机名
 func (s *ToolboxSystemService) GetHostname(w http.ResponseWriter, r *http.Request) {
-	hostname, _ := io.Read("/etc/hostname")
+	hostname, err := shell.Execf("hostnamectl hostname")
+	if err != nil {
+		hostname, _ = io.Read("/etc/hostname")
+	}
 	Success(w, strings.TrimSpace(hostname))
 }
 
@@ -270,7 +273,7 @@ func (s *ToolboxSystemService) UpdateHostname(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	if _, err = shell.Execf("hostnamectl set-hostname '%s'", req.Hostname); err != nil {
+	if _, err = shell.Execf("hostnamectl hostname '%s'", req.Hostname); err != nil {
 		// 直接写 /etc/hostname
 		if err = io.Write("/etc/hostname", req.Hostname, 0644); err != nil {
 			Error(w, http.StatusInternalServerError, s.t.Get("failed to set hostname: %v", err))

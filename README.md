@@ -2,22 +2,26 @@
 [简体中文] | [<a href="README_EN.md">English</a>]
 </p>
 
-<h1 align="center" style="font-size: 40px">耗子面板</h1>
+<p align="center"><a href="https://acepanel.net"><img src=".github/assets/logo-full.png" alt="AcePanel" width="300" /></a></p>
+
+<p align="center">新一代全能服务器运维管理面板<br>简单轻量，高效运维</p>
 
 <div align="center">
 
-[![Go](https://img.shields.io/github/go-mod/go-version/tnborg/panel)](https://go.dev/)
-[![Release](https://img.shields.io/github/release/tnborg/panel.svg)](https://github.com/tnborg/panel/releases)
-[![Test](https://github.com/tnborg/panel/actions/workflows/test.yml/badge.svg)](https://github.com/tnborg/panel/actions)
-[![Report Card](https://goreportcard.com/badge/github.com/tnborg/panel)](https://goreportcard.com/report/github.com/tnborg/panel)
-[![Stars](https://img.shields.io/github/stars/tnborg/panel?style=flat)](https://github.com/tnborg/panel)
-[![License](https://img.shields.io/github/license/tnborg/panel)](https://www.gnu.org/licenses/agpl-3.0.html)
+官网：[acepanel.net](https://acepanel.net) | QQ群：[12370907](https://jq.qq.com/?_wv=1027&k=I1oJKSTH) | 微信群：[复制此链接](https://work.weixin.qq.com/gm/d8ebf618553398d454e3378695c858b6)
 
 </div>
 
-新一代全能服务器运维管理面板。简单轻量，高效运维。
+<div align="center">
 
-官网：[panel.haozi.net](https://panel.haozi.net) | QQ群：[12370907](https://jq.qq.com/?_wv=1027&k=I1oJKSTH) | 微信群：[复制此链接](https://work.weixin.qq.com/gm/d8ebf618553398d454e3378695c858b6)
+[![Go](https://img.shields.io/github/go-mod/go-version/acepanel/panel)](https://go.dev/)
+[![Release](https://img.shields.io/github/release/acepanel/panel.svg)](https://github.com/acepanel/panel/releases)
+[![Test](https://github.com/acepanel/panel/actions/workflows/test.yml/badge.svg)](https://github.com/acepanel/panel/actions)
+[![Report Card](https://goreportcard.com/badge/github.com/acepanel/panel)](https://goreportcard.com/report/github.com/acepanel/panel)
+[![Stars](https://img.shields.io/github/stars/acepanel/panel?style=flat)](https://github.com/acepanel/panel)
+[![License](https://img.shields.io/github/license/acepanel/panel)](https://opensource.org/license/bsd-3-clause)
+
+</div>
 
 ## 优势
 
@@ -32,7 +36,9 @@
 
 ## 快速安装
 
-支持 `amd64` | `arm64` 架构下的干净的主流系统，具体支持的系统请参考[安装文档](https://ratpanel.github.io/zh_CN/quickstart/install)。
+> 广告：阿里云 ESA 国内版免费套餐现已开放，提供无限量 CDN 加速服务，[点击活动链接直达免费领取](https://tianchi.aliyun.com/specials/promotion/freetier/esa?taskCode=25254&recordId=9a6f7ca08fecef8590f9b547268b6528)。
+
+支持 `amd64` | `arm64` 架构下的干净的主流系统，具体支持的系统请参考[安装文档](https://acepanel.github.io/quickstart/install)。
 
 ```shell
 curl -sSLOm 10 https://dl.cdn.haozi.net/panel/install.sh && bash install.sh
@@ -44,7 +50,7 @@ curl -sSLOm 10 https://dl.cdn.haozi.net/panel/install.sh && bash install.sh
 
 ## 合作伙伴
 
-如果耗子面板对您有帮助，欢迎[赞助我们](https://github.com/tnborg/panel/issues/90)，同时感谢以下支持者/赞助商的支持：
+如果 AcePanel 对您有帮助，欢迎[赞助我们](https://github.com/acepanel/panel/issues/90)，同时感谢以下支持者/赞助商的支持：
 
 <p align="center">
   <a href="https://www.weixiaoduo.com/">
@@ -65,17 +71,17 @@ curl -sSLOm 10 https://dl.cdn.haozi.net/panel/install.sh && bash install.sh
 </p>
 
 <p align="center">
-  <a target="_blank" href="https://afdian.com/a/tnblabs">
+  <a target="_blank" href="https://afdian.com/a/tnborg">
     <img alt="sponsors" src="https://github.com/tnborg/sponsor/blob/main/sponsors.svg?raw=true"/>
   </a>
 </p>
 
 ## Star 历史
 
-<a href="https://star-history.com/#tnborg/panel&Date">
+<a href="https://star-history.com/#acepanel/panel&Date">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=tnborg/panel&type=Date&theme=dark" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=tnborg/panel&type=Date" />
-   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=tnborg/panel&type=Date" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=acepanel/panel&type=Date&theme=dark" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=acepanel/panel&type=Date" />
+   <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=acepanel/panel&type=Date" />
  </picture>
 </a>

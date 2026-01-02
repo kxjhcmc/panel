@@ -21,18 +21,18 @@ import (
 	"go.yaml.in/yaml/v3"
 	"gorm.io/gorm"
 
-	"github.com/tnborg/panel/internal/app"
-	"github.com/tnborg/panel/internal/biz"
-	"github.com/tnborg/panel/internal/http/request"
-	"github.com/tnborg/panel/pkg/api"
-	"github.com/tnborg/panel/pkg/cert"
-	"github.com/tnborg/panel/pkg/firewall"
-	"github.com/tnborg/panel/pkg/io"
-	"github.com/tnborg/panel/pkg/ntp"
-	"github.com/tnborg/panel/pkg/os"
-	"github.com/tnborg/panel/pkg/systemctl"
-	"github.com/tnborg/panel/pkg/tools"
-	"github.com/tnborg/panel/pkg/types"
+	"github.com/acepanel/panel/internal/app"
+	"github.com/acepanel/panel/internal/biz"
+	"github.com/acepanel/panel/internal/http/request"
+	"github.com/acepanel/panel/pkg/api"
+	"github.com/acepanel/panel/pkg/cert"
+	"github.com/acepanel/panel/pkg/firewall"
+	"github.com/acepanel/panel/pkg/io"
+	"github.com/acepanel/panel/pkg/ntp"
+	"github.com/acepanel/panel/pkg/os"
+	"github.com/acepanel/panel/pkg/systemctl"
+	"github.com/acepanel/panel/pkg/tools"
+	"github.com/acepanel/panel/pkg/types"
 )
 
 type CliService struct {
@@ -542,16 +542,18 @@ func (s *CliService) Port(ctx context.Context, cmd *cli.Command) error {
 	}
 
 	// 放行端口
-	fw := firewall.NewFirewall()
-	err = fw.Port(firewall.FireInfo{
-		Type:      firewall.TypeNormal,
-		PortStart: config.HTTP.Port,
-		PortEnd:   config.HTTP.Port,
-		Direction: firewall.DirectionIn,
-		Strategy:  firewall.StrategyAccept,
-	}, firewall.OperationAdd)
-	if err != nil {
-		return err
+	if ok, _ := systemctl.IsEnabled("firewalld"); ok {
+		fw := firewall.NewFirewall()
+		err = fw.Port(firewall.FireInfo{
+			Type:      firewall.TypeNormal,
+			PortStart: port,
+			PortEnd:   port,
+			Direction: firewall.DirectionIn,
+			Strategy:  firewall.StrategyAccept,
+		}, firewall.OperationAdd)
+		if err != nil {
+			return err
+		}
 	}
 
 	if err = io.Write("/usr/local/etc/panel/config.yml", string(encoded), 0700); err != nil {
@@ -568,7 +570,7 @@ func (s *CliService) WebsiteCreate(ctx context.Context, cmd *cli.Command) error 
 		Domains: cmd.StringSlice("domains"),
 		Listens: cmd.StringSlice("listens"),
 		Path:    cmd.String("path"),
-		PHP:     int(cmd.Int("php")),
+		PHP:     cmd.Uint("php"),
 		DB:      false,
 	}
 
@@ -938,7 +940,7 @@ func (s *CliService) Init(ctx context.Context, cmd *cli.Command) error {
 	}
 
 	settings := []biz.Setting{
-		{Key: biz.SettingKeyName, Value: "耗子面板"},
+		{Key: biz.SettingKeyName, Value: "AcePanel"},
 		{Key: biz.SettingKeyChannel, Value: "stable"},
 		{Key: biz.SettingKeyVersion, Value: app.Version},
 		{Key: biz.SettingKeyMonitor, Value: "true"},
@@ -990,8 +992,8 @@ checkPort:
 	fw := firewall.NewFirewall()
 	_ = fw.Port(firewall.FireInfo{
 		Type:      firewall.TypeNormal,
-		PortStart: config.HTTP.Port,
-		PortEnd:   config.HTTP.Port,
+		PortStart: port,
+		PortEnd:   port,
 		Direction: firewall.DirectionIn,
 		Strategy:  firewall.StrategyAccept,
 	}, firewall.OperationAdd)

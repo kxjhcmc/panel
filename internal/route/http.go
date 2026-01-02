@@ -7,17 +7,19 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/knadh/koanf/v2"
 
-	"github.com/tnborg/panel/internal/http/middleware"
-	"github.com/tnborg/panel/internal/service"
-	"github.com/tnborg/panel/pkg/apploader"
-	"github.com/tnborg/panel/pkg/embed"
+	"github.com/acepanel/panel/internal/http/middleware"
+	"github.com/acepanel/panel/internal/service"
+	"github.com/acepanel/panel/pkg/apploader"
+	"github.com/acepanel/panel/pkg/embed"
 )
 
 type Http struct {
+	conf             *koanf.Koanf
 	user             *service.UserService
 	userToken        *service.UserTokenService
-	dashboard        *service.DashboardService
+	home             *service.HomeService
 	task             *service.TaskService
 	website          *service.WebsiteService
 	database         *service.DatabaseService
@@ -48,9 +50,10 @@ type Http struct {
 }
 
 func NewHttp(
+	conf *koanf.Koanf,
 	user *service.UserService,
 	userToken *service.UserTokenService,
-	dashboard *service.DashboardService,
+	home *service.HomeService,
 	task *service.TaskService,
 	website *service.WebsiteService,
 	database *service.DatabaseService,
@@ -80,9 +83,10 @@ func NewHttp(
 	apps *apploader.Loader,
 ) *Http {
 	return &Http{
+		conf:             conf,
 		user:             user,
 		userToken:        userToken,
-		dashboard:        dashboard,
+		home:             home,
 		task:             task,
 		website:          website,
 		database:         database,
@@ -117,7 +121,7 @@ func (route *Http) Register(r *chi.Mux) {
 	r.Route("/api", func(r chi.Router) {
 		r.Route("/user", func(r chi.Router) {
 			r.Get("/key", route.user.GetKey)
-			r.With(middleware.Throttle(5, time.Minute)).Post("/login", route.user.Login)
+			r.With(middleware.Throttle(route.conf.String("http.ip_header"), 5, time.Minute)).Post("/login", route.user.Login)
 			r.Post("/logout", route.user.Logout)
 			r.Get("/is_login", route.user.IsLogin)
 			r.Get("/is_2fa", route.user.IsTwoFA)
@@ -142,17 +146,17 @@ func (route *Http) Register(r *chi.Mux) {
 			r.Delete("/{id}", route.userToken.Delete)
 		})
 
-		r.Route("/dashboard", func(r chi.Router) {
-			r.Get("/panel", route.dashboard.Panel)
-			r.Get("/home_apps", route.dashboard.HomeApps)
-			r.Post("/current", route.dashboard.Current)
-			r.Get("/system_info", route.dashboard.SystemInfo)
-			r.Get("/count_info", route.dashboard.CountInfo)
-			r.Get("/installed_db_and_php", route.dashboard.InstalledDbAndPhp)
-			r.Get("/check_update", route.dashboard.CheckUpdate)
-			r.Get("/update_info", route.dashboard.UpdateInfo)
-			r.Post("/update", route.dashboard.Update)
-			r.Post("/restart", route.dashboard.Restart)
+		r.Route("/home", func(r chi.Router) {
+			r.Get("/panel", route.home.Panel)
+			r.Get("/apps", route.home.Apps)
+			r.Post("/current", route.home.Current)
+			r.Get("/system_info", route.home.SystemInfo)
+			r.Get("/count_info", route.home.CountInfo)
+			r.Get("/installed_db_and_php", route.home.InstalledDbAndPhp)
+			r.Get("/check_update", route.home.CheckUpdate)
+			r.Get("/update_info", route.home.UpdateInfo)
+			r.Post("/update", route.home.Update)
+			r.Post("/restart", route.home.Restart)
 		})
 
 		r.Route("/task", func(r chi.Router) {
@@ -360,7 +364,6 @@ func (route *Http) Register(r *chi.Mux) {
 			r.Post("/permission", route.file.Permission)
 			r.Post("/compress", route.file.Compress)
 			r.Post("/un_compress", route.file.UnCompress)
-			r.Get("/search", route.file.Search)
 			r.Get("/list", route.file.List)
 		})
 

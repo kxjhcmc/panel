@@ -14,7 +14,6 @@ export default {
       component: () => import('./IndexView.vue'),
       meta: {
         title: 'S3fs Manager',
-        icon: 'logos:aws',
         role: ['admin'],
         requireAuth: true
       }

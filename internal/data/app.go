@@ -4,37 +4,41 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 
 	"github.com/expr-lang/expr"
 	"github.com/hashicorp/go-version"
 	"github.com/knadh/koanf/v2"
 	"github.com/leonelquinteros/gotext"
-	"github.com/libtnb/utils/collect"
 	"github.com/spf13/cast"
 	"gorm.io/gorm"
 
-	"github.com/tnborg/panel/internal/app"
-	"github.com/tnborg/panel/internal/biz"
-	"github.com/tnborg/panel/pkg/api"
-	"github.com/tnborg/panel/pkg/shell"
+	"github.com/acepanel/panel/internal/app"
+	"github.com/acepanel/panel/internal/biz"
+	"github.com/acepanel/panel/pkg/api"
+	"github.com/acepanel/panel/pkg/shell"
 )
 
 type appRepo struct {
 	t     *gotext.Locale
 	conf  *koanf.Koanf
 	db    *gorm.DB
+	log   *slog.Logger
 	cache biz.CacheRepo
 	task  biz.TaskRepo
+	api   *api.API
 }
 
-func NewAppRepo(t *gotext.Locale, conf *koanf.Koanf, db *gorm.DB, cache biz.CacheRepo, task biz.TaskRepo) biz.AppRepo {
+func NewAppRepo(t *gotext.Locale, conf *koanf.Koanf, db *gorm.DB, log *slog.Logger, cache biz.CacheRepo, task biz.TaskRepo) biz.AppRepo {
 	return &appRepo{
 		t:     t,
 		conf:  conf,
 		db:    db,
+		log:   log,
 		cache: cache,
 		task:  task,
+		api:   api.NewAPI(app.Version, app.Locale),
 	}
 }
 
@@ -71,8 +75,7 @@ func (r *appRepo) UpdateExist(slug string) bool {
 
 	for channel := range slices.Values(item.Channels) {
 		if channel.Slug == installed.Channel {
-			current := collect.First(channel.Subs)
-			if current != nil && current.Version != installed.Version {
+			if channel.Version != installed.Version {
 				return true
 			}
 		}
@@ -174,7 +177,7 @@ func (r *appRepo) Install(channel, slug string) error {
 			}
 			shellUrl = ch.Install
 			shellChannel = ch.Slug
-			shellVersion = collect.First(ch.Subs).Version
+			shellVersion = ch.Version
 			break
 		}
 	}
@@ -186,14 +189,19 @@ func (r *appRepo) Install(channel, slug string) error {
 		return err
 	}
 
+	// 下载回调
+	if err = r.api.AppCallback(slug); err != nil {
+		r.log.Warn("[App] download callback failed", slog.String("app", slug), slog.Any("err", err))
+	}
+
 	if app.IsCli {
-		return shell.ExecfWithOutput(`curl -sSLOm 10 --retry 3 "%s" | bash -s -- "%s" "%s"`, shellUrl, shellChannel, shellVersion)
+		return shell.ExecfWithOutput(`curl -sSLm 10 --retry 3 "%s" | bash -s -- "%s" "%s"`, shellUrl, shellChannel, shellVersion)
 	}
 
 	task := new(biz.Task)
 	task.Name = r.t.Get("Install app %s", item.Name)
 	task.Status = biz.TaskStatusWaiting
-	task.Shell = fmt.Sprintf(`curl -sSLOm 10 --retry 3 "%s" | bash -s -- "%s" "%s" >> /tmp/%s.log 2>&1`, shellUrl, shellChannel, shellVersion, item.Slug)
+	task.Shell = fmt.Sprintf(`curl -sSLm 10 --retry 3 "%s" | bash -s -- "%s" "%s" >> /tmp/%s.log 2>&1`, shellUrl, shellChannel, shellVersion, item.Slug)
 	task.Log = "/tmp/" + item.Slug + ".log"
 
 	return r.task.Push(task)
@@ -242,13 +250,13 @@ func (r *appRepo) UnInstall(slug string) error {
 	}
 
 	if app.IsCli {
-		return shell.ExecfWithOutput(`curl -sSLOm 10 --retry 3 "%s" | bash -s -- "%s" "%s"`, shellUrl, shellChannel, shellVersion)
+		return shell.ExecfWithOutput(`curl -sSLm 10 --retry 3 "%s" | bash -s -- "%s" "%s"`, shellUrl, shellChannel, shellVersion)
 	}
 
 	task := new(biz.Task)
 	task.Name = r.t.Get("Uninstall app %s", item.Name)
 	task.Status = biz.TaskStatusWaiting
-	task.Shell = fmt.Sprintf(`curl -sSLOm 10 --retry 3 "%s" | bash -s -- "%s" "%s" >> /tmp/%s.log 2>&1`, shellUrl, shellChannel, shellVersion, item.Slug)
+	task.Shell = fmt.Sprintf(`curl -sSLm 10 --retry 3 "%s" | bash -s -- "%s" "%s" >> /tmp/%s.log 2>&1`, shellUrl, shellChannel, shellVersion, item.Slug)
 	task.Log = "/tmp/" + item.Slug + ".log"
 
 	return r.task.Push(task)
@@ -284,7 +292,7 @@ func (r *appRepo) Update(slug string) error {
 			}
 			shellUrl = ch.Update
 			shellChannel = ch.Slug
-			shellVersion = collect.First(ch.Subs).Version
+			shellVersion = ch.Version
 			break
 		}
 	}
@@ -296,14 +304,19 @@ func (r *appRepo) Update(slug string) error {
 		return err
 	}
 
+	// 下载回调
+	if err = r.api.AppCallback(slug); err != nil {
+		r.log.Warn("[App] download callback failed", slog.String("app", slug), slog.Any("err", err))
+	}
+
 	if app.IsCli {
-		return shell.ExecfWithOutput(`curl -sSLOm 10 --retry 3 "%s" | bash -s -- "%s" "%s"`, shellUrl, shellChannel, shellVersion)
+		return shell.ExecfWithOutput(`curl -sSLm 10 --retry 3 "%s" | bash -s -- "%s" "%s"`, shellUrl, shellChannel, shellVersion)
 	}
 
 	task := new(biz.Task)
 	task.Name = r.t.Get("Update app %s", item.Name)
 	task.Status = biz.TaskStatusWaiting
-	task.Shell = fmt.Sprintf(`curl -sSLOm 10 --retry 3 "%s" | bash -s -- "%s" "%s" >> /tmp/%s.log 2>&1`, shellUrl, shellChannel, shellVersion, item.Slug)
+	task.Shell = fmt.Sprintf(`curl -sSLm 10 --retry 3 "%s" | bash -s -- "%s" "%s" >> /tmp/%s.log 2>&1`, shellUrl, shellChannel, shellVersion, item.Slug)
 	task.Log = "/tmp/" + item.Slug + ".log"
 
 	return r.task.Push(task)

@@ -3,10 +3,12 @@ import { translateTitle } from '@/locales/menu'
 import { usePermissionStore, useTabStore, useThemeStore } from '@/store'
 import { isUrl, renderIcon } from '@/utils'
 
-import type { MenuInst, MenuOption } from 'naive-ui'
+import { MenuInst, MenuOption, useThemeVars } from 'naive-ui'
 import type { VNodeChild } from 'vue'
+import { RouterLink } from 'vue-router'
 import type { Meta, RouteType } from '~/types/router'
 
+const themeVars = useThemeVars()
 const router = useRouter()
 const currentRoute = useRoute()
 const permissionStore = usePermissionStore()
@@ -32,7 +34,7 @@ function resolvePath(basePath: string, path: string) {
 }
 
 type MenuItem = MenuOption & {
-  label: string
+  label: () => VNodeChild
   key: string
   path: string
   children?: Array<MenuItem>
@@ -40,7 +42,16 @@ type MenuItem = MenuOption & {
 
 function getMenuItem(route: RouteType, basePath = ''): MenuItem {
   let menuItem: MenuItem = {
-    label: route.meta?.title ? translateTitle(route.meta.title) : route.name,
+    label: () =>
+      h(
+        RouterLink,
+        {
+          to: { name: route.name as string }
+        },
+        {
+          default: () => (route.meta?.title ? translateTitle(route.meta.title) : route.name)
+        }
+      ),
     key: route.name,
     path: resolvePath(basePath, route.path),
     icon: getIcon(route.meta)
@@ -55,11 +66,21 @@ function getMenuItem(route: RouteType, basePath = ''): MenuItem {
 
   if (!visibleChildren.length) return menuItem
 
-  if (visibleChildren.length === 1) {
+  if (visibleChildren.length === 1 && visibleChildren[0]) {
     // 单个子路由处理
     const singleRoute = visibleChildren[0]
     menuItem = {
-      label: singleRoute.meta?.title ? translateTitle(singleRoute.meta.title) : singleRoute.name,
+      label: () =>
+        h(
+          RouterLink,
+          {
+            to: { name: singleRoute.name as string }
+          },
+          {
+            default: () =>
+              singleRoute.meta?.title ? translateTitle(singleRoute.meta.title) : singleRoute?.name
+          }
+        ),
       key: singleRoute.name,
       path: resolvePath(menuItem.path, singleRoute.path),
       icon: getIcon(singleRoute.meta)
@@ -68,7 +89,7 @@ function getMenuItem(route: RouteType, basePath = ''): MenuItem {
       ? singleRoute.children.filter((item: RouteType) => item.name && !item.isHidden)
       : []
 
-    if (visibleItems.length === 1) menuItem = getMenuItem(visibleItems[0], menuItem.path)
+    if (visibleItems.length === 1) menuItem = getMenuItem(visibleItems[0]!, menuItem.path)
     else if (visibleItems.length > 1)
       menuItem.children = visibleItems.map((item) => getMenuItem(item, menuItem.path))
   } else {
@@ -122,8 +143,8 @@ function handleMenuSelect(key: string, item: MenuOption) {
   .n-menu-item-content--child-active,
   .n-menu-item-content--selected {
     .n-menu-item-content__icon {
-      border-color: var(--primary-color);
-      background-color: var(--primary-color);
+      border-color: v-bind('themeVars.primaryColor');
+      background-color: v-bind('themeVars.primaryColor');
 
       i {
         color: #fff;

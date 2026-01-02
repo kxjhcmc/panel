@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import backup from '@/api/panel/backup'
-import { renderIcon } from '@/utils'
 import type { MessageReactive } from 'naive-ui'
 import { NButton, NDataTable, NFlex, NInput, NPopconfirm } from 'naive-ui'
 import { useGettext } from 'vue3-gettext'
@@ -73,8 +72,7 @@ const columns: any = [
             }
           },
           {
-            default: () => $gettext('Restore'),
-            icon: renderIcon('material-symbols:settings-backup-restore-rounded', { size: 14 })
+            default: () => $gettext('Restore')
           }
         ),
         h(
@@ -95,8 +93,7 @@ const columns: any = [
                   style: 'margin-left: 15px;'
                 },
                 {
-                  default: () => $gettext('Delete'),
-                  icon: renderIcon('material-symbols:delete-outline', { size: 14 })
+                  default: () => $gettext('Delete')
                 }
               )
             }
@@ -149,10 +146,25 @@ const handleDelete = async (file: string) => {
   })
 }
 
+watch(
+  type,
+  (newType) => {
+    if (newType === 'website') {
+      createModel.value.target = websites.value[0]?.value || ''
+      restoreModel.value.target = websites.value[0]?.value || ''
+    } else {
+      createModel.value.target = ''
+      restoreModel.value.target = ''
+    }
+    refresh()
+  },
+  { immediate: true }
+)
+
 onMounted(() => {
   useRequest(app.isInstalled('nginx')).onSuccess(({ data }) => {
-    if (data.installed) {
-      useRequest(website.list(1, 10000)).onSuccess(({ data }: { data: any }) => {
+    if (data) {
+      useRequest(website.list('all', 1, 10000)).onSuccess(({ data }: { data: any }) => {
         for (const item of data.items) {
           websites.value.push({
             label: item.name,

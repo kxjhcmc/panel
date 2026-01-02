@@ -4,8 +4,8 @@ import (
 	"errors"
 	"log/slog"
 
-	"github.com/tnborg/panel/internal/biz"
-	"github.com/tnborg/panel/pkg/shell"
+	"github.com/acepanel/panel/internal/biz"
+	"github.com/acepanel/panel/pkg/shell"
 )
 
 // ProcessTask 处理面板任务
@@ -51,6 +51,6 @@ func (r *ProcessTask) Handle(args ...any) error {
 }
 
 func (r *ProcessTask) ErrHandle(err error) {
-	r.log.Warn("background task failed", slog.Any("task_id", r.taskID), slog.Any("err", err))
+	r.log.Warn("[ProcessTask] background task failed", slog.Any("task_id", r.taskID), slog.Any("err", err))
 	_ = r.taskRepo.UpdateStatus(r.taskID, biz.TaskStatusFailed)
 }

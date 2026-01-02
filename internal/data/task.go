@@ -7,9 +7,9 @@ import (
 	"github.com/leonelquinteros/gotext"
 	"gorm.io/gorm"
 
-	"github.com/tnborg/panel/internal/biz"
-	"github.com/tnborg/panel/internal/queuejob"
-	"github.com/tnborg/panel/pkg/queue"
+	"github.com/acepanel/panel/internal/biz"
+	"github.com/acepanel/panel/internal/queuejob"
+	"github.com/acepanel/panel/pkg/queue"
 )
 
 type taskRepo struct {
@@ -72,4 +72,11 @@ func (r *taskRepo) Push(task *biz.Task) error {
 	return r.queue.Push(queuejob.NewProcessTask(r.log, r), []any{
 		task.ID,
 	})
+}
+
+func (r *taskRepo) ClearZombieTasks() error {
+	if err := r.db.Model(&biz.Task{}).Where("status = ? or status = ?", biz.TaskStatusRunning, biz.TaskStatusWaiting).Update("status", biz.TaskStatusFailed).Error; err != nil {
+		return err
+	}
+	return nil
 }

@@ -8,7 +8,7 @@ import { useGettext } from 'vue3-gettext'
 
 import pureftpd from '@/api/apps/pureftpd'
 import ServiceStatus from '@/components/common/ServiceStatus.vue'
-import { generateRandomString, renderIcon } from '@/utils'
+import { generateRandomString } from '@/utils'
 
 const { $gettext } = useGettext()
 const currentTab = ref('status')
@@ -62,8 +62,7 @@ const userColumns: any = [
             }
           },
           {
-            default: () => $gettext('Change Password'),
-            icon: renderIcon('material-symbols:key-outline', { size: 14 })
+            default: () => $gettext('Change Password')
           }
         ),
         h(
@@ -86,8 +85,7 @@ const userColumns: any = [
                   style: 'margin-left: 15px'
                 },
                 {
-                  default: () => $gettext('Delete'),
-                  icon: renderIcon('material-symbols:delete-outline', { size: 14 })
+                  default: () => $gettext('Delete')
                 }
               )
             }
@@ -156,33 +154,28 @@ onMounted(() => {
 
 <template>
   <common-page show-footer>
-    <template #action>
-      <n-button v-if="currentTab == 'status'" class="ml-16" type="primary" @click="handleSavePort">
-        <the-icon :size="18" icon="material-symbols:save-outline" />
-        {{ $gettext('Save') }}
-      </n-button>
-      <n-button
-        v-if="currentTab == 'users'"
-        class="ml-16"
-        type="primary"
-        @click="addUserModal = true"
-      >
-        <the-icon :size="18" icon="material-symbols:add" />
-        {{ $gettext('Add User') }}
-      </n-button>
-    </template>
     <n-tabs v-model:value="currentTab" type="line" animated>
       <n-tab-pane name="status" :tab="$gettext('Running Status')">
         <n-flex vertical>
           <service-status service="pure-ftpd" />
           <n-card :title="$gettext('Port Settings')">
-            <n-input-number v-model:value="port" :min="1" :max="65535" />
+            <n-flex>
+              <n-input-number v-model:value="port" :min="1" :max="65535" />
+              <n-button type="primary" @click="handleSavePort">
+                {{ $gettext('Save') }}
+              </n-button>
+            </n-flex>
             {{ $gettext('Modify Pure-Ftpd listening port') }}
           </n-card>
         </n-flex>
       </n-tab-pane>
       <n-tab-pane name="users" :tab="$gettext('User Management')">
         <n-flex vertical>
+          <n-flex>
+            <n-button type="primary" @click="addUserModal = true">
+              {{ $gettext('Add User') }}
+            </n-button>
+          </n-flex>
           <n-data-table
             striped
             remote

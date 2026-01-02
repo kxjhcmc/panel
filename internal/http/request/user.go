@@ -5,8 +5,8 @@ type UserID struct {
 }
 
 type UserLogin struct {
-	Username  string `json:"username" validate:"required"`
-	Password  string `json:"password" validate:"required"`
+	Username  string `json:"username" validate:"required"` // encrypted with RSA-OAEP
+	Password  string `json:"password" validate:"required"` // encrypted with RSA-OAEP
 	SafeLogin bool   `json:"safe_login"`
 	PassCode  string `json:"pass_code"`
 }
@@ -16,14 +16,14 @@ type UserIsTwoFA struct {
 }
 
 type UserCreate struct {
-	Username string `json:"username" validate:"required|notExists:users,username"`
+	Username string `json:"username" validate:"required|notExists:users,username|regex:^[a-zA-Z0-9_-]+$"`
 	Password string `json:"password" validate:"required|password"`
 	Email    string `json:"email" validate:"required|email"`
 }
 
 type UserUpdateUsername struct {
 	ID       uint   `json:"id" validate:"required|exists:users,id"`
-	Username string `json:"username" validate:"required|notExists:users,username"`
+	Username string `json:"username" validate:"required|notExists:users,username|regex:^[a-zA-Z0-9_-]+$"`
 }
 
 type UserUpdatePassword struct {

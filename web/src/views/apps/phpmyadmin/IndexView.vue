@@ -3,7 +3,6 @@ defineOptions({
   name: 'apps-phpmyadmin-index'
 })
 
-import Editor from '@guolao/vue-monaco-editor'
 import { NButton } from 'naive-ui'
 import { useGettext } from 'vue3-gettext'
 
@@ -52,37 +51,27 @@ onMounted(() => {
 
 <template>
   <common-page show-footer>
-    <template #action>
-      <n-button v-if="currentTab == 'status'" class="ml-16" type="primary" @click="handleSave">
-        <the-icon :size="18" icon="material-symbols:save-outline" />
-        {{ $gettext('Save') }}
-      </n-button>
-      <n-button
-        v-if="currentTab == 'config'"
-        class="ml-16"
-        type="primary"
-        @click="handleSaveConfig"
-      >
-        <the-icon :size="18" icon="material-symbols:save-outline" />
-        {{ $gettext('Save') }}
-      </n-button>
-    </template>
     <n-tabs v-model:value="currentTab" type="line" animated>
       <n-tab-pane name="status" :tab="$gettext('Status')">
-        <n-space vertical>
+        <n-flex vertical>
           <n-card :title="$gettext('Access Information')">
             <n-alert type="info">
               {{ $gettext('Access URL:') }} <a :href="url" target="_blank">{{ url }}</a>
             </n-alert>
           </n-card>
           <n-card :title="$gettext('Modify Port')">
-            <n-input-number v-model:value="newPort" :min="1" :max="65535" />
+            <n-flex>
+              <n-input-number v-model:value="newPort" :min="1" :max="65535" />
+              <n-button type="primary" @click="handleSave">
+                {{ $gettext('Save') }}
+              </n-button>
+            </n-flex>
             {{ $gettext('Modify phpMyAdmin access port') }}
           </n-card>
-        </n-space>
+        </n-flex>
       </n-tab-pane>
       <n-tab-pane name="config" :tab="$gettext('Modify Configuration')">
-        <n-space vertical>
+        <n-flex vertical>
           <n-alert type="warning">
             {{
               $gettext(
@@ -90,19 +79,13 @@ onMounted(() => {
               )
             }}
           </n-alert>
-          <Editor
-            v-model:value="config"
-            language="ini"
-            theme="vs-dark"
-            height="60vh"
-            mt-8
-            :options="{
-              automaticLayout: true,
-              formatOnType: true,
-              formatOnPaste: true
-            }"
-          />
-        </n-space>
+          <common-editor v-model:value="config" height="60vh" />
+          <n-flex>
+            <n-button type="primary" @click="handleSaveConfig">
+              {{ $gettext('Save') }}
+            </n-button>
+          </n-flex>
+        </n-flex>
       </n-tab-pane>
     </n-tabs>
   </common-page>
