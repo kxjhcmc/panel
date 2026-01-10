@@ -4,11 +4,9 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"regexp"
 	"strings"
 
 	"github.com/hashicorp/go-version"
-	"github.com/knadh/koanf/v2"
 	"github.com/leonelquinteros/gotext"
 	"github.com/libtnb/chix"
 	"github.com/libtnb/utils/collect"
@@ -20,35 +18,39 @@ import (
 	"github.com/acepanel/panel/internal/biz"
 	"github.com/acepanel/panel/internal/http/request"
 	"github.com/acepanel/panel/pkg/api"
+	"github.com/acepanel/panel/pkg/config"
 	"github.com/acepanel/panel/pkg/db"
+	"github.com/acepanel/panel/pkg/os"
 	"github.com/acepanel/panel/pkg/shell"
 	"github.com/acepanel/panel/pkg/tools"
 	"github.com/acepanel/panel/pkg/types"
 )
 
 type HomeService struct {
-	t           *gotext.Locale
-	api         *api.API
-	conf        *koanf.Koanf
-	taskRepo    biz.TaskRepo
-	websiteRepo biz.WebsiteRepo
-	appRepo     biz.AppRepo
-	settingRepo biz.SettingRepo
-	cronRepo    biz.CronRepo
-	backupRepo  biz.BackupRepo
+	t               *gotext.Locale
+	api             *api.API
+	conf            *config.Config
+	taskRepo        biz.TaskRepo
+	websiteRepo     biz.WebsiteRepo
+	appRepo         biz.AppRepo
+	environmentRepo biz.EnvironmentRepo
+	settingRepo     biz.SettingRepo
+	cronRepo        biz.CronRepo
+	backupRepo      biz.BackupRepo
 }
 
-func NewHomeService(t *gotext.Locale, conf *koanf.Koanf, task biz.TaskRepo, website biz.WebsiteRepo, appRepo biz.AppRepo, setting biz.SettingRepo, cron biz.CronRepo, backupRepo biz.BackupRepo) *HomeService {
+func NewHomeService(t *gotext.Locale, conf *config.Config, task biz.TaskRepo, website biz.WebsiteRepo, appRepo biz.AppRepo, environment biz.EnvironmentRepo, setting biz.SettingRepo, cron biz.CronRepo, backupRepo biz.BackupRepo) *HomeService {
 	return &HomeService{
-		t:           t,
-		api:         api.NewAPI(app.Version, app.Locale),
-		conf:        conf,
-		taskRepo:    task,
-		websiteRepo: website,
-		appRepo:     appRepo,
-		settingRepo: setting,
-		cronRepo:    cron,
-		backupRepo:  backupRepo,
+		t:               t,
+		api:             api.NewAPI(app.Version, app.Locale),
+		conf:            conf,
+		taskRepo:        task,
+		websiteRepo:     website,
+		appRepo:         appRepo,
+		environmentRepo: environment,
+		settingRepo:     setting,
+		cronRepo:        cron,
+		backupRepo:      backupRepo,
 	}
 }
 
@@ -57,10 +59,14 @@ func (s *HomeService) Panel(w http.ResponseWriter, r *http.Request) {
 	if name == "" {
 		name = s.t.Get("AcePanel")
 	}
+	hiddenMenu, _ := s.settingRepo.GetSlice(biz.SettingHiddenMenu)
+	customLogo, _ := s.settingRepo.Get(biz.SettingKeyCustomLogo)
 
 	Success(w, chix.M{
-		"name":   name,
-		"locale": s.conf.String("app.locale"),
+		"name":        name,
+		"locale":      s.conf.App.Locale,
+		"hidden_menu": hiddenMenu,
+		"custom_logo": customLogo,
 	})
 }
 
@@ -110,6 +116,33 @@ func (s *HomeService) SystemInfo(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	// 系统是否支持
+	osSupported := true
+	if os.IsRHEL() {
+		minVer := version.Must(version.NewVersion("9.0"))
+		currentVerStr := strings.Split(hostInfo.PlatformVersion, " ")[0]
+		currentVer, err := version.NewVersion(currentVerStr)
+		if err != nil || currentVer.LessThan(minVer) {
+			osSupported = false
+		}
+	}
+	if os.IsDebian() {
+		minVer := version.Must(version.NewVersion("12.0"))
+		currentVerStr := strings.Split(hostInfo.PlatformVersion, " ")[0]
+		currentVer, err := version.NewVersion(currentVerStr)
+		if err != nil || currentVer.LessThan(minVer) {
+			osSupported = false
+		}
+	}
+	if os.IsUbuntu() {
+		minVer := version.Must(version.NewVersion("22.04"))
+		currentVerStr := strings.Split(hostInfo.PlatformVersion, " ")[0]
+		currentVer, err := version.NewVersion(currentVerStr)
+		if err != nil || currentVer.LessThan(minVer) {
+			osSupported = false
+		}
+	}
+
 	Success(w, chix.M{
 		"procs":          hostInfo.Procs,
 		"hostname":       hostInfo.Hostname,
@@ -123,6 +156,8 @@ func (s *HomeService) SystemInfo(w http.ResponseWriter, r *http.Request) {
 		"kernel_arch":    hostInfo.KernelArch,
 		"kernel_version": hostInfo.KernelVersion,
 		"os_name":        hostInfo.Platform + " " + hostInfo.PlatformVersion,
+		"os_supported":   osSupported,
+		"os_eol":         os.IsEOL(),
 		"boot_time":      hostInfo.BootTime,
 		"uptime":         hostInfo.Uptime,
 		"nets":           nets,
@@ -186,24 +221,16 @@ func (s *HomeService) CountInfo(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *HomeService) InstalledDbAndPhp(w http.ResponseWriter, r *http.Request) {
-	mysqlInstalled, _ := s.appRepo.IsInstalled("slug = ?", "mysql")
+func (s *HomeService) InstalledEnvironment(w http.ResponseWriter, r *http.Request) {
+	mysqlInstalled, _ := s.appRepo.IsInstalled("slug IN ?", []string{"mysql", "mariadb", "percona"})
 	postgresqlInstalled, _ := s.appRepo.IsInstalled("slug = ?", "postgresql")
-	php, _ := s.appRepo.GetInstalledAll("slug like ?", "php%")
 
 	var phpData []types.LVInt
 	var dbData []types.LV
-	phpData = append(phpData, types.LVInt{Value: 0, Label: s.t.Get("Not used")})
 	dbData = append(dbData, types.LV{Value: "0", Label: s.t.Get("Not used")})
-	for _, p := range php {
-		// 过滤 phpmyadmin
-		match := regexp.MustCompile(`php(\d+)`).FindStringSubmatch(p.Slug)
-		if len(match) == 0 {
-			continue
-		}
-
-		item, _ := s.appRepo.Get(p.Slug)
-		phpData = append(phpData, types.LVInt{Value: cast.ToInt(strings.ReplaceAll(p.Slug, "php", "")), Label: item.Name})
+	for _, slug := range s.environmentRepo.InstalledSlugs("php") {
+		ver := s.environmentRepo.InstalledVersion("php", slug)
+		phpData = append(phpData, types.LVInt{Value: cast.ToInt(slug), Label: fmt.Sprintf("PHP %s", ver)})
 	}
 
 	if mysqlInstalled {
@@ -213,9 +240,11 @@ func (s *HomeService) InstalledDbAndPhp(w http.ResponseWriter, r *http.Request) 
 		dbData = append(dbData, types.LV{Value: "postgresql", Label: "PostgreSQL"})
 	}
 
+	webserver, _ := s.settingRepo.Get(biz.SettingKeyWebserver)
 	Success(w, chix.M{
-		"php": phpData,
-		"db":  dbData,
+		"webserver": webserver,
+		"php":       phpData,
+		"db":        dbData,
 	})
 }
 
@@ -316,10 +345,12 @@ func (s *HomeService) Update(w http.ResponseWriter, r *http.Request) {
 		Error(w, http.StatusInternalServerError, s.t.Get("failed to get the latest version download link"))
 		return
 	}
-	ver, url, checksum := panel.Version, download.URL, download.Checksum
+
+	url := fmt.Sprintf("https://%s%s", s.conf.App.DownloadEndpoint, download.URL)
+	checksum := fmt.Sprintf("https://%s%s", s.conf.App.DownloadEndpoint, download.Checksum)
 
 	app.Status = app.StatusUpgrade
-	if err = s.backupRepo.UpdatePanel(ver, url, checksum); err != nil {
+	if err = s.backupRepo.UpdatePanel(panel.Version, url, checksum); err != nil {
 		app.Status = app.StatusFailed
 		Error(w, http.StatusInternalServerError, "%v", err)
 		return

@@ -2,6 +2,7 @@ package acme
 
 import (
 	"context"
+	"crypto/x509"
 	"sort"
 
 	"github.com/libdns/libdns"
@@ -52,7 +53,6 @@ func (c *Client) UseManualDns(check ...bool) {
 
 // UseHTTP 使用 HTTP 验证
 // conf nginx 配置文件路径
-// path 验证文件存放路径
 func (c *Client) UseHTTP(conf string) {
 	c.zClient.ChallengeSolvers = map[string]acmez.Solver{
 		acme.ChallengeTypeHTTP01: httpSolver{
@@ -61,8 +61,20 @@ func (c *Client) UseHTTP(conf string) {
 	}
 }
 
+// UsePanel 使用面板 HTTP 验证
+// ip 外网访问 IP 地址
+// conf nginx 配置文件路径
+func (c *Client) UsePanel(ip []string, conf string) {
+	c.zClient.ChallengeSolvers = map[string]acmez.Solver{
+		acme.ChallengeTypeHTTP01: &panelSolver{
+			ip:   ip,
+			conf: conf,
+		},
+	}
+}
+
 // ObtainCertificate 签发 SSL 证书
-func (c *Client) ObtainCertificate(ctx context.Context, domains []string, keyType KeyType) (Certificate, error) {
+func (c *Client) ObtainCertificate(ctx context.Context, sans []string, keyType KeyType) (Certificate, error) {
 	certPrivateKey, err := generatePrivateKey(keyType)
 	if err != nil {
 		return Certificate{}, err
@@ -72,7 +84,38 @@ func (c *Client) ObtainCertificate(ctx context.Context, domains []string, keyTyp
 		return Certificate{}, err
 	}
 
-	certs, err := c.zClient.ObtainCertificateForSANs(ctx, c.Account, certPrivateKey, domains)
+	certs, err := c.zClient.ObtainCertificateForSANs(ctx, c.Account, certPrivateKey, sans)
+	if err != nil {
+		return Certificate{}, err
+	}
+
+	crt := c.selectPreferredChain(certs)
+	return Certificate{PrivateKey: pemPrivateKey, Certificate: crt}, nil
+}
+
+// ObtainIPCertificate 签发 IP SSL 证书
+func (c *Client) ObtainIPCertificate(ctx context.Context, sans []string, keyType KeyType) (Certificate, error) {
+	certPrivateKey, err := generatePrivateKey(keyType)
+	if err != nil {
+		return Certificate{}, err
+	}
+	pemPrivateKey, err := cert.EncodeKey(certPrivateKey)
+	if err != nil {
+		return Certificate{}, err
+	}
+
+	csr, err := acmez.NewCSR(certPrivateKey, sans)
+	if err != nil {
+		return Certificate{}, err
+	}
+
+	params, err := acmez.OrderParametersFromCSR(c.Account, csr)
+	if err != nil {
+		return Certificate{}, err
+	}
+	params.Profile = "shortlived"
+
+	certs, err := c.zClient.ObtainCertificate(ctx, params)
 	if err != nil {
 		return Certificate{}, err
 	}
@@ -130,6 +173,11 @@ func (c *Client) GetDNSRecords(ctx context.Context, domains []string, keyType Ke
 	}
 
 	return data.([]DNSRecord), nil
+}
+
+// GetRenewalInfo 获取续签建议
+func (c *Client) GetRenewalInfo(ctx context.Context, cert x509.Certificate) (acme.RenewalInfo, error) {
+	return c.zClient.GetRenewalInfo(ctx, &cert)
 }
 
 func (c *Client) selectPreferredChain(certChains []acme.Certificate) acme.Certificate {

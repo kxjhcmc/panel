@@ -7,16 +7,17 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/knadh/koanf/v2"
 	"github.com/leonelquinteros/gotext"
 	"github.com/libtnb/chix"
 	"github.com/libtnb/sessions"
 
+	"github.com/acepanel/panel/pkg/config"
+	"github.com/acepanel/panel/pkg/embed"
 	"github.com/acepanel/panel/pkg/punycode"
 )
 
 // Entrance 确保通过正确的入口访问
-func Entrance(t *gotext.Locale, conf *koanf.Koanf, session *sessions.Manager) func(next http.Handler) http.Handler {
+func Entrance(t *gotext.Locale, conf *config.Config, session *sessions.Manager) func(next http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			sess, err := session.GetSession(r)
@@ -25,7 +26,7 @@ func Entrance(t *gotext.Locale, conf *koanf.Koanf, session *sessions.Manager) fu
 				return
 			}
 
-			entrance := strings.TrimSuffix(conf.String("http.entrance"), "/")
+			entrance := strings.TrimSuffix(conf.HTTP.Entrance, "/")
 			if !strings.HasPrefix(entrance, "/") {
 				entrance = "/" + entrance
 			}
@@ -40,14 +41,14 @@ func Entrance(t *gotext.Locale, conf *koanf.Koanf, session *sessions.Manager) fu
 					host = decoded
 				}
 			}
-			if len(conf.Strings("http.bind_domain")) > 0 && !slices.Contains(conf.Strings("http.bind_domain"), host) {
-				Abort(w, http.StatusTeapot, t.Get("invalid request domain: %s", r.Host))
+			if len(conf.HTTP.BindDomain) > 0 && !slices.Contains(conf.HTTP.BindDomain, host) {
+				abortEntrance(w, r, conf, conf.App.Locale)
 				return
 			}
 
 			// 取请求 IP
 			ip := r.RemoteAddr
-			ipHeader := conf.String("http.ip_header")
+			ipHeader := conf.HTTP.IPHeader
 			if ipHeader != "" && r.Header.Get(ipHeader) != "" {
 				ip = strings.Split(r.Header.Get(ipHeader), ",")[0]
 			}
@@ -56,11 +57,11 @@ func Entrance(t *gotext.Locale, conf *koanf.Koanf, session *sessions.Manager) fu
 				ip = r.RemoteAddr
 			}
 
-			if len(conf.Strings("http.bind_ip")) > 0 {
+			if len(conf.HTTP.BindIP) > 0 {
 				allowed := false
 				requestIP := net.ParseIP(ip)
 				if requestIP != nil {
-					for _, allowedIP := range conf.Strings("http.bind_ip") {
+					for _, allowedIP := range conf.HTTP.BindIP {
 						if strings.Contains(allowedIP, "/") {
 							// CIDR
 							if _, ipNet, err := net.ParseCIDR(allowedIP); err == nil && ipNet.Contains(requestIP) {
@@ -77,12 +78,12 @@ func Entrance(t *gotext.Locale, conf *koanf.Koanf, session *sessions.Manager) fu
 					}
 				}
 				if !allowed {
-					Abort(w, http.StatusTeapot, t.Get("invalid request ip: %s", ip))
+					abortEntrance(w, r, conf, conf.App.Locale)
 					return
 				}
 			}
-			if len(conf.Strings("http.bind_ua")) > 0 && !slices.Contains(conf.Strings("http.bind_ua"), r.UserAgent()) {
-				Abort(w, http.StatusTeapot, t.Get("invalid request user agent: %s", r.UserAgent()))
+			if len(conf.HTTP.BindUA) > 0 && !slices.Contains(conf.HTTP.BindUA, r.UserAgent()) {
+				abortEntrance(w, r, conf, conf.App.Locale)
 				return
 			}
 
@@ -112,15 +113,61 @@ func Entrance(t *gotext.Locale, conf *koanf.Koanf, session *sessions.Manager) fu
 				return
 			}
 
-			// 情况四：非调试模式且未通过验证的请求，返回错误
-			if !conf.Bool("app.debug") &&
+			// 情况四：Webhook 访问，跳过验证
+			if strings.HasPrefix(r.URL.Path, "/webhook/") {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			// 情况五：非调试模式且未通过验证的请求，返回错误
+			if !conf.App.Debug &&
 				sess.Missing("verify_entrance") &&
 				r.URL.Path != "/robots.txt" {
-				Abort(w, http.StatusTeapot, t.Get("invalid access entrance"))
+				abortEntrance(w, r, conf, conf.App.Locale)
 				return
 			}
 
 			next.ServeHTTP(w, r)
 		})
+	}
+}
+
+func abortEntrance(w http.ResponseWriter, r *http.Request, conf *config.Config, locale string) {
+	errorType := conf.HTTP.EntranceError
+
+	switch errorType {
+	case "close":
+		hj, ok := w.(http.Hijacker)
+		if ok {
+			conn, _, err := hj.Hijack()
+			if err == nil {
+				_ = conn.Close()
+				return
+			}
+		}
+		// 如果无法 hijack，则返回空响应
+		w.WriteHeader(http.StatusTeapot)
+		return
+	case "nginx":
+		content, err := embed.ErrorFS.ReadFile("error/nginx_404.html")
+		if err != nil {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Server", "nginx")
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write(content)
+		return
+	default:
+		fileName := "error/418.html"
+		if locale == "zh_CN" {
+			fileName = "error/418_zh_CN.html"
+		}
+		content, _ := embed.ErrorFS.ReadFile(fileName)
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.WriteHeader(http.StatusTeapot)
+		_, _ = w.Write(content)
+		return
 	}
 }

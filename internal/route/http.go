@@ -7,16 +7,16 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/knadh/koanf/v2"
 
 	"github.com/acepanel/panel/internal/http/middleware"
 	"github.com/acepanel/panel/internal/service"
 	"github.com/acepanel/panel/pkg/apploader"
+	"github.com/acepanel/panel/pkg/config"
 	"github.com/acepanel/panel/pkg/embed"
 )
 
 type Http struct {
-	conf             *koanf.Koanf
+	conf             *config.Config
 	user             *service.UserService
 	userToken        *service.UserTokenService
 	home             *service.HomeService
@@ -30,6 +30,8 @@ type Http struct {
 	certDNS          *service.CertDNSService
 	certAccount      *service.CertAccountService
 	app              *service.AppService
+	environment      *service.EnvironmentService
+	environmentPHP   *service.EnvironmentPHPService
 	cron             *service.CronService
 	process          *service.ProcessService
 	safe             *service.SafeService
@@ -46,11 +48,14 @@ type Http struct {
 	systemctl        *service.SystemctlService
 	toolboxSystem    *service.ToolboxSystemService
 	toolboxBenchmark *service.ToolboxBenchmarkService
+	toolboxSSH       *service.ToolboxSSHService
+	toolboxDisk      *service.ToolboxDiskService
+	webhook          *service.WebHookService
 	apps             *apploader.Loader
 }
 
 func NewHttp(
-	conf *koanf.Koanf,
+	conf *config.Config,
 	user *service.UserService,
 	userToken *service.UserTokenService,
 	home *service.HomeService,
@@ -64,6 +69,8 @@ func NewHttp(
 	certDNS *service.CertDNSService,
 	certAccount *service.CertAccountService,
 	app *service.AppService,
+	environment *service.EnvironmentService,
+	environmentPHP *service.EnvironmentPHPService,
 	cron *service.CronService,
 	process *service.ProcessService,
 	safe *service.SafeService,
@@ -80,6 +87,9 @@ func NewHttp(
 	systemctl *service.SystemctlService,
 	toolboxSystem *service.ToolboxSystemService,
 	toolboxBenchmark *service.ToolboxBenchmarkService,
+	toolboxSSH *service.ToolboxSSHService,
+	toolboxDisk *service.ToolboxDiskService,
+	webhook *service.WebHookService,
 	apps *apploader.Loader,
 ) *Http {
 	return &Http{
@@ -97,6 +107,8 @@ func NewHttp(
 		certDNS:          certDNS,
 		certAccount:      certAccount,
 		app:              app,
+		environment:      environment,
+		environmentPHP:   environmentPHP,
 		cron:             cron,
 		process:          process,
 		safe:             safe,
@@ -113,6 +125,9 @@ func NewHttp(
 		systemctl:        systemctl,
 		toolboxSystem:    toolboxSystem,
 		toolboxBenchmark: toolboxBenchmark,
+		toolboxSSH:       toolboxSSH,
+		toolboxDisk:      toolboxDisk,
+		webhook:          webhook,
 		apps:             apps,
 	}
 }
@@ -121,7 +136,8 @@ func (route *Http) Register(r *chi.Mux) {
 	r.Route("/api", func(r chi.Router) {
 		r.Route("/user", func(r chi.Router) {
 			r.Get("/key", route.user.GetKey)
-			r.With(middleware.Throttle(route.conf.String("http.ip_header"), 5, time.Minute)).Post("/login", route.user.Login)
+			r.Get("/captcha", route.user.GetCaptcha)
+			r.With(middleware.Throttle(route.conf.HTTP.IPHeader, 5, time.Minute)).Post("/login", route.user.Login)
 			r.Post("/logout", route.user.Logout)
 			r.Get("/is_login", route.user.IsLogin)
 			r.Get("/is_2fa", route.user.IsTwoFA)
@@ -152,7 +168,7 @@ func (route *Http) Register(r *chi.Mux) {
 			r.Post("/current", route.home.Current)
 			r.Get("/system_info", route.home.SystemInfo)
 			r.Get("/count_info", route.home.CountInfo)
-			r.Get("/installed_db_and_php", route.home.InstalledDbAndPhp)
+			r.Get("/installed_environment", route.home.InstalledEnvironment)
 			r.Get("/check_update", route.home.CheckUpdate)
 			r.Get("/update_info", route.home.UpdateInfo)
 			r.Post("/update", route.home.Update)
@@ -252,6 +268,7 @@ func (route *Http) Register(r *chi.Mux) {
 		})
 
 		r.Route("/app", func(r chi.Router) {
+			r.Get("/categories", route.app.Categories)
 			r.Get("/list", route.app.List)
 			r.Post("/install", route.app.Install)
 			r.Post("/uninstall", route.app.Uninstall)
@@ -259,6 +276,30 @@ func (route *Http) Register(r *chi.Mux) {
 			r.Post("/update_show", route.app.UpdateShow)
 			r.Get("/is_installed", route.app.IsInstalled)
 			r.Get("/update_cache", route.app.UpdateCache)
+		})
+
+		r.Route("/environment", func(r chi.Router) {
+			r.Get("/types", route.environment.Types)
+			r.Get("/list", route.environment.List)
+			r.Post("/install", route.environment.Install)
+			r.Get("/uninstall", route.environment.Uninstall)
+			r.Put("/update", route.environment.Update)
+			r.Get("/is_installed", route.environment.IsInstalled)
+			r.Route("/php", func(r chi.Router) {
+				r.Post("/{version}/set_cli", route.environmentPHP.SetCli)
+				r.Get("/{version}/config", route.environmentPHP.GetConfig)
+				r.Post("/{version}/config", route.environmentPHP.UpdateConfig)
+				r.Get("/{version}/fpm_config", route.environmentPHP.GetFPMConfig)
+				r.Post("/{version}/fpm_config", route.environmentPHP.UpdateFPMConfig)
+				r.Get("/{version}/load", route.environmentPHP.Load)
+				r.Get("/{version}/log", route.environmentPHP.Log)
+				r.Get("/{version}/slow_log", route.environmentPHP.SlowLog)
+				r.Post("/{version}/clear_log", route.environmentPHP.ClearLog)
+				r.Post("/{version}/clear_slow_log", route.environmentPHP.ClearSlowLog)
+				r.Get("/{version}/modules", route.environmentPHP.ModuleList)
+				r.Post("/{version}/modules", route.environmentPHP.InstallModule)
+				r.Delete("/{version}/modules", route.environmentPHP.UninstallModule)
+			})
 		})
 
 		r.Route("/cron", func(r chi.Router) {
@@ -272,7 +313,9 @@ func (route *Http) Register(r *chi.Mux) {
 
 		r.Route("/process", func(r chi.Router) {
 			r.Get("/", route.process.List)
+			r.Get("/detail", route.process.Detail)
 			r.Post("/kill", route.process.Kill)
+			r.Post("/signal", route.process.Signal)
 		})
 
 		r.Route("/safe", func(r chi.Router) {
@@ -361,6 +404,7 @@ func (route *Http) Register(r *chi.Mux) {
 			r.Get("/download", route.file.Download)
 			r.Post("/remote_download", route.file.RemoteDownload)
 			r.Get("/info", route.file.Info)
+			r.Get("/size", route.file.Size)
 			r.Post("/permission", route.file.Permission)
 			r.Post("/compress", route.file.Compress)
 			r.Post("/un_compress", route.file.UnCompress)
@@ -404,17 +448,58 @@ func (route *Http) Register(r *chi.Mux) {
 			r.Post("/hostname", route.toolboxSystem.UpdateHostname)
 			r.Get("/hosts", route.toolboxSystem.GetHosts)
 			r.Post("/hosts", route.toolboxSystem.UpdateHosts)
-			r.Post("/root_password", route.toolboxSystem.UpdateRootPassword)
 		})
 
 		r.Route("/toolbox_benchmark", func(r chi.Router) {
 			r.Post("/test", route.toolboxBenchmark.Test)
 		})
 
+		r.Route("/toolbox_ssh", func(r chi.Router) {
+			r.Get("/info", route.toolboxSSH.GetInfo)
+			r.Post("/port", route.toolboxSSH.UpdatePort)
+			r.Post("/password_auth", route.toolboxSSH.UpdatePasswordAuth)
+			r.Post("/pubkey_auth", route.toolboxSSH.UpdatePubKeyAuth)
+			r.Post("/root_login", route.toolboxSSH.UpdateRootLogin)
+			r.Post("/root_password", route.toolboxSSH.UpdateRootPassword)
+			r.Get("/root_key", route.toolboxSSH.GetRootKey)
+			r.Post("/root_key", route.toolboxSSH.GenerateRootKey)
+		})
+
+		r.Route("/toolbox_disk", func(r chi.Router) {
+			r.Get("/list", route.toolboxDisk.List)
+			r.Post("/partitions", route.toolboxDisk.GetPartitions)
+			r.Post("/mount", route.toolboxDisk.Mount)
+			r.Post("/umount", route.toolboxDisk.Umount)
+			r.Post("/format", route.toolboxDisk.Format)
+			r.Post("/init", route.toolboxDisk.Init)
+			r.Get("/fstab", route.toolboxDisk.GetFstab)
+			r.Delete("/fstab", route.toolboxDisk.DeleteFstab)
+			r.Get("/lvm", route.toolboxDisk.GetLVMInfo)
+			r.Post("/lvm/pv", route.toolboxDisk.CreatePV)
+			r.Delete("/lvm/pv", route.toolboxDisk.RemovePV)
+			r.Post("/lvm/vg", route.toolboxDisk.CreateVG)
+			r.Delete("/lvm/vg", route.toolboxDisk.RemoveVG)
+			r.Post("/lvm/lv", route.toolboxDisk.CreateLV)
+			r.Delete("/lvm/lv", route.toolboxDisk.RemoveLV)
+			r.Post("/lvm/lv/extend", route.toolboxDisk.ExtendLV)
+		})
+
+		r.Route("/webhook", func(r chi.Router) {
+			r.Get("/", route.webhook.List)
+			r.Post("/", route.webhook.Create)
+			r.Put("/{id}", route.webhook.Update)
+			r.Get("/{id}", route.webhook.Get)
+			r.Delete("/{id}", route.webhook.Delete)
+		})
+
 		r.Route("/apps", func(r chi.Router) {
 			route.apps.Register(r)
 		})
 	})
+
+	// WebHook 调用接口
+	r.Get("/webhook/{key}", route.webhook.Call)
+	r.Post("/webhook/{key}", route.webhook.Call)
 
 	r.NotFound(func(writer http.ResponseWriter, request *http.Request) {
 		// /api 开头的返回 404

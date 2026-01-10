@@ -2,9 +2,12 @@ package acme
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/libdns/alidns"
@@ -20,9 +23,143 @@ import (
 	"github.com/mholt/acmez/v3/acme"
 	"golang.org/x/net/publicsuffix"
 
+	pkgos "github.com/acepanel/panel/pkg/os"
 	"github.com/acepanel/panel/pkg/shell"
 	"github.com/acepanel/panel/pkg/systemctl"
 )
+
+var panelSolverGlobal sync.Mutex
+
+type panelSolver struct {
+	ip     []string
+	conf   string
+	server *http.Server
+	// tokens 存储所有待验证的 challenge，key 为路径，value 为 token
+	tokens map[string]string
+	// presentCount Present 调用计数
+	presentCount int
+	// cleanupCount CleanUp 调用计数
+	cleanupCount int
+	// useBuiltin 标记是否使用内置 HTTP 服务器
+	useBuiltin bool
+}
+
+func (s *panelSolver) Present(_ context.Context, challenge acme.Challenge) error {
+	if s.presentCount == 0 {
+		panelSolverGlobal.Lock()
+	}
+
+	path := challenge.HTTP01ResourcePath()
+	token := challenge.KeyAuthorization
+
+	// 初始化 tokens map
+	if s.tokens == nil {
+		s.tokens = make(map[string]string)
+	}
+
+	// 收集所有域名的 token
+	s.tokens[path] = token
+	s.presentCount++
+	if s.presentCount < len(s.ip) {
+		return nil
+	}
+
+	// 如果 80 端口没有被占用，则使用内置的 HTTP 服务器
+	if !pkgos.TCPPortInUse(80) {
+		s.useBuiltin = true
+		return s.startServer()
+	}
+
+	// 否则使用 nginx 配置
+	s.useBuiltin = false
+	return s.writeNginxConfig()
+}
+
+func (s *panelSolver) startServer() error {
+	s.server = &http.Server{
+		Addr: ":80",
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			token, ok := s.tokens[r.URL.Path]
+			if !ok {
+				http.NotFound(w, r)
+				return
+			}
+			w.Header().Set("Content-Type", "text/plain")
+			_, _ = w.Write([]byte(token))
+		}),
+	}
+
+	errChan := make(chan error, 1)
+	go func() {
+		if err := s.server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			errChan <- err
+		}
+		close(errChan)
+	}()
+
+	// 等待一小段时间确保服务器启动成功
+	select {
+	case err := <-errChan:
+		s.server = nil
+		return fmt.Errorf("failed to start HTTP server: %w", err)
+	case <-time.After(100 * time.Millisecond):
+		return nil
+	}
+}
+
+func (s *panelSolver) writeNginxConfig() error {
+	var conf strings.Builder
+	conf.WriteString(fmt.Sprintf("server {\n    listen 80;\n    server_name %s;\n", strings.Join(s.ip, " ")))
+	for path, token := range s.tokens {
+		conf.WriteString(fmt.Sprintf("    location = %s {\n        default_type text/plain;\n        return 200 %q;\n    }\n", path, token))
+	}
+	conf.WriteString("}\n")
+
+	if err := os.WriteFile(s.conf, []byte(conf.String()), 0600); err != nil {
+		return fmt.Errorf("failed to write nginx config %q: %w", s.conf, err)
+	}
+
+	if err := systemctl.Reload("nginx"); err != nil {
+		_, err = shell.Execf("nginx -t")
+		return fmt.Errorf("failed to reload nginx: %w", err)
+	}
+
+	return nil
+}
+
+// CleanUp cleans up the HTTP server on last call.
+func (s *panelSolver) CleanUp(ctx context.Context, _ acme.Challenge) error {
+	s.cleanupCount++
+
+	// 等待最后一次 CleanUp
+	if s.cleanupCount < len(s.ip) {
+		return nil
+	}
+
+	defer panelSolverGlobal.Unlock()
+
+	if s.useBuiltin && s.server != nil {
+		shutdownCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		if err := s.server.Shutdown(shutdownCtx); err != nil {
+			return fmt.Errorf("failed to shutdown HTTP server: %w", err)
+		}
+		s.server = nil
+		return nil
+	}
+
+	// 清理 nginx 配置
+	if err := os.WriteFile(s.conf, []byte(""), 0600); err != nil {
+		return fmt.Errorf("failed to write to nginx config %q: %w", s.conf, err)
+	}
+
+	if err := systemctl.Reload("nginx"); err != nil {
+		_, _ = shell.Execf("nginx -t")
+		return fmt.Errorf("failed to reload nginx: %w", err)
+	}
+
+	return nil
+}
 
 type httpSolver struct {
 	conf string
@@ -35,13 +172,11 @@ func (s httpSolver) Present(_ context.Context, challenge acme.Challenge) error {
 }
 `, challenge.HTTP01ResourcePath(), challenge.KeyAuthorization)
 
-	file, err := os.OpenFile(s.conf, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	file, err := os.OpenFile(s.conf, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
 	if err != nil {
 		return fmt.Errorf("failed to open nginx config %q: %w", s.conf, err)
 	}
-	defer func(file *os.File) {
-		_ = file.Close()
-	}(file)
+	defer func(file *os.File) { _ = file.Close() }(file)
 
 	if _, err = file.Write([]byte(conf)); err != nil {
 		return fmt.Errorf("failed to write to nginx config %q: %w", s.conf, err)
@@ -69,7 +204,7 @@ func (s httpSolver) CleanUp(_ context.Context, challenge acme.Challenge) error {
 `, challenge.HTTP01ResourcePath(), challenge.KeyAuthorization)
 
 	newConf := strings.ReplaceAll(string(conf), target, "")
-	if err = os.WriteFile(s.conf, []byte(newConf), 0644); err != nil {
+	if err = os.WriteFile(s.conf, []byte(newConf), 0600); err != nil {
 		return fmt.Errorf("failed to write to nginx config %q: %w", s.conf, err)
 	}
 
@@ -254,9 +389,7 @@ func (s *manualDNSSolver) Present(ctx context.Context, challenge acme.Challenge)
 }
 
 func (s *manualDNSSolver) CleanUp(_ context.Context, _ acme.Challenge) error {
-	defer func() {
-		_ = recover()
-	}()
+	defer func() { _ = recover() }()
 	close(s.controlChan)
 	close(s.dnsChan)
 	close(s.certChan)

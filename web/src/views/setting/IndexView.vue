@@ -7,7 +7,7 @@ import { NButton } from 'naive-ui'
 import { useGettext } from 'vue3-gettext'
 
 import setting from '@/api/panel/setting'
-import { useThemeStore } from '@/store'
+import { usePermissionStore, useThemeStore } from '@/store'
 import CreateModal from '@/views/setting/CreateModal.vue'
 import SettingBase from '@/views/setting/SettingBase.vue'
 import SettingSafe from '@/views/setting/SettingSafe.vue'
@@ -15,6 +15,7 @@ import SettingUser from '@/views/setting/SettingUser.vue'
 
 const { $gettext } = useGettext()
 const themeStore = useThemeStore()
+const permissionStore = usePermissionStore()
 const currentTab = ref('base')
 const createModal = ref(false)
 
@@ -25,6 +26,8 @@ const { data: model } = useRequest(setting.list, {
     locale: 'en',
     port: 8888,
     entrance: '',
+    entrance_error: '418',
+    login_captcha: false,
     offline_mode: false,
     two_fa: false,
     lifetime: 0,
@@ -34,7 +37,11 @@ const { data: model } = useRequest(setting.list, {
     bind_ua: [],
     website_path: '',
     backup_path: '',
+    hidden_menu: [],
+    custom_logo: '',
     https: false,
+    acme: false,
+    public_ip: [],
     cert: '',
     key: ''
   }
@@ -44,14 +51,29 @@ const handleSave = () => {
   if (model.value.entrance.trim() === '') {
     model.value.entrance = '/'
   }
-  useRequest(setting.update(model.value)).onSuccess(() => {
+  useRequest(setting.update(model.value)).onSuccess(({ data }) => {
     window.$message.success($gettext('Saved successfully'))
+
+    // 更新语言设置
     if (model.value.locale !== themeStore.locale) {
       themeStore.setLocale(model.value.locale)
-      window.$message.info($gettext('Panel is restarting, page will refresh in 3 seconds'))
+    }
+
+    // 更新隐藏菜单和自定义 Logo
+    themeStore.setLogo(model.value.custom_logo || '')
+    permissionStore.setHiddenRoutes(model.value.hidden_menu || [])
+
+    // 如果需要重启，则自动刷新页面
+    if (data.restart) {
+      window.$message.info($gettext('Panel is restarting, page will refresh in 5 seconds'))
       setTimeout(() => {
-        window.location.reload()
-      }, 3000)
+        const protocol = model.value.https ? 'https:' : 'http:'
+        const hostname = window.location.hostname
+        const port = model.value.port
+        const entrance = model.value.entrance || '/'
+        // 构建新的 URL
+        window.location.href = `${protocol}//${hostname}:${port}${entrance}`
+      }, 5000)
     }
   })
 }

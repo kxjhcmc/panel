@@ -1,28 +1,39 @@
 package job
 
 import (
+	"encoding/json"
 	"log/slog"
+	"path/filepath"
 	"time"
 
 	"gorm.io/gorm"
 
 	"github.com/acepanel/panel/internal/app"
 	"github.com/acepanel/panel/internal/biz"
+	"github.com/acepanel/panel/internal/http/request"
 	pkgcert "github.com/acepanel/panel/pkg/cert"
+	"github.com/acepanel/panel/pkg/config"
+	"github.com/acepanel/panel/pkg/tools"
 )
 
 // CertRenew 证书续签
 type CertRenew struct {
-	db       *gorm.DB
-	log      *slog.Logger
-	certRepo biz.CertRepo
+	conf            *config.Config
+	db              *gorm.DB
+	log             *slog.Logger
+	settingRepo     biz.SettingRepo
+	certRepo        biz.CertRepo
+	certAccountRepo biz.CertAccountRepo
 }
 
-func NewCertRenew(db *gorm.DB, log *slog.Logger, cert biz.CertRepo) *CertRenew {
+func NewCertRenew(conf *config.Config, db *gorm.DB, log *slog.Logger, setting biz.SettingRepo, cert biz.CertRepo, certAccount biz.CertAccountRepo) *CertRenew {
 	return &CertRenew{
-		db:       db,
-		log:      log,
-		certRepo: cert,
+		conf:            conf,
+		db:              db,
+		log:             log,
+		settingRepo:     setting,
+		certRepo:        cert,
+		certAccountRepo: certAccount,
 	}
 }
 
@@ -38,23 +49,78 @@ func (r *CertRenew) Run() {
 	}
 
 	for _, cert := range certs {
-		if cert.Type == "upload" || !cert.AutoRenew {
+		// 跳过上传类型或未开启自动续签的证书
+		if cert.Type == "upload" || !cert.AutoRenewal {
 			continue
 		}
 
-		decode, err := pkgcert.ParseCert(cert.Cert)
-		if err != nil {
-			continue
+		// 刷新续签信息
+		if cert.RenewalInfo.NeedsRefresh() {
+			renewInfo, err := r.certRepo.RefreshRenewalInfo(cert.ID)
+			if err != nil {
+				r.log.Warn("[CertRenew] failed to refresh renewal info", slog.Any("err", err))
+				continue
+			}
+			cert.RenewalInfo = renewInfo
 		}
 
-		// 结束时间大于 7 天的证书不续签
-		if time.Until(decode.NotAfter) > 24*7*time.Hour {
-			continue
-		}
-
-		_, err = r.certRepo.Renew(cert.ID)
-		if err != nil {
-			r.log.Warn("[CertRenew] failed to renew cert", slog.Any("err", err))
+		// 到达建议时间，续签证书
+		if time.Now().After(cert.RenewalInfo.SelectedTime) {
+			if _, err := r.certRepo.Renew(cert.ID); err != nil {
+				r.log.Warn("[CertRenew] failed to renew cert", slog.Any("err", err))
+			}
 		}
 	}
+
+	// 面板证书续签
+	if r.conf.HTTP.ACME {
+		decode, err := pkgcert.ParseCert(filepath.Join(app.Root, "panel/storage/cert.pem"))
+		if err != nil {
+			r.log.Warn("[CertRenew] failed to parse panel cert", slog.Any("err", err))
+			return
+		}
+		// 结束时间大于 2 天不续签
+		if time.Until(decode.NotAfter) > 24*2*time.Hour {
+			return
+		}
+
+		ip, err := r.settingRepo.Get(biz.SettingKeyPublicIPs)
+		if err != nil {
+			r.log.Warn("[CertRenew] failed to get panel IP", slog.Any("err", err))
+			return
+		}
+		var ips []string
+		if err = json.Unmarshal([]byte(ip), &ips); err != nil || len(ips) == 0 {
+			r.log.Warn("[CertRenew] panel public IPs not set", slog.Any("err", err))
+			return
+		}
+
+		var user biz.User
+		if err = r.db.First(&user).Error; err != nil {
+			r.log.Warn("[CertRenew] failed to get a panel user", slog.Any("err", err))
+			return
+		}
+		account, err := r.certAccountRepo.GetDefault(user.ID)
+		if err != nil {
+			r.log.Warn("[CertRenew] failed to get panel ACME account", slog.Any("err", err))
+			return
+		}
+		crt, key, err := r.certRepo.ObtainPanel(account, ips)
+		if err != nil {
+			r.log.Warn("[CertRenew] failed to obtain ACME cert", slog.Any("err", err))
+			return
+		}
+
+		if err = r.settingRepo.UpdateCert(&request.SettingCert{
+			Cert: string(crt),
+			Key:  string(key),
+		}); err != nil {
+			r.log.Warn("[CertRenew] failed to update panel cert", slog.Any("err", err))
+			return
+		}
+
+		r.log.Info("[CertRenew] panel cert renewed successfully")
+		tools.RestartPanel()
+	}
+
 }

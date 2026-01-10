@@ -1,4 +1,6 @@
 <script lang="ts" setup>
+import TheIconLocal from '@/components/custom/TheIconLocal.vue'
+
 defineOptions({
   name: 'home-index'
 })
@@ -52,7 +54,9 @@ const { data: systemInfo } = useRequest(home.systemInfo, {
     go_version: '',
     kernel_arch: '',
     kernel_version: '',
+    os_eol: false,
     os_name: '',
+    os_supported: true,
     boot_time: 0,
     uptime: 0,
     nets: [],
@@ -415,6 +419,28 @@ if (import.meta.hot) {
   <app-page :show-footer="true" min-w-375>
     <div flex-1>
       <n-space vertical>
+        <!-- 系统是否 EOL -->
+        <n-alert type="info" v-if="systemInfo.os_eol">
+          {{
+            $gettext(
+              'Your operating system %{ os_name } has reached its end-of-life. Please consider upgrading to a supported version to ensure optimal performance and security.',
+              {
+                os_name: systemInfo?.os_name
+              }
+            )
+          }}
+        </n-alert>
+        <!-- 系统是否不受支持 -->
+        <n-alert type="warning" v-if="!systemInfo.os_supported">
+          {{
+            $gettext(
+              'Your operating system %{ os_name } is not officially supported. Some features may not work as expected. Please consider using a supported operating system for the best experience.',
+              {
+                os_name: systemInfo?.os_name
+              }
+            )
+          }}
+        </n-alert>
         <n-card :segmented="true" size="small">
           <n-page-header :subtitle="systemInfo?.panel_version">
             <n-grid :cols="4" pb-10>
@@ -459,7 +485,7 @@ if (import.meta.hot) {
           <n-flex v-if="realtime" size="large">
             <n-popover placement="bottom" trigger="hover">
               <template #trigger>
-                <n-flex vertical flex items-center p-20 pl-40 pr-40>
+                <n-flex vertical p-20 pl-40 pr-40 flex items-center>
                   <p>{{ $gettext('Load Status') }}</p>
                   <n-progress
                     type="dashboard"
@@ -498,7 +524,7 @@ if (import.meta.hot) {
             </n-popover>
             <n-popover placement="bottom" trigger="hover">
               <template #trigger>
-                <n-flex vertical flex items-center p-20 pl-40 pr-40>
+                <n-flex vertical p-20 pl-40 pr-40 flex items-center>
                   <p>CPU</p>
                   <n-progress
                     type="dashboard"
@@ -534,7 +560,7 @@ if (import.meta.hot) {
             </n-popover>
             <n-popover placement="bottom" trigger="hover">
               <template #trigger>
-                <n-flex vertical flex items-center p-20 pl-40 pr-40>
+                <n-flex vertical p-20 pl-40 pr-40 flex items-center>
                   <p>{{ $gettext('Memory') }}</p>
                   <n-progress
                     type="dashboard"
@@ -636,7 +662,7 @@ if (import.meta.hot) {
               trigger="hover"
             >
               <template #trigger>
-                <n-flex vertical flex items-center p-20 pl-40 pr-40>
+                <n-flex vertical p-20 pl-40 pr-40 flex items-center>
                   <p>{{ item.path }}</p>
                   <n-progress
                     type="dashboard"
@@ -694,7 +720,7 @@ if (import.meta.hot) {
                     v-if="!appLoading"
                     x-gap="12"
                     y-gap="12"
-                    cols="3 s:1 m:2 l:3"
+                    cols="4 s:1 m:2 l:3 xl:4 2xl:4"
                     item-responsive
                     responsive="screen"
                     p-10
@@ -711,7 +737,7 @@ if (import.meta.hot) {
                           <n-thing>
                             <template #avatar>
                               <div class="mt-8">
-                                <the-icon :size="30" :icon="item.icon" />
+                                <the-icon-local type="app" :size="30" :icon="item.slug" />
                               </div>
                             </template>
                             <template #header>
@@ -853,7 +879,7 @@ if (import.meta.hot) {
                   >
                   <n-tag>{{ $gettext('Read/Write Latency') }} {{ current.diskRWTime }}ms</n-tag>
                 </n-flex>
-                <n-card :bordered="false" h-530 pt-10>
+                <n-card :bordered="false" pt-10 h-530>
                   <v-chart class="chart" :option="chartOptions" autoresize />
                 </n-card>
               </n-flex>

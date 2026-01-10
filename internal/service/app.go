@@ -28,7 +28,15 @@ func NewAppService(t *gotext.Locale, app biz.AppRepo, cache biz.CacheRepo, setti
 	}
 }
 
+func (s *AppService) Categories(w http.ResponseWriter, r *http.Request) {
+	categories := s.appRepo.Categories()
+
+	Success(w, categories)
+}
+
 func (s *AppService) List(w http.ResponseWriter, r *http.Request) {
+	category := r.URL.Query().Get("category")
+
 	all := s.appRepo.All()
 	installedApps, err := s.appRepo.Installed()
 	if err != nil {
@@ -41,7 +49,7 @@ func (s *AppService) List(w http.ResponseWriter, r *http.Request) {
 		installedAppMap[p.Slug] = p
 	}
 
-	var apps []types.AppCenter
+	var apps []types.AppDetail
 	for _, item := range all {
 		installed, installedChannel, installedVersion, updateExist, show := false, "", "", false, false
 		if _, ok := installedAppMap[item.Slug]; ok {
@@ -51,11 +59,14 @@ func (s *AppService) List(w http.ResponseWriter, r *http.Request) {
 			updateExist = s.appRepo.UpdateExist(item.Slug)
 			show = installedAppMap[item.Slug].Show
 		}
+		if category != "" && !strings.Contains(strings.Join(item.Categories, ","), category) {
+			continue
+		}
 
-		app := types.AppCenter{
-			Icon:             item.Icon,
+		app := types.AppDetail{
 			Name:             item.Name,
 			Description:      item.Description,
+			Categories:       item.Categories,
 			Slug:             item.Slug,
 			Installed:        installed,
 			InstalledChannel: installedChannel,
@@ -181,7 +192,15 @@ func (s *AppService) UpdateCache(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if err := s.cacheRepo.UpdateCategories(); err != nil {
+		Error(w, http.StatusInternalServerError, "%v", err)
+		return
+	}
 	if err := s.cacheRepo.UpdateApps(); err != nil {
+		Error(w, http.StatusInternalServerError, "%v", err)
+		return
+	}
+	if err := s.cacheRepo.UpdateEnvironments(); err != nil {
 		Error(w, http.StatusInternalServerError, "%v", err)
 		return
 	}

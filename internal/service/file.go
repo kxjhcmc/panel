@@ -18,10 +18,12 @@ import (
 	"github.com/leonelquinteros/gotext"
 	"github.com/libtnb/chix"
 	"github.com/libtnb/utils/file"
+	"github.com/spf13/cast"
 
 	"github.com/acepanel/panel/internal/app"
 	"github.com/acepanel/panel/internal/biz"
 	"github.com/acepanel/panel/internal/http/request"
+	"github.com/acepanel/panel/pkg/chattr"
 	"github.com/acepanel/panel/pkg/io"
 	"github.com/acepanel/panel/pkg/os"
 	"github.com/acepanel/panel/pkg/shell"
@@ -327,6 +329,37 @@ func (s *FileService) Info(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// Size 计算大小
+func (s *FileService) Size(w http.ResponseWriter, r *http.Request) {
+	req, err := Bind[request.FilePath](r)
+	if err != nil {
+		Error(w, http.StatusInternalServerError, "%v", err)
+		return
+	}
+
+	info, err := stdos.Stat(req.Path)
+	if err != nil {
+		Error(w, http.StatusInternalServerError, "%v", err)
+		return
+	}
+	if !info.IsDir() {
+		// 如果不是目录，直接返回文件大小
+		Success(w, chix.M{
+			"size": tools.FormatBytes(float64(info.Size())),
+		})
+		return
+	}
+
+	// 计算目录大小
+	output, err := shell.Execf("du -sb '%s' | awk '{print $1}'", req.Path)
+	if err != nil {
+		Error(w, http.StatusInternalServerError, "%v", err)
+		return
+	}
+
+	Success(w, tools.FormatBytes(cast.ToFloat64(output)))
+}
+
 func (s *FileService) Permission(w http.ResponseWriter, r *http.Request) {
 	req, err := Bind[request.FilePermission](r)
 	if err != nil {
@@ -458,21 +491,36 @@ func (s *FileService) formatDir(base string, entries []stdos.DirEntry) []any {
 		}
 
 		stat := info.Sys().(*syscall.Stat_t)
+		// 对于目录，size 返回空字符串，需要用户手动计算
+		size := ""
+		if !info.IsDir() {
+			size = tools.FormatBytes(float64(info.Size()))
+		}
+
+		// 检查是否有 immutable 属性
+		fullPath := filepath.Join(base, info.Name())
+		immutable := false
+		if f, err := stdos.OpenFile(fullPath, stdos.O_RDONLY, 0); err == nil {
+			immutable, _ = chattr.IsAttr(f, chattr.FS_IMMUTABLE_FL)
+			_ = f.Close()
+		}
+
 		paths = append(paths, map[string]any{
-			"name":     info.Name(),
-			"full":     filepath.Join(base, info.Name()),
-			"size":     tools.FormatBytes(float64(info.Size())),
-			"mode_str": info.Mode().String(),
-			"mode":     fmt.Sprintf("%04o", info.Mode().Perm()),
-			"owner":    os.GetUser(stat.Uid),
-			"group":    os.GetGroup(stat.Gid),
-			"uid":      stat.Uid,
-			"gid":      stat.Gid,
-			"hidden":   io.IsHidden(info.Name()),
-			"symlink":  io.IsSymlink(info.Mode()),
-			"link":     io.GetSymlink(filepath.Join(base, info.Name())),
-			"dir":      info.IsDir(),
-			"modify":   info.ModTime().Format(time.DateTime),
+			"name":      info.Name(),
+			"full":      fullPath,
+			"size":      size,
+			"mode_str":  info.Mode().String(),
+			"mode":      fmt.Sprintf("%04o", info.Mode().Perm()),
+			"owner":     os.GetUser(stat.Uid),
+			"group":     os.GetGroup(stat.Gid),
+			"uid":       stat.Uid,
+			"gid":       stat.Gid,
+			"hidden":    io.IsHidden(info.Name()),
+			"symlink":   io.IsSymlink(info.Mode()),
+			"link":      io.GetSymlink(fullPath),
+			"dir":       info.IsDir(),
+			"modify":    info.ModTime().Format(time.DateTime),
+			"immutable": immutable,
 		})
 	}
 

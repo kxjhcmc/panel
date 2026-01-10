@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/acepanel/panel/pkg/api"
+	"github.com/acepanel/panel/pkg/types"
 )
 
 type App struct {
@@ -18,6 +19,7 @@ type App struct {
 }
 
 type AppRepo interface {
+	Categories() []types.LV
 	All() api.Apps
 	Get(slug string) (*api.App, error)
 	UpdateExist(slug string) bool
@@ -25,7 +27,7 @@ type AppRepo interface {
 	GetInstalled(slug string) (*App, error)
 	GetInstalledAll(query string, cond ...string) ([]*App, error)
 	GetHomeShow() ([]map[string]string, error)
-	IsInstalled(query string, cond ...string) (bool, error)
+	IsInstalled(query string, cond ...any) (bool, error)
 	Install(channel, slug string) error
 	UnInstall(slug string) error
 	Update(slug string) error

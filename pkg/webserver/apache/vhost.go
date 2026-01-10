@@ -29,6 +29,7 @@ type baseVhost struct {
 	config    *Config
 	vhost     *VirtualHost
 	configDir string // 配置目录
+	siteName  string // 网站名
 }
 
 // newBaseVhost 创建基础虚拟主机实例
@@ -39,6 +40,7 @@ func newBaseVhost(configDir string) (*baseVhost, error) {
 
 	v := &baseVhost{
 		configDir: configDir,
+		siteName:  filepath.Base(filepath.Dir(configDir)),
 	}
 
 	// 加载配置
@@ -56,7 +58,8 @@ func newBaseVhost(configDir string) (*baseVhost, error) {
 
 	// 如果没有配置文件，使用默认配置
 	if config == nil {
-		config, err = ParseString(DefaultVhostConf)
+		defaultConf := strings.ReplaceAll(DefaultVhostConf, "/opt/ace/sites/default", fmt.Sprintf("/opt/ace/sites/%s", v.siteName))
+		config, err = ParseString(defaultConf)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse default config: %w", err)
 		}
@@ -121,7 +124,7 @@ func (v *baseVhost) SetEnable(enable bool) error {
 		// 禁用时，保存当前根目录
 		currentRoot := v.Root()
 		if currentRoot != "" && currentRoot != DisablePagePath {
-			if err := os.WriteFile(filepath.Join(v.configDir, "root.saved"), []byte(currentRoot), 0644); err != nil {
+			if err := os.WriteFile(filepath.Join(v.configDir, "root.saved"), []byte(currentRoot), 0600); err != nil {
 				return fmt.Errorf("failed to save current root: %w", err)
 			}
 		}
@@ -130,6 +133,11 @@ func (v *baseVhost) SetEnable(enable bool) error {
 	// 设置根目录
 	if err := v.SetRoot(path); err != nil {
 		return err
+	}
+
+	// 清理保存的根目录文件
+	if enable {
+		_ = os.RemoveAll(filepath.Join(v.configDir, "root.saved"))
 	}
 
 	// 设置 Include 配置
@@ -147,7 +155,7 @@ func (v *baseVhost) Listen() []types.Listen {
 	// Apache 的监听配置通常在 VirtualHost 的参数中
 	// 例如: <VirtualHost *:80> 或 <VirtualHost 192.168.1.1:443>
 	for _, arg := range v.vhost.Args {
-		listen := types.Listen{Address: arg}
+		listen := types.Listen{Address: arg, Args: []string{}}
 		result = append(result, listen)
 	}
 
@@ -324,7 +332,7 @@ func (v *baseVhost) SetErrorLog(errorLog string) error {
 func (v *baseVhost) Save() error {
 	configFile := filepath.Join(v.configDir, "apache.conf")
 	content := v.config.Export()
-	if err := os.WriteFile(configFile, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(configFile, []byte(content), 0600); err != nil {
 		return fmt.Errorf("failed to save config file: %w", err)
 	}
 
@@ -333,7 +341,8 @@ func (v *baseVhost) Save() error {
 
 func (v *baseVhost) Reset() error {
 	// 重置配置为默认值
-	config, err := ParseString(DefaultVhostConf)
+	defaultConf := strings.ReplaceAll(DefaultVhostConf, "/opt/ace/sites/default", fmt.Sprintf("/opt/ace/sites/%s", v.siteName))
+	config, err := ParseString(defaultConf)
 	if err != nil {
 		return fmt.Errorf("failed to reset config: %w", err)
 	}
@@ -357,7 +366,7 @@ func (v *baseVhost) Config(name string, typ string) string {
 
 func (v *baseVhost) SetConfig(name string, typ string, content string) error {
 	conf := filepath.Join(v.configDir, typ, name)
-	if err := os.WriteFile(conf, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(conf, []byte(content), 0600); err != nil {
 		return fmt.Errorf("failed to write config file: %w", err)
 	}
 	return nil
@@ -674,13 +683,13 @@ func (v *ProxyVhost) ClearProxies() error {
 	return clearProxyFiles(siteDir)
 }
 
-func (v *ProxyVhost) Upstreams() map[string]types.Upstream {
+func (v *ProxyVhost) Upstreams() []types.Upstream {
 	sharedDir := filepath.Join(v.configDir, "shared")
 	upstreams, _ := parseBalancerFiles(sharedDir)
 	return upstreams
 }
 
-func (v *ProxyVhost) SetUpstreams(upstreams map[string]types.Upstream) error {
+func (v *ProxyVhost) SetUpstreams(upstreams []types.Upstream) error {
 	sharedDir := filepath.Join(v.configDir, "shared")
 	return writeBalancerFiles(sharedDir, upstreams)
 }

@@ -3,6 +3,7 @@ package service
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/rand/v2"
@@ -11,14 +12,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/knadh/koanf/v2"
 	"github.com/leonelquinteros/gotext"
 	"github.com/libtnb/utils/collect"
 	"github.com/libtnb/utils/hash"
 	"github.com/libtnb/utils/str"
 	"github.com/spf13/cast"
 	"github.com/urfave/cli/v3"
-	"go.yaml.in/yaml/v3"
 	"gorm.io/gorm"
 
 	"github.com/acepanel/panel/internal/app"
@@ -26,20 +25,20 @@ import (
 	"github.com/acepanel/panel/internal/http/request"
 	"github.com/acepanel/panel/pkg/api"
 	"github.com/acepanel/panel/pkg/cert"
+	"github.com/acepanel/panel/pkg/config"
 	"github.com/acepanel/panel/pkg/firewall"
 	"github.com/acepanel/panel/pkg/io"
 	"github.com/acepanel/panel/pkg/ntp"
 	"github.com/acepanel/panel/pkg/os"
 	"github.com/acepanel/panel/pkg/systemctl"
 	"github.com/acepanel/panel/pkg/tools"
-	"github.com/acepanel/panel/pkg/types"
 )
 
 type CliService struct {
 	hr                 string
 	t                  *gotext.Locale
 	api                *api.API
-	conf               *koanf.Koanf
+	conf               *config.Config
 	db                 *gorm.DB
 	appRepo            biz.AppRepo
 	cacheRepo          biz.CacheRepo
@@ -48,10 +47,12 @@ type CliService struct {
 	backupRepo         biz.BackupRepo
 	websiteRepo        biz.WebsiteRepo
 	databaseServerRepo biz.DatabaseServerRepo
+	certRepo           biz.CertRepo
+	certAccountRepo    biz.CertAccountRepo
 	hash               hash.Hasher
 }
 
-func NewCliService(t *gotext.Locale, conf *koanf.Koanf, db *gorm.DB, appRepo biz.AppRepo, cache biz.CacheRepo, user biz.UserRepo, setting biz.SettingRepo, backup biz.BackupRepo, website biz.WebsiteRepo, databaseServer biz.DatabaseServerRepo) *CliService {
+func NewCliService(t *gotext.Locale, conf *config.Config, db *gorm.DB, appRepo biz.AppRepo, cache biz.CacheRepo, user biz.UserRepo, setting biz.SettingRepo, backup biz.BackupRepo, website biz.WebsiteRepo, databaseServer biz.DatabaseServerRepo, cert biz.CertRepo, certAccount biz.CertAccountRepo) *CliService {
 	return &CliService{
 		hr:                 `+----------------------------------------------------`,
 		api:                api.NewAPI(app.Version, app.Locale),
@@ -65,12 +66,14 @@ func NewCliService(t *gotext.Locale, conf *koanf.Koanf, db *gorm.DB, appRepo biz
 		backupRepo:         backup,
 		websiteRepo:        website,
 		databaseServerRepo: databaseServer,
+		certRepo:           cert,
+		certAccountRepo:    certAccount,
 		hash:               hash.NewArgon2id(),
 	}
 }
 
 func (s *CliService) Restart(ctx context.Context, cmd *cli.Command) error {
-	if err := systemctl.Restart("panel"); err != nil {
+	if err := systemctl.Restart("acepanel"); err != nil {
 		return err
 	}
 
@@ -79,7 +82,7 @@ func (s *CliService) Restart(ctx context.Context, cmd *cli.Command) error {
 }
 
 func (s *CliService) Stop(ctx context.Context, cmd *cli.Command) error {
-	if err := systemctl.Stop("panel"); err != nil {
+	if err := systemctl.Stop("acepanel"); err != nil {
 		return err
 	}
 
@@ -88,7 +91,7 @@ func (s *CliService) Stop(ctx context.Context, cmd *cli.Command) error {
 }
 
 func (s *CliService) Start(ctx context.Context, cmd *cli.Command) error {
-	if err := systemctl.Start("panel"); err != nil {
+	if err := systemctl.Start("acepanel"); err != nil {
 		return err
 	}
 
@@ -108,11 +111,20 @@ func (s *CliService) Update(ctx context.Context, cmd *cli.Command) error {
 		return errors.New(s.t.Get("Download URL is empty"))
 	}
 
-	return s.backupRepo.UpdatePanel(panel.Version, download.URL, download.Checksum)
+	url := fmt.Sprintf("https://%s%s", s.conf.App.DownloadEndpoint, download.URL)
+	checksum := fmt.Sprintf("https://%s%s", s.conf.App.DownloadEndpoint, download.Checksum)
+
+	return s.backupRepo.UpdatePanel(panel.Version, url, checksum)
 }
 
 func (s *CliService) Sync(ctx context.Context, cmd *cli.Command) error {
+	if err := s.cacheRepo.UpdateCategories(); err != nil {
+		return errors.New(s.t.Get("Failed to synchronize categories data: %v", err))
+	}
 	if err := s.cacheRepo.UpdateApps(); err != nil {
+		return errors.New(s.t.Get("Failed to synchronize app data: %v", err))
+	}
+	if err := s.cacheRepo.UpdateEnvironments(); err != nil {
 		return errors.New(s.t.Get("Failed to synchronize app data: %v", err))
 	}
 	if err := s.cacheRepo.UpdateRewrites(); err != nil {
@@ -147,43 +159,43 @@ func (s *CliService) Info(ctx context.Context, cmd *cli.Command) error {
 	}
 
 	protocol := "http"
-	if s.conf.Bool("http.tls") {
+	if s.conf.HTTP.TLS {
 		protocol = "https"
 	}
 
-	port := s.conf.String("http.port")
-	if port == "" {
+	port := s.conf.HTTP.Port
+	if port == 0 {
 		return errors.New(s.t.Get("Failed to get port"))
 	}
-	entrance := s.conf.String("http.entrance")
+	entrance := s.conf.HTTP.Entrance
 	if entrance == "" {
 		return errors.New(s.t.Get("Failed to get entrance"))
 	}
 
 	fmt.Println(s.t.Get("Username: %s", user.Username))
 	fmt.Println(s.t.Get("Password: %s", password))
-	fmt.Println(s.t.Get("Port: %s", port))
+	fmt.Println(s.t.Get("Port: %d", port))
 	fmt.Println(s.t.Get("Entrance: %s", entrance))
 
 	lv4, err := tools.GetLocalIPv4()
 	if err == nil {
-		fmt.Println(s.t.Get("Local IPv4: %s://%s:%s%s", protocol, lv4, port, entrance))
+		fmt.Println(s.t.Get("Local IPv4: %s://%s:%d%s", protocol, lv4, port, entrance))
 	}
 	lv6, err := tools.GetLocalIPv6()
 	if err == nil {
-		fmt.Println(s.t.Get("Local IPv6: %s://[%s]:%s%s", protocol, lv6, port, entrance))
+		fmt.Println(s.t.Get("Local IPv6: %s://[%s]:%d%s", protocol, lv6, port, entrance))
 	}
 	rv4, err := tools.GetPublicIPv4()
 	if err == nil {
-		fmt.Println(s.t.Get("Public IPv4: %s://%s:%s%s", protocol, rv4, port, entrance))
+		fmt.Println(s.t.Get("Public IPv4: %s://%s:%d%s", protocol, rv4, port, entrance))
 	}
 	rv6, err := tools.GetPublicIPv6()
 	if err == nil {
-		fmt.Println(s.t.Get("Public IPv6: %s://[%s]:%s%s", protocol, rv6, port, entrance))
+		fmt.Println(s.t.Get("Public IPv6: %s://[%s]:%d%s", protocol, rv6, port, entrance))
 	}
 
 	fmt.Println(s.t.Get("Please choose the appropriate address to access the panel based on your network situation"))
-	fmt.Println(s.t.Get("If you cannot access, please check whether the server's security group and firewall allow port %s", port))
+	fmt.Println(s.t.Get("If you cannot access, please check whether the server's security group and firewall allow port %d", port))
 	fmt.Println(s.t.Get("If you still cannot access, try running panel-cli https off to turn off panel HTTPS"))
 	fmt.Println(s.t.Get("Warning: After turning off panel HTTPS, the security of the panel will be greatly reduced, please operate with caution"))
 
@@ -217,9 +229,8 @@ func (s *CliService) UserName(ctx context.Context, cmd *cli.Command) error {
 	if err := s.db.Where("username", oldUsername).First(user).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return errors.New(s.t.Get("User not exists"))
-		} else {
-			return errors.New(s.t.Get("Failed to get user: %v", err))
 		}
+		return errors.New(s.t.Get("Failed to get user: %v", err))
 	}
 
 	user.Username = newUsername
@@ -245,9 +256,8 @@ func (s *CliService) UserPassword(ctx context.Context, cmd *cli.Command) error {
 	if err := s.db.Where("username", username).First(user).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return errors.New(s.t.Get("User not exists"))
-		} else {
-			return errors.New(s.t.Get("Failed to get user: %v", err))
 		}
+		return errors.New(s.t.Get("Failed to get user: %v", err))
 	}
 
 	hashed, err := s.hash.Make(password)
@@ -273,9 +283,8 @@ func (s *CliService) UserTwoFA(ctx context.Context, cmd *cli.Command) error {
 	if err := s.db.Where("username", username).First(user).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return errors.New(s.t.Get("User not exists"))
-		} else {
-			return errors.New(s.t.Get("Failed to get user: %v", err))
 		}
+		return errors.New(s.t.Get("Failed to get user: %v", err))
 	}
 
 	// 已开启，关闭2FA
@@ -307,23 +316,14 @@ func (s *CliService) UserTwoFA(ctx context.Context, cmd *cli.Command) error {
 }
 
 func (s *CliService) HTTPSOn(ctx context.Context, cmd *cli.Command) error {
-	config := new(types.PanelConfig)
-	raw, err := io.Read("/usr/local/etc/panel/config.yml")
-	if err != nil {
-		return err
-	}
-	if err = yaml.Unmarshal([]byte(raw), config); err != nil {
-		return err
-	}
-
-	config.HTTP.TLS = true
-
-	encoded, err := yaml.Marshal(config)
+	conf, err := config.Load()
 	if err != nil {
 		return err
 	}
 
-	if err = io.Write("/usr/local/etc/panel/config.yml", string(encoded), 0700); err != nil {
+	conf.HTTP.TLS = true
+
+	if err = config.Save(conf); err != nil {
 		return err
 	}
 
@@ -332,23 +332,14 @@ func (s *CliService) HTTPSOn(ctx context.Context, cmd *cli.Command) error {
 }
 
 func (s *CliService) HTTPSOff(ctx context.Context, cmd *cli.Command) error {
-	config := new(types.PanelConfig)
-	raw, err := io.Read("/usr/local/etc/panel/config.yml")
-	if err != nil {
-		return err
-	}
-	if err = yaml.Unmarshal([]byte(raw), config); err != nil {
-		return err
-	}
-
-	config.HTTP.TLS = false
-
-	encoded, err := yaml.Marshal(config)
+	conf, err := config.Load()
 	if err != nil {
 		return err
 	}
 
-	if err = io.Write("/usr/local/etc/panel/config.yml", string(encoded), 0700); err != nil {
+	conf.HTTP.TLS = false
+
+	if err = config.Save(conf); err != nil {
 		return err
 	}
 
@@ -376,10 +367,35 @@ func (s *CliService) HTTPSGenerate(ctx context.Context, cmd *cli.Command) error 
 		return err
 	}
 
-	if err = io.Write(filepath.Join(app.Root, "panel/storage/cert.pem"), string(crt), 0644); err != nil {
+	if s.conf.HTTP.ACME {
+		ip, err := s.settingRepo.Get(biz.SettingKeyPublicIPs)
+		if err != nil {
+			return err
+		}
+		var ips []string
+		if err = json.Unmarshal([]byte(ip), &ips); err != nil || len(ips) == 0 {
+			return errors.New(s.t.Get("Please set the panel IP in settings first for ACME certificate generation"))
+		}
+
+		var user biz.User
+		if err := s.db.First(&user).Error; err != nil {
+			return errors.New(s.t.Get("Failed to get a panel user: %v", err))
+		}
+		account, err := s.certAccountRepo.GetDefault(user.ID)
+		if err != nil {
+			return errors.New(s.t.Get("Failed to get ACME account: %v", err))
+		}
+		crt, key, err = s.certRepo.ObtainPanel(account, ips)
+		if err != nil {
+			return errors.New(s.t.Get("Failed to obtain ACME certificate: %v", err))
+		}
+		fmt.Println(s.t.Get("Successfully obtained ACME certificate"))
+	}
+
+	if err = io.Write(filepath.Join(app.Root, "panel/storage/cert.pem"), string(crt), 0600); err != nil {
 		return err
 	}
-	if err = io.Write(filepath.Join(app.Root, "panel/storage/cert.key"), string(key), 0644); err != nil {
+	if err = io.Write(filepath.Join(app.Root, "panel/storage/cert.key"), string(key), 0600); err != nil {
 		return err
 	}
 
@@ -388,49 +404,31 @@ func (s *CliService) HTTPSGenerate(ctx context.Context, cmd *cli.Command) error 
 }
 
 func (s *CliService) EntranceOn(ctx context.Context, cmd *cli.Command) error {
-	config := new(types.PanelConfig)
-	raw, err := io.Read("/usr/local/etc/panel/config.yml")
-	if err != nil {
-		return err
-	}
-	if err = yaml.Unmarshal([]byte(raw), config); err != nil {
-		return err
-	}
-
-	config.HTTP.Entrance = "/" + str.Random(6)
-
-	encoded, err := yaml.Marshal(config)
+	conf, err := config.Load()
 	if err != nil {
 		return err
 	}
 
-	if err = io.Write("/usr/local/etc/panel/config.yml", string(encoded), 0700); err != nil {
+	conf.HTTP.Entrance = "/" + str.Random(6)
+
+	if err = config.Save(conf); err != nil {
 		return err
 	}
 
 	fmt.Println(s.t.Get("Entrance enabled"))
-	fmt.Println(s.t.Get("Entrance: %s", config.HTTP.Entrance))
+	fmt.Println(s.t.Get("Entrance: %s", conf.HTTP.Entrance))
 	return s.Restart(ctx, cmd)
 }
 
 func (s *CliService) EntranceOff(ctx context.Context, cmd *cli.Command) error {
-	config := new(types.PanelConfig)
-	raw, err := io.Read("/usr/local/etc/panel/config.yml")
-	if err != nil {
-		return err
-	}
-	if err = yaml.Unmarshal([]byte(raw), config); err != nil {
-		return err
-	}
-
-	config.HTTP.Entrance = "/"
-
-	encoded, err := yaml.Marshal(config)
+	conf, err := config.Load()
 	if err != nil {
 		return err
 	}
 
-	if err = io.Write("/usr/local/etc/panel/config.yml", string(encoded), 0700); err != nil {
+	conf.HTTP.Entrance = "/"
+
+	if err = config.Save(conf); err != nil {
 		return err
 	}
 
@@ -439,23 +437,14 @@ func (s *CliService) EntranceOff(ctx context.Context, cmd *cli.Command) error {
 }
 
 func (s *CliService) BindDomainOff(ctx context.Context, cmd *cli.Command) error {
-	config := new(types.PanelConfig)
-	raw, err := io.Read("/usr/local/etc/panel/config.yml")
-	if err != nil {
-		return err
-	}
-	if err = yaml.Unmarshal([]byte(raw), config); err != nil {
-		return err
-	}
-
-	config.HTTP.BindDomain = nil
-
-	encoded, err := yaml.Marshal(config)
+	conf, err := config.Load()
 	if err != nil {
 		return err
 	}
 
-	if err = io.Write("/usr/local/etc/panel/config.yml", string(encoded), 0700); err != nil {
+	conf.HTTP.BindDomain = nil
+
+	if err = config.Save(conf); err != nil {
 		return err
 	}
 
@@ -464,23 +453,14 @@ func (s *CliService) BindDomainOff(ctx context.Context, cmd *cli.Command) error 
 }
 
 func (s *CliService) BindIPOff(ctx context.Context, cmd *cli.Command) error {
-	config := new(types.PanelConfig)
-	raw, err := io.Read("/usr/local/etc/panel/config.yml")
-	if err != nil {
-		return err
-	}
-	if err = yaml.Unmarshal([]byte(raw), config); err != nil {
-		return err
-	}
-
-	config.HTTP.BindIP = nil
-
-	encoded, err := yaml.Marshal(config)
+	conf, err := config.Load()
 	if err != nil {
 		return err
 	}
 
-	if err = io.Write("/usr/local/etc/panel/config.yml", string(encoded), 0700); err != nil {
+	conf.HTTP.BindIP = nil
+
+	if err = config.Save(conf); err != nil {
 		return err
 	}
 
@@ -489,23 +469,14 @@ func (s *CliService) BindIPOff(ctx context.Context, cmd *cli.Command) error {
 }
 
 func (s *CliService) BindUAOff(ctx context.Context, cmd *cli.Command) error {
-	config := new(types.PanelConfig)
-	raw, err := io.Read("/usr/local/etc/panel/config.yml")
-	if err != nil {
-		return err
-	}
-	if err = yaml.Unmarshal([]byte(raw), config); err != nil {
-		return err
-	}
-
-	config.HTTP.BindUA = nil
-
-	encoded, err := yaml.Marshal(config)
+	conf, err := config.Load()
 	if err != nil {
 		return err
 	}
 
-	if err = io.Write("/usr/local/etc/panel/config.yml", string(encoded), 0700); err != nil {
+	conf.HTTP.BindUA = nil
+
+	if err = config.Save(conf); err != nil {
 		return err
 	}
 
@@ -519,27 +490,18 @@ func (s *CliService) Port(ctx context.Context, cmd *cli.Command) error {
 		return errors.New(s.t.Get("Port range error"))
 	}
 
-	config := new(types.PanelConfig)
-	raw, err := io.Read("/usr/local/etc/panel/config.yml")
+	conf, err := config.Load()
 	if err != nil {
 		return err
 	}
-	if err = yaml.Unmarshal([]byte(raw), config); err != nil {
-		return err
-	}
 
-	if port != config.HTTP.Port {
+	if port != conf.HTTP.Port {
 		if os.TCPPortInUse(port) {
 			return errors.New(s.t.Get("Port already in use"))
 		}
 	}
 
-	config.HTTP.Port = port
-
-	encoded, err := yaml.Marshal(config)
-	if err != nil {
-		return err
-	}
+	conf.HTTP.Port = port
 
 	// 放行端口
 	if ok, _ := systemctl.IsEnabled("firewalld"); ok {
@@ -556,7 +518,7 @@ func (s *CliService) Port(ctx context.Context, cmd *cli.Command) error {
 		}
 	}
 
-	if err = io.Write("/usr/local/etc/panel/config.yml", string(encoded), 0700); err != nil {
+	if err = config.Save(conf); err != nil {
 		return err
 	}
 
@@ -629,7 +591,7 @@ func (s *CliService) DatabaseAddServer(ctx context.Context, cmd *cli.Command) er
 		Type:     cmd.String("type"),
 		Name:     cmd.String("name"),
 		Host:     cmd.String("host"),
-		Port:     uint(cmd.Uint("port")),
+		Port:     cmd.Uint("port"),
 		Username: cmd.String("username"),
 		Password: cmd.String("password"),
 		Remark:   cmd.String("remark"),
@@ -717,7 +679,7 @@ func (s *CliService) BackupClear(ctx context.Context, cmd *cli.Command) error {
 	fmt.Println(s.t.Get("|-Cleaning type: %s", cmd.String("type")))
 	fmt.Println(s.t.Get("|-Cleaning target: %s", cmd.String("file")))
 	fmt.Println(s.t.Get("|-Keep count: %d", cmd.Int("save")))
-	if err = s.backupRepo.ClearExpired(path, cmd.String("file"), int(cmd.Int("save"))); err != nil {
+	if err = s.backupRepo.ClearExpired(path, cmd.String("file"), cmd.Int("save")); err != nil {
 		return errors.New(s.t.Get("Cleaning failed: %v", err))
 	}
 	fmt.Println(s.hr)
@@ -731,7 +693,7 @@ func (s *CliService) CutoffWebsite(ctx context.Context, cmd *cli.Command) error 
 	if err != nil {
 		return err
 	}
-	path := filepath.Join(app.Root, "wwwlogs")
+	path := filepath.Join(app.Root, "sites", website.Name, "log")
 	if cmd.String("path") != "" {
 		path = cmd.String("path")
 	}
@@ -741,7 +703,7 @@ func (s *CliService) CutoffWebsite(ctx context.Context, cmd *cli.Command) error 
 	fmt.Println(s.hr)
 	fmt.Println(s.t.Get("|-Rotation type: website"))
 	fmt.Println(s.t.Get("|-Rotation target: %s", website.Name))
-	if err = s.backupRepo.CutoffLog(path, filepath.Join(app.Root, "wwwlogs", website.Name+".log")); err != nil {
+	if err = s.backupRepo.CutoffLog(path, filepath.Join(app.Root, "sites", website.Name, "log", "access.log")); err != nil {
 		return err
 	}
 	fmt.Println(s.hr)
@@ -754,9 +716,9 @@ func (s *CliService) CutoffClear(ctx context.Context, cmd *cli.Command) error {
 	if cmd.String("type") != "website" {
 		return errors.New(s.t.Get("Currently only website log rotation is supported"))
 	}
-	path := filepath.Join(app.Root, "wwwlogs")
-	if cmd.String("path") != "" {
-		path = cmd.String("path")
+	path := cmd.String("path")
+	if cmd.String("path") == "" {
+		return errors.New(s.t.Get("Please specify the log rotation path"))
 	}
 
 	fmt.Println(s.hr)
@@ -765,7 +727,7 @@ func (s *CliService) CutoffClear(ctx context.Context, cmd *cli.Command) error {
 	fmt.Println(s.t.Get("|-Cleaning type: %s", cmd.String("type")))
 	fmt.Println(s.t.Get("|-Cleaning target: %s", cmd.String("file")))
 	fmt.Println(s.t.Get("|-Keep count: %d", cmd.Int("save")))
-	if err := s.backupRepo.ClearExpired(path, cmd.String("file"), int(cmd.Int("save"))); err != nil {
+	if err := s.backupRepo.ClearExpired(path, cmd.String("file"), cmd.Int("save")); err != nil {
 		return err
 	}
 	fmt.Println(s.hr)
@@ -939,18 +901,39 @@ func (s *CliService) Init(ctx context.Context, cmd *cli.Command) error {
 		return errors.New(s.t.Get("Already initialized"))
 	}
 
+	ips := make([]string, 0)
+	acme := false
+	rv6, err := tools.GetPublicIPv6()
+	if err == nil {
+		ips = append(ips, rv6)
+		acme = true
+	}
+	rv4, err := tools.GetPublicIPv4()
+	if err == nil {
+		ips = append(ips, rv4)
+		acme = true
+	}
+	ip, err := json.Marshal(ips)
+	if err != nil {
+		ip = []byte("[]")
+	}
+
 	settings := []biz.Setting{
+		{Key: biz.SettingKeyPublicIPs, Value: string(ip)},
 		{Key: biz.SettingKeyName, Value: "AcePanel"},
 		{Key: biz.SettingKeyChannel, Value: "stable"},
 		{Key: biz.SettingKeyVersion, Value: app.Version},
 		{Key: biz.SettingKeyMonitor, Value: "true"},
 		{Key: biz.SettingKeyMonitorDays, Value: "30"},
 		{Key: biz.SettingKeyBackupPath, Value: filepath.Join(app.Root, "backup")},
-		{Key: biz.SettingKeyWebsitePath, Value: filepath.Join(app.Root, "wwwroot")},
+		{Key: biz.SettingKeyWebsitePath, Value: filepath.Join(app.Root, "sites")},
+		{Key: biz.SettingKeyWebsiteTLSVersions, Value: `["TLSv1.2","TLSv1.3"]`},
+		{Key: biz.SettingKeyWebsiteCipherSuites, Value: `ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384:DHE-RSA-CHACHA20-POLY1305`},
 		{Key: biz.SettingKeyOfflineMode, Value: "false"},
 		{Key: biz.SettingKeyAutoUpdate, Value: "true"},
+		{Key: biz.SettingHiddenMenu, Value: "[]"},
 	}
-	if err := s.db.Create(&settings).Error; err != nil {
+	if err = s.db.Create(&settings).Error; err != nil {
 		return errors.New(s.t.Get("Initialization failed: %v", err))
 	}
 
@@ -964,21 +947,16 @@ func (s *CliService) Init(ctx context.Context, cmd *cli.Command) error {
 		return errors.New(s.t.Get("Initialization failed: %v", err))
 	}
 
-	if err = s.HTTPSGenerate(ctx, cmd); err != nil {
-		return errors.New(s.t.Get("Initialization failed: %v", err))
-	}
-
-	config := new(types.PanelConfig)
-	raw, err := io.Read("/usr/local/etc/panel/config.yml")
+	conf, err := config.Load()
 	if err != nil {
 		return err
 	}
-	if err = yaml.Unmarshal([]byte(raw), config); err != nil {
-		return err
-	}
 
-	config.App.Key = str.Random(32)
-	config.HTTP.Entrance = "/" + str.Random(6)
+	conf.App.Key = str.Random(32)
+	conf.App.APIEndpoint = "api.acepanel.net"
+	conf.App.DownloadEndpoint = "dl.acepanel.net"
+	conf.HTTP.Entrance = "/" + str.Random(6)
+	conf.HTTP.ACME = acme
 
 	// 随机默认端口
 checkPort:
@@ -986,7 +964,7 @@ checkPort:
 	if os.TCPPortInUse(port) {
 		goto checkPort
 	}
-	config.HTTP.Port = port
+	conf.HTTP.Port = port
 
 	// 放行端口
 	fw := firewall.NewFirewall()
@@ -998,12 +976,14 @@ checkPort:
 		Strategy:  firewall.StrategyAccept,
 	}, firewall.OperationAdd)
 
-	encoded, err := yaml.Marshal(config)
-	if err != nil {
+	if err = config.Save(conf); err != nil {
 		return err
 	}
-	if err = io.Write("/usr/local/etc/panel/config.yml", string(encoded), 0700); err != nil {
-		return err
+
+	s.conf = conf // 更新配置，否则后续签发证书不会使用ACME
+
+	if err = s.HTTPSGenerate(ctx, cmd); err != nil {
+		return errors.New(s.t.Get("Initialization failed: %v", err))
 	}
 
 	return nil

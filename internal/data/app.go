@@ -9,7 +9,6 @@ import (
 
 	"github.com/expr-lang/expr"
 	"github.com/hashicorp/go-version"
-	"github.com/knadh/koanf/v2"
 	"github.com/leonelquinteros/gotext"
 	"github.com/spf13/cast"
 	"gorm.io/gorm"
@@ -17,12 +16,14 @@ import (
 	"github.com/acepanel/panel/internal/app"
 	"github.com/acepanel/panel/internal/biz"
 	"github.com/acepanel/panel/pkg/api"
+	"github.com/acepanel/panel/pkg/config"
 	"github.com/acepanel/panel/pkg/shell"
+	"github.com/acepanel/panel/pkg/types"
 )
 
 type appRepo struct {
 	t     *gotext.Locale
-	conf  *koanf.Koanf
+	conf  *config.Config
 	db    *gorm.DB
 	log   *slog.Logger
 	cache biz.CacheRepo
@@ -30,7 +31,7 @@ type appRepo struct {
 	api   *api.API
 }
 
-func NewAppRepo(t *gotext.Locale, conf *koanf.Koanf, db *gorm.DB, log *slog.Logger, cache biz.CacheRepo, task biz.TaskRepo) biz.AppRepo {
+func NewAppRepo(t *gotext.Locale, conf *config.Config, db *gorm.DB, log *slog.Logger, cache biz.CacheRepo, task biz.TaskRepo) biz.AppRepo {
 	return &appRepo{
 		t:     t,
 		conf:  conf,
@@ -40,6 +41,32 @@ func NewAppRepo(t *gotext.Locale, conf *koanf.Koanf, db *gorm.DB, log *slog.Logg
 		task:  task,
 		api:   api.NewAPI(app.Version, app.Locale),
 	}
+}
+
+func (r *appRepo) Categories() []types.LV {
+	cached, err := r.cache.Get(biz.CacheKeyCategories)
+	if err != nil {
+		return nil
+	}
+
+	var categories api.Categories
+	if err = json.Unmarshal([]byte(cached), &categories); err != nil {
+		return nil
+	}
+
+	slices.SortFunc(categories, func(a, b *api.Category) int {
+		return a.Order - b.Order
+	})
+
+	result := make([]types.LV, 0)
+	for item := range slices.Values(categories) {
+		result = append(result, types.LV{
+			Label: item.Name,
+			Value: item.Slug,
+		})
+	}
+
+	return result
 }
 
 func (r *appRepo) All() api.Apps {
@@ -128,7 +155,6 @@ func (r *appRepo) GetHomeShow() ([]map[string]string, error) {
 			"name":        loaded.Name,
 			"description": loaded.Description,
 			"slug":        loaded.Slug,
-			"icon":        loaded.Icon,
 			"version":     item.Version,
 		})
 	}
@@ -136,14 +162,14 @@ func (r *appRepo) GetHomeShow() ([]map[string]string, error) {
 	return filtered, nil
 }
 
-func (r *appRepo) IsInstalled(query string, cond ...string) (bool, error) {
+func (r *appRepo) IsInstalled(query string, cond ...any) (bool, error) {
 	var count int64
 	if len(cond) == 0 {
 		if err := r.db.Model(&biz.App{}).Where("slug = ?", query).Count(&count).Error; err != nil {
 			return false, err
 		}
 	} else {
-		if err := r.db.Model(&biz.App{}).Where(query, cond).Count(&count).Error; err != nil {
+		if err := r.db.Model(&biz.App{}).Where(query, cond...).Count(&count).Error; err != nil {
 			return false, err
 		}
 	}
@@ -172,10 +198,10 @@ func (r *appRepo) Install(channel, slug string) error {
 			continue
 		}
 		if ch.Slug == channel {
-			if vs.GreaterThan(panel) && !r.conf.Bool("app.debug") {
+			if vs.GreaterThan(panel) && !r.conf.App.Debug {
 				return errors.New(r.t.Get("app %s requires panel version %s, current version %s", item.Name, ch.Panel, app.Version))
 			}
-			shellUrl = ch.Install
+			shellUrl = fmt.Sprintf("https://%s%s", r.conf.App.DownloadEndpoint, ch.Install)
 			shellChannel = ch.Slug
 			shellVersion = ch.Version
 			break
@@ -232,10 +258,10 @@ func (r *appRepo) UnInstall(slug string) error {
 			continue
 		}
 		if ch.Slug == installed.Channel {
-			if vs.GreaterThan(panel) && !r.conf.Bool("app.debug") {
+			if vs.GreaterThan(panel) && !r.conf.App.Debug {
 				return errors.New(r.t.Get("app %s requires panel version %s, current version %s", item.Name, ch.Panel, app.Version))
 			}
-			shellUrl = ch.Uninstall
+			shellUrl = fmt.Sprintf("https://%s%s", r.conf.App.DownloadEndpoint, ch.Uninstall)
 			shellChannel = ch.Slug
 			shellVersion = installed.Version
 			break
@@ -287,10 +313,10 @@ func (r *appRepo) Update(slug string) error {
 			continue
 		}
 		if ch.Slug == installed.Channel {
-			if vs.GreaterThan(panel) && !r.conf.Bool("app.debug") {
+			if vs.GreaterThan(panel) && !r.conf.App.Debug {
 				return errors.New(r.t.Get("app %s requires panel version %s, current version %s", item.Name, ch.Panel, app.Version))
 			}
-			shellUrl = ch.Update
+			shellUrl = fmt.Sprintf("https://%s%s", r.conf.App.DownloadEndpoint, ch.Update)
 			shellChannel = ch.Slug
 			shellVersion = ch.Version
 			break

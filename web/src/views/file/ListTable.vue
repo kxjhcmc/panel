@@ -7,7 +7,9 @@ import {
   NInput,
   NPopconfirm,
   NPopselect,
-  NTag
+  NSpin,
+  NTag,
+  useThemeVars
 } from 'naive-ui'
 import { useGettext } from 'vue3-gettext'
 
@@ -30,6 +32,7 @@ import PreviewModal from '@/views/file/PreviewModal.vue'
 import type { Marked } from '@/views/file/types'
 
 const { $gettext } = useGettext()
+const themeVars = useThemeVars()
 const sort = ref<string>('')
 const path = defineModel<string>('path', { type: String, required: true }) // 当前路径
 const keyword = defineModel<string>('keyword', { type: String, default: '' }) // 搜索关键词
@@ -48,6 +51,10 @@ const selectedRow = ref<any>()
 const dropdownX = ref(0)
 const dropdownY = ref(0)
 
+// 目录大小计算状态
+const sizeLoading = ref<Map<string, boolean>>(new Map())
+const sizeCache = ref<Map<string, string>>(new Map())
+
 const renameModal = ref(false)
 const renameModel = ref({
   source: '',
@@ -58,6 +65,24 @@ const unCompressModel = ref({
   path: '',
   file: ''
 })
+
+// 检查是否有 immutable 属性，如果有则弹出确认对话框
+const confirmImmutableOperation = (row: any, operation: string, callback: () => void) => {
+  if (row.immutable) {
+    window.$dialog.warning({
+      title: $gettext('Warning'),
+      content: $gettext(
+        '%{ name } has immutable attribute. The panel will temporarily remove the immutable attribute, perform the operation, and then restore the immutable attribute. Do you want to continue?',
+        { name: row.name }
+      ),
+      positiveText: $gettext('Continue'),
+      negativeText: $gettext('Cancel'),
+      onPositiveClick: callback
+    })
+  } else {
+    callback()
+  }
+}
 
 const options = computed<DropdownOption[]>(() => {
   if (selectedRow.value == null) return []
@@ -138,7 +163,15 @@ const columns: DataTableColumns<RowData> = [
                 return row.name
               }
             }
-          })
+          }),
+          // 如果文件有 immutable 属性，显示锁定图标
+          row.immutable
+            ? h(TheIcon, {
+                icon: 'mdi:lock',
+                size: 16,
+                style: { color: '#f0a020', marginLeft: '4px' }
+              })
+            : null
         ]
       )
     }
@@ -170,9 +203,41 @@ const columns: DataTableColumns<RowData> = [
   {
     title: $gettext('Size'),
     key: 'size',
-    minWidth: 80,
+    minWidth: 100,
     render(row: any): any {
-      return h(NTag, { type: 'info', size: 'small', bordered: false }, { default: () => row.size })
+      // 文件
+      if (!row.dir) {
+        return h(
+          NTag,
+          { type: 'info', size: 'small', bordered: false },
+          { default: () => row.size }
+        )
+      }
+      // 目录
+      const cachedSize = sizeCache.value.get(row.full)
+      if (cachedSize) {
+        return h(
+          NTag,
+          { type: 'info', size: 'small', bordered: false },
+          { default: () => cachedSize }
+        )
+      }
+      const isLoading = sizeLoading.value.get(row.full)
+      if (isLoading) {
+        return h(NSpin, { size: 16, style: { paddingTop: '4px' } })
+      }
+      return h(
+        'span',
+        {
+          style: { cursor: 'pointer', fontSize: '14px', color: themeVars.value.primaryColor },
+          onClick: (e: MouseEvent) => {
+            e.preventDefault()
+            e.stopPropagation()
+            calculateDirSize(row.full)
+          }
+        },
+        $gettext('Calculate')
+      )
     }
   },
   {
@@ -258,9 +323,11 @@ const columns: DataTableColumns<RowData> = [
                 size: 'small',
                 tertiary: true,
                 onClick: () => {
-                  renameModel.value.source = getFilename(row.name)
-                  renameModel.value.target = getFilename(row.name)
-                  renameModal.value = true
+                  confirmImmutableOperation(row, 'rename', () => {
+                    renameModel.value.source = getFilename(row.name)
+                    renameModel.value.target = getFilename(row.name)
+                    renameModal.value = true
+                  })
                 }
               },
               { default: () => $gettext('Rename') }
@@ -269,9 +336,11 @@ const columns: DataTableColumns<RowData> = [
               NPopconfirm,
               {
                 onPositiveClick: () => {
-                  useRequest(file.delete(row.full)).onComplete(() => {
-                    window.$bus.emit('file:refresh')
-                    window.$message.success($gettext('Deleted successfully'))
+                  confirmImmutableOperation(row, 'delete', () => {
+                    useRequest(file.delete(row.full)).onComplete(() => {
+                      window.$bus.emit('file:refresh')
+                      window.$message.success($gettext('Deleted successfully'))
+                    })
                   })
                 },
                 onNegativeClick: () => {}
@@ -400,6 +469,18 @@ const { loading, data, page, total, pageSize, pageCount, refresh } = usePaginati
     data: (res: any) => res.items
   }
 )
+
+// 计算目录大小
+const calculateDirSize = (dirPath: string) => {
+  sizeLoading.value.set(dirPath, true)
+  useRequest(file.size(dirPath))
+    .onSuccess(({ data }) => {
+      sizeCache.value.set(dirPath, data)
+    })
+    .onComplete(() => {
+      sizeLoading.value.set(dirPath, false)
+    })
+}
 
 const handleRename = () => {
   const source = path.value + '/' + renameModel.value.source
@@ -608,14 +689,18 @@ const handleSelect = (key: string) => {
       unCompressModal.value = true
       break
     case 'rename':
-      renameModel.value.source = getFilename(selectedRow.value.name)
-      renameModel.value.target = getFilename(selectedRow.value.name)
-      renameModal.value = true
+      confirmImmutableOperation(selectedRow.value, 'rename', () => {
+        renameModel.value.source = getFilename(selectedRow.value.name)
+        renameModel.value.target = getFilename(selectedRow.value.name)
+        renameModal.value = true
+      })
       break
     case 'delete':
-      useRequest(file.delete(selectedRow.value.full)).onSuccess(() => {
-        window.$bus.emit('file:refresh')
-        window.$message.success($gettext('Deleted successfully'))
+      confirmImmutableOperation(selectedRow.value, 'delete', () => {
+        useRequest(file.delete(selectedRow.value.full)).onSuccess(() => {
+          window.$bus.emit('file:refresh')
+          window.$message.success($gettext('Deleted successfully'))
+        })
       })
       break
   }
@@ -665,6 +750,8 @@ onMounted(() => {
       selected.value = []
       keyword.value = ''
       sub.value = false
+      sizeCache.value.clear()
+      sizeLoading.value.clear()
       nextTick(() => {
         refresh()
       })

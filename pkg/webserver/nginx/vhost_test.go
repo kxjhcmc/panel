@@ -118,6 +118,41 @@ func (s *VhostTestSuite) TestListenWithHTTP3() {
 	s.Equal("quic", got[0].Args[0])
 }
 
+func (s *VhostTestSuite) TestListenWithSSLAndQUIC() {
+	// 测试 ssl 和 quic 同时存在时，应该分成两行 listen 指令
+	// 但读取时应该合并为一个 Listen 对象
+	listens := []types.Listen{
+		{Address: "80"},
+		{Address: "443", Args: []string{"ssl", "quic"}},
+	}
+	s.NoError(s.vhost.SetListen(listens))
+
+	// 保存后验证顺序
+	s.NoError(s.vhost.Save())
+
+	// 验证生成的配置中 ssl 和 quic 是分开的
+	dump := s.vhost.parser.Dump()
+	s.Contains(dump, "listen 443 ssl;")
+	s.Contains(dump, "listen 443 quic;")
+	// 确保没有 "listen 443 ssl quic;" 这样的行
+	s.NotContains(dump, "listen 443 ssl quic;")
+
+	// 验证顺序：80 应该在 443 前面
+	idx80 := strings.Index(dump, "listen 80;")
+	idx443 := strings.Index(dump, "listen 443")
+	s.Greater(idx443, idx80, "listen 80 should come before listen 443")
+
+	// 读取时应该合并为一个 Listen 对象
+	got := s.vhost.Listen()
+	s.Len(got, 2) // 80 和 443
+	// 验证顺序
+	s.Equal("80", got[0].Address)
+	s.Equal("443", got[1].Address)
+	// 验证 443 的 args
+	s.Contains(got[1].Args, "ssl")
+	s.Contains(got[1].Args, "quic")
+}
+
 func (s *VhostTestSuite) TestSSL() {
 	s.False(s.vhost.SSL())
 	s.Nil(s.vhost.SSLConfig())
@@ -521,8 +556,9 @@ func (s *ProxyVhostTestSuite) TestUpstreams() {
 	s.Empty(s.vhost.Upstreams())
 
 	// 设置上游服务器
-	upstreams := map[string]types.Upstream{
-		"backend": {
+	upstreams := []types.Upstream{
+		{
+			Name: "backend",
 			Servers: map[string]string{
 				"127.0.0.1:8080": "weight=5",
 				"127.0.0.1:8081": "weight=3",
@@ -542,14 +578,15 @@ func (s *ProxyVhostTestSuite) TestUpstreams() {
 	// 验证可以读取回来
 	got := s.vhost.Upstreams()
 	s.Len(got, 1)
-	s.Contains(got, "backend")
-	s.Equal("least_conn", got["backend"].Algo)
-	s.Equal(32, got["backend"].Keepalive)
+	s.Equal("backend", got[0].Name)
+	s.Equal("least_conn", got[0].Algo)
+	s.Equal(32, got[0].Keepalive)
 }
 
 func (s *ProxyVhostTestSuite) TestUpstreamConfig() {
-	upstreams := map[string]types.Upstream{
-		"mybackend": {
+	upstreams := []types.Upstream{
+		{
+			Name: "mybackend",
 			Servers: map[string]string{
 				"127.0.0.1:8080": "weight=5",
 			},
@@ -576,8 +613,9 @@ func (s *ProxyVhostTestSuite) TestUpstreamConfig() {
 }
 
 func (s *ProxyVhostTestSuite) TestClearUpstreams() {
-	upstreams := map[string]types.Upstream{
-		"backend": {
+	upstreams := []types.Upstream{
+		{
+			Name:    "backend",
 			Servers: map[string]string{"127.0.0.1:8080": ""},
 		},
 	}
@@ -590,8 +628,9 @@ func (s *ProxyVhostTestSuite) TestClearUpstreams() {
 
 func (s *ProxyVhostTestSuite) TestProxyWithUpstream() {
 	// 先创建 upstream
-	upstreams := map[string]types.Upstream{
-		"api-servers": {
+	upstreams := []types.Upstream{
+		{
+			Name: "api-servers",
 			Servers: map[string]string{
 				"127.0.0.1:3000": "",
 				"127.0.0.1:3001": "",

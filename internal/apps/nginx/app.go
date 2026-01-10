@@ -55,7 +55,7 @@ func (s *App) SaveConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err = io.Write(fmt.Sprintf("%s/server/nginx/conf/nginx.conf", app.Root), req.Config, 0644); err != nil {
+	if err = io.Write(fmt.Sprintf("%s/server/nginx/conf/nginx.conf", app.Root), req.Config, 0600); err != nil {
 		service.Error(w, http.StatusInternalServerError, "%v", err)
 		return
 	}
@@ -70,11 +70,11 @@ func (s *App) SaveConfig(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *App) ErrorLog(w http.ResponseWriter, r *http.Request) {
-	service.Success(w, fmt.Sprintf("%s/%s", app.Root, "wwwlogs/nginx-error.log"))
+	service.Success(w, fmt.Sprintf("%s/%s", app.Root, "server/nginx/nginx-error.log"))
 }
 
 func (s *App) ClearErrorLog(w http.ResponseWriter, r *http.Request) {
-	if _, err := shell.Execf("cat /dev/null > %s/%s", app.Root, "wwwlogs/nginx-error.log"); err != nil {
+	if _, err := shell.Execf("cat /dev/null > %s/%s", app.Root, "server/nginx/nginx-error.log"); err != nil {
 		service.Error(w, http.StatusInternalServerError, "%v", err)
 		return
 	}

@@ -1,12 +1,14 @@
 package job
 
 import (
+	"fmt"
 	"log/slog"
 	"math/rand/v2"
 	"runtime"
 	"runtime/debug"
 	"time"
 
+	"github.com/acepanel/panel/pkg/config"
 	"github.com/hashicorp/go-version"
 	"github.com/libtnb/utils/collect"
 	"gorm.io/gorm"
@@ -19,6 +21,7 @@ import (
 // PanelTask 面板每日任务
 type PanelTask struct {
 	api         *api.API
+	conf        *config.Config
 	db          *gorm.DB
 	log         *slog.Logger
 	backupRepo  biz.BackupRepo
@@ -27,9 +30,10 @@ type PanelTask struct {
 	settingRepo biz.SettingRepo
 }
 
-func NewPanelTask(db *gorm.DB, log *slog.Logger, backup biz.BackupRepo, cache biz.CacheRepo, task biz.TaskRepo, setting biz.SettingRepo) *PanelTask {
+func NewPanelTask(conf *config.Config, db *gorm.DB, log *slog.Logger, backup biz.BackupRepo, cache biz.CacheRepo, task biz.TaskRepo, setting biz.SettingRepo) *PanelTask {
 	return &PanelTask{
 		api:         api.NewAPI(app.Version, app.Locale),
+		conf:        conf,
 		db:          db,
 		log:         log,
 		backupRepo:  backup,
@@ -73,6 +77,7 @@ func (r *PanelTask) Run() {
 
 	// 非离线模式下任务
 	if offline, err := r.settingRepo.GetBool(biz.SettingKeyOfflineMode); err == nil && !offline {
+		r.updateCategories()
 		r.updateApps()
 		r.updateRewrites()
 		if autoUpdate, err := r.settingRepo.GetBool(biz.SettingKeyAutoUpdate); err == nil && autoUpdate {
@@ -85,6 +90,15 @@ func (r *PanelTask) Run() {
 	debug.FreeOSMemory()
 
 	app.Status = app.StatusNormal
+}
+
+// 更新分类缓存
+func (r *PanelTask) updateCategories() {
+	time.AfterFunc(time.Duration(rand.IntN(300))*time.Second, func() {
+		if err := r.cacheRepo.UpdateCategories(); err != nil {
+			r.log.Warn("[PanelTask] failed to update categories cache", slog.Any("err", err))
+		}
+	})
 }
 
 // 更新商店缓存
@@ -131,7 +145,9 @@ func (r *PanelTask) updatePanel() {
 			return
 		}
 		if download := collect.First(panel.Downloads); download != nil {
-			if err = r.backupRepo.UpdatePanel(panel.Version, download.URL, download.Checksum); err != nil {
+			url := fmt.Sprintf("https://%s%s", r.conf.App.DownloadEndpoint, download.URL)
+			checksum := fmt.Sprintf("https://%s%s", r.conf.App.DownloadEndpoint, download.Checksum)
+			if err = r.backupRepo.UpdatePanel(panel.Version, url, checksum); err != nil {
 				r.log.Warn("[PanelTask] failed to update panel", slog.Any("err", err))
 				_ = r.backupRepo.FixPanel()
 			}

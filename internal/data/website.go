@@ -84,6 +84,17 @@ func (r *websiteRepo) UpdateDefaultConfig(req *request.WebsiteDefaultConfig) err
 	if err := io.Write(filepath.Join(app.Root, "server/nginx/html/stop.html"), req.Stop, 0644); err != nil {
 		return err
 	}
+	if req.NotFound != "" {
+		if err := io.Write(filepath.Join(app.Root, "server/nginx/html/404.html"), req.NotFound, 0644); err != nil {
+			return err
+		}
+	}
+	if err := r.setting.SetSlice(biz.SettingKeyWebsiteTLSVersions, req.TLSVersions); err != nil {
+		return err
+	}
+	if err := r.setting.Set(biz.SettingKeyWebsiteCipherSuites, req.CipherSuites); err != nil {
+		return err
+	}
 
 	return r.reloadWebServer()
 }
@@ -146,7 +157,7 @@ func (r *websiteRepo) Get(id uint) (*types.WebsiteSetting, error) {
 	// 证书
 	crt, _ := io.Read(filepath.Join(app.Root, "sites", website.Name, "config", "fullchain.pem"))
 	setting.SSLCert = crt
-	key, _ := io.Read(filepath.Join(app.Root, "sites", website.Name, "config", "privatekey.key"))
+	key, _ := io.Read(filepath.Join(app.Root, "sites", website.Name, "config", "private.key"))
 	setting.SSLKey = key
 	// 解析证书信息
 	if decode, err := cert.ParseCert(crt); err == nil {
@@ -237,14 +248,14 @@ func (r *websiteRepo) Create(req *request.WebsiteCreate) (*biz.Website, error) {
 	}
 
 	// 创建配置文件目录
-	if err = os.MkdirAll(filepath.Join(app.Root, "sites", req.Name, "config", "site"), 0644); err != nil {
+	if err = os.MkdirAll(filepath.Join(app.Root, "sites", req.Name, "config", "site"), 0600); err != nil {
 		return nil, err
 	}
-	if err = os.MkdirAll(filepath.Join(app.Root, "sites", req.Name, "config", "shared"), 0644); err != nil {
+	if err = os.MkdirAll(filepath.Join(app.Root, "sites", req.Name, "config", "shared"), 0600); err != nil {
 		return nil, err
 	}
 	// 创建日志目录
-	if err = os.MkdirAll(filepath.Join(app.Root, "sites", req.Name, "log"), 0644); err != nil {
+	if err = os.MkdirAll(filepath.Join(app.Root, "sites", req.Name, "log"), 0755); err != nil {
 		return nil, err
 	}
 
@@ -342,17 +353,22 @@ location ~ ^/(\.user.ini|\.htaccess|\.git|\.svn|\.env) {
 		return nil, err
 	}
 	var notFound []byte
-	switch app.Locale {
-	case "zh_CN":
-		notFound, err = embed.WebsiteFS.ReadFile(filepath.Join("website", "404_zh_CN.html"))
-	case "zh_TW":
-		notFound, err = embed.WebsiteFS.ReadFile(filepath.Join("website", "404_zh_TW.html"))
-	default:
-		notFound, err = embed.WebsiteFS.ReadFile(filepath.Join("website", "404.html"))
+
+	// 如果存在自定义 404 页面，则使用自定义的
+	// TODO 需要兼容 Apache
+	if io.Exists(filepath.Join(app.Root, "server/nginx/html/404.html")) {
+		notFound, _ = os.ReadFile(filepath.Join(app.Root, "server/nginx/html/404.html"))
+	} else {
+		switch app.Locale {
+		case "zh_CN":
+			notFound, _ = embed.WebsiteFS.ReadFile(filepath.Join("website", "404_zh_CN.html"))
+		case "zh_TW":
+			notFound, _ = embed.WebsiteFS.ReadFile(filepath.Join("website", "404_zh_TW.html"))
+		default:
+			notFound, _ = embed.WebsiteFS.ReadFile(filepath.Join("website", "404.html"))
+		}
 	}
-	if err != nil {
-		return nil, errors.New(r.t.Get("failed to get 404 template file: %v", err))
-	}
+
 	if err = io.Write(filepath.Join(req.Path, "404.html"), string(notFound), 0644); err != nil {
 		return nil, err
 	}
@@ -365,18 +381,31 @@ location ~ ^/(\.user.ini|\.htaccess|\.git|\.svn|\.env) {
 		return nil, err
 	}
 
-	if err = io.Write(filepath.Join(app.Root, "sites", req.Name, "config", "fullchain.pem"), "", 0644); err != nil {
+	if err = io.Write(filepath.Join(app.Root, "sites", req.Name, "config", "fullchain.pem"), "", 0600); err != nil {
 		return nil, err
 	}
-	if err = io.Write(filepath.Join(app.Root, "sites", req.Name, "config", "privatekey.key"), "", 0644); err != nil {
+	if err = io.Write(filepath.Join(app.Root, "sites", req.Name, "config", "private.key"), "", 0600); err != nil {
 		return nil, err
 	}
 
 	// 设置目录权限
+	// sites/site_name 0755 root
+	// sites/site_name/config 0600 root
+	// sites/site_name/log 0701 root
+	// sites/site_name/public 0755 www
+	if err = io.Chmod(filepath.Join(app.Root, "sites", req.Name), 0755); err != nil {
+		return nil, err
+	}
 	if err = io.Chmod(req.Path, 0755); err != nil {
 		return nil, err
 	}
 	if err = io.Chown(req.Path, "www", "www"); err != nil {
+		return nil, err
+	}
+	if err = io.Chmod(filepath.Join(app.Root, "sites", req.Name, "log"), 0701); err != nil {
+		return nil, err
+	}
+	if err = io.Chmod(filepath.Join(app.Root, "sites", req.Name, "config"), 0600); err != nil {
 		return nil, err
 	}
 
@@ -465,11 +494,11 @@ func (r *websiteRepo) Update(req *request.WebsiteUpdate) error {
 	website.Path = req.Path
 	// SSL
 	certPath := filepath.Join(app.Root, "sites", website.Name, "config", "fullchain.pem")
-	keyPath := filepath.Join(app.Root, "sites", website.Name, "config", "privatekey.key")
-	if err = io.Write(certPath, req.SSLCert, 0644); err != nil {
+	keyPath := filepath.Join(app.Root, "sites", website.Name, "config", "private.key")
+	if err = io.Write(certPath, req.SSLCert, 0600); err != nil {
 		return err
 	}
-	if err = io.Write(keyPath, req.SSLKey, 0644); err != nil {
+	if err = io.Write(keyPath, req.SSLKey, 0600); err != nil {
 		return err
 	}
 	website.SSL = req.SSL
@@ -487,11 +516,13 @@ func (r *websiteRepo) Update(req *request.WebsiteUpdate) error {
 				break
 			}
 		}
+		defaultTLSVersions, _ := r.setting.GetSlice(biz.SettingKeyWebsiteTLSVersions)
+		defaultCipherSuites, _ := r.setting.Get(biz.SettingKeyWebsiteCipherSuites)
 		if err = vhost.SetSSLConfig(&webservertypes.SSLConfig{
 			Cert:         certPath,
 			Key:          keyPath,
-			Protocols:    lo.If(len(req.SSLProtocols) > 0, req.SSLProtocols).Else([]string{"TLSv1.2", "TLSv1.3"}),
-			Ciphers:      lo.If(req.SSLCiphers != "", req.SSLCiphers).Else("HIGH:!aNULL:!MD5"),
+			Protocols:    lo.If(len(req.SSLProtocols) > 0, req.SSLProtocols).Else(defaultTLSVersions),
+			Ciphers:      lo.If(req.SSLCiphers != "", req.SSLCiphers).Else(defaultCipherSuites),
 			HSTS:         req.HSTS,
 			OCSP:         req.OCSP,
 			HTTPRedirect: req.HTTPRedirect,
@@ -595,7 +626,7 @@ func (r *websiteRepo) ClearLog(id uint) error {
 		return err
 	}
 
-	_, err := shell.Execf(`cat /dev/null > %s/wwwlogs/%s.log`, app.Root, website.Name)
+	_, err := shell.Execf(`cat /dev/null > %s/sites/%s/log/access.log`, app.Root, website.Name)
 	return err
 }
 
@@ -647,17 +678,37 @@ func (r *websiteRepo) ResetConfig(id uint) error {
 	if err = vhost.Save(); err != nil {
 		return err
 	}
-	if err = io.Write(filepath.Join(app.Root, "sites", website.Name, "config", "fullchain.pem"), "", 0644); err != nil {
+	if err = io.Write(filepath.Join(app.Root, "sites", website.Name, "config", "fullchain.pem"), "", 0600); err != nil {
 		return err
 	}
-	if err = io.Write(filepath.Join(app.Root, "sites", website.Name, "config", "privatekey.key"), "", 0644); err != nil {
+	if err = io.Write(filepath.Join(app.Root, "sites", website.Name, "config", "private.key"), "", 0600); err != nil {
 		return err
 	}
 	// PHP 网站默认伪静态
 	if website.Type == biz.WebsiteTypePHP {
-		if err = io.Write(filepath.Join(app.Root, "sites", website.Name, "config", "site", "010-rewrite.conf"), "", 0644); err != nil {
+		if err = io.Write(filepath.Join(app.Root, "sites", website.Name, "config", "site", "010-rewrite.conf"), "", 0600); err != nil {
 			return err
 		}
+	}
+
+	// 设置目录权限
+	if err = io.Chown(website.Path, "root", "root"); err != nil {
+		return err
+	}
+	if err = io.Chmod(filepath.Join(app.Root, "sites", website.Name), 0755); err != nil {
+		return err
+	}
+	if err = io.Chmod(website.Path, 0755); err != nil {
+		return err
+	}
+	if err = io.Chown(website.Path, "www", "www"); err != nil {
+		return err
+	}
+	if err = io.Chmod(filepath.Join(app.Root, "sites", website.Name, "log"), 0701); err != nil {
+		return err
+	}
+	if err = io.Chmod(filepath.Join(app.Root, "sites", website.Name, "config"), 0600); err != nil {
+		return err
 	}
 
 	website.Status = true
@@ -708,11 +759,11 @@ func (r *websiteRepo) UpdateCert(req *request.WebsiteUpdateCert) error {
 	}
 
 	certPath := filepath.Join(app.Root, "sites", website.Name, "config", "fullchain.pem")
-	keyPath := filepath.Join(app.Root, "sites", website.Name, "config", "privatekey.key")
-	if err := io.Write(certPath, req.Cert, 0644); err != nil {
+	keyPath := filepath.Join(app.Root, "sites", website.Name, "config", "private.key")
+	if err := io.Write(certPath, req.Cert, 0600); err != nil {
 		return err
 	}
-	if err := io.Write(keyPath, req.Key, 0644); err != nil {
+	if err := io.Write(keyPath, req.Key, 0600); err != nil {
 		return err
 	}
 
@@ -741,11 +792,11 @@ func (r *websiteRepo) ObtainCert(ctx context.Context, id uint) error {
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			newCert, err = r.cert.Create(&request.CertCreate{
-				Type:      string(acme.KeyEC256),
-				Domains:   website.Domains,
-				AutoRenew: true,
-				AccountID: account.ID,
-				WebsiteID: website.ID,
+				Type:        string(acme.KeyEC256),
+				Domains:     website.Domains,
+				AutoRenewal: true,
+				AccountID:   account.ID,
+				WebsiteID:   website.ID,
 			})
 			if err != nil {
 				return err
@@ -768,7 +819,7 @@ func (r *websiteRepo) ObtainCert(ctx context.Context, id uint) error {
 }
 
 func (r *websiteRepo) getVhost(website *biz.Website) (webservertypes.Vhost, error) {
-	webServer, err := r.setting.Get(biz.SettingKeyWebServer)
+	webServer, err := r.setting.Get(biz.SettingKeyWebserver)
 	if err != nil {
 		return nil, err
 	}
@@ -800,7 +851,7 @@ func (r *websiteRepo) getPHPVersion(name string) uint {
 }
 
 func (r *websiteRepo) reloadWebServer() error {
-	webServer, err := r.setting.Get(biz.SettingKeyWebServer)
+	webServer, err := r.setting.Get(biz.SettingKeyWebserver, "unknown")
 	if err != nil {
 		return err
 	}
@@ -815,6 +866,9 @@ func (r *websiteRepo) reloadWebServer() error {
 			_, err = shell.Execf("apachectl configtest")
 			return err
 		}
+	default:
+		return errors.New(r.t.Get("unsupported web server: %s", webServer))
 	}
+
 	return nil
 }

@@ -76,6 +76,7 @@ func parseProxyFile(filePath string) (*types.Proxy, error) {
 
 	proxy := &types.Proxy{
 		Location: strings.TrimSpace(matches[1]),
+		Resolver: []string{},
 		Replaces: make(map[string]string),
 	}
 
@@ -121,7 +122,6 @@ func parseProxyFile(filePath string) (*types.Proxy, error) {
 	if rm := resolverPattern.FindStringSubmatch(blockContent); rm != nil {
 		parts := strings.Fields(rm[1])
 		proxy.Resolver = parts
-		proxy.AutoRefresh = true // 有 resolver 通常意味着需要自动刷新
 	}
 
 	// 解析 resolver_timeout
@@ -167,7 +167,7 @@ func writeProxyFiles(siteDir string, proxies []types.Proxy) error {
 		filePath := filepath.Join(siteDir, fileName)
 
 		content := generateProxyConfig(proxy)
-		if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
+		if err := os.WriteFile(filePath, []byte(content), 0600); err != nil {
 			return fmt.Errorf("failed to write proxy config: %w", err)
 		}
 	}
@@ -218,18 +218,15 @@ func generateProxyConfig(proxy types.Proxy) string {
 
 	sb.WriteString(fmt.Sprintf("location %s {\n", location))
 
-	// resolver 配置（如果启用自动刷新）
-	if proxy.AutoRefresh && len(proxy.Resolver) > 0 {
+	// resolver 配置
+	if len(proxy.Resolver) > 0 {
 		sb.WriteString(fmt.Sprintf("    resolver %s;\n", strings.Join(proxy.Resolver, " ")))
 		if proxy.ResolverTimeout > 0 {
 			sb.WriteString(fmt.Sprintf("    resolver_timeout %ds;\n", int(proxy.ResolverTimeout.Seconds())))
 		}
-		// 使用变量实现动态解析
-		sb.WriteString(fmt.Sprintf("    set $backend \"%s\";\n", proxy.Pass))
-		sb.WriteString("    proxy_pass $backend;\n")
-	} else {
-		sb.WriteString(fmt.Sprintf("    proxy_pass %s;\n", proxy.Pass))
 	}
+
+	sb.WriteString(fmt.Sprintf("    proxy_pass %s;\n", proxy.Pass))
 
 	// Host 头
 	if proxy.Host != "" {
@@ -244,8 +241,10 @@ func generateProxyConfig(proxy types.Proxy) string {
 	sb.WriteString("    proxy_set_header X-Forwarded-Proto $scheme;\n")
 
 	// SNI 配置
-	if proxy.SNI != "" {
+	if strings.HasPrefix(proxy.Pass, "https") {
 		sb.WriteString("    proxy_ssl_server_name on;\n")
+	}
+	if proxy.SNI != "" {
 		sb.WriteString(fmt.Sprintf("    proxy_ssl_name %s;\n", proxy.SNI))
 	}
 

@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"strings"
+	"time"
 )
 
 func readOSRelease() map[string]string {
@@ -13,9 +14,7 @@ func readOSRelease() map[string]string {
 	if err != nil {
 		return nil
 	}
-	defer func(file *os.File) {
-		_ = file.Close()
-	}(file)
+	defer func(file *os.File) { _ = file.Close() }(file)
 
 	osRelease := make(map[string]string)
 	scanner := bufio.NewScanner(file)
@@ -64,15 +63,66 @@ func IsUbuntu() bool {
 	return id == "ubuntu" || strings.Contains(idLike, "ubuntu")
 }
 
+// IsEOL 判断系统是否已到达生命周期终点
+func IsEOL() bool {
+	eolTimeTable := map[string]map[string]time.Time{
+		"rhel": {
+			"9":  time.Date(2032, 5, 31, 0, 0, 0, 0, time.UTC),
+			"10": time.Date(2035, 5, 31, 0, 0, 0, 0, time.UTC),
+		},
+		"debian": {
+			"12": time.Date(2028, 6, 30, 0, 0, 0, 0, time.UTC),
+			"13": time.Date(2030, 6, 30, 0, 0, 0, 0, time.UTC),
+		},
+		"ubuntu": {
+			"22.04": time.Date(2027, 4, 1, 0, 0, 0, 0, time.UTC),
+			"24.04": time.Date(2029, 5, 31, 0, 0, 0, 0, time.UTC),
+		},
+	}
+
+	osRelease := readOSRelease()
+
+	if IsRHEL() {
+		version, ok := osRelease["VERSION_ID"]
+		if !ok {
+			return false
+		}
+		majorVersion := strings.Split(version, ".")[0]
+		if eol, ok := eolTimeTable["rhel"][majorVersion]; ok {
+			return time.Now().After(eol)
+		}
+	}
+	if IsUbuntu() {
+		version, ok := osRelease["VERSION_ID"]
+		if !ok {
+			return false
+		}
+		majorVersion := strings.Join(strings.Split(version, ".")[:2], ".")
+		if eol, ok := eolTimeTable["ubuntu"][majorVersion]; ok {
+			return time.Now().After(eol)
+		}
+	}
+	if IsDebian() {
+		version, ok := osRelease["VERSION_ID"]
+		if !ok {
+			return false
+		}
+		majorVersion := strings.Split(version, ".")[0]
+		if eol, ok := eolTimeTable["debian"][majorVersion]; ok {
+			return time.Now().After(eol)
+		}
+	}
+
+	return false
+}
+
 func TCPPortInUse(port uint) bool {
 	addr := fmt.Sprintf(":%d", port)
 	conn, err := net.Listen("tcp", addr)
 	if err != nil {
 		return true
 	}
-	defer func(conn net.Listener) {
-		_ = conn.Close()
-	}(conn)
+	defer func(conn net.Listener) { _ = conn.Close() }(conn)
 	return false
 }
 
@@ -82,8 +132,6 @@ func UDPPortInUse(port uint) bool {
 	if err != nil {
 		return true
 	}
-	defer func(conn net.PacketConn) {
-		_ = conn.Close()
-	}(conn)
+	defer func(conn net.PacketConn) { _ = conn.Close() }(conn)
 	return false
 }

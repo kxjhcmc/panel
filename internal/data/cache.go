@@ -50,6 +50,20 @@ func (r *cacheRepo) Set(key biz.CacheKey, value string) error {
 	return r.db.Save(cache).Error
 }
 
+func (r *cacheRepo) UpdateCategories() error {
+	categories, err := r.api.Categories()
+	if err != nil {
+		return err
+	}
+
+	encoded, err := json.Marshal(categories)
+	if err != nil {
+		return err
+	}
+
+	return r.Set(biz.CacheKeyCategories, string(encoded))
+}
+
 func (r *cacheRepo) UpdateApps() error {
 	remote, err := r.api.Apps()
 	if err != nil {
@@ -67,6 +81,20 @@ func (r *cacheRepo) UpdateApps() error {
 	}
 
 	return r.Set(biz.CacheKeyApps, string(encoded))
+}
+
+func (r *cacheRepo) UpdateEnvironments() error {
+	environments, err := r.api.Environments()
+	if err != nil {
+		return err
+	}
+
+	encoded, err := json.Marshal(environments)
+	if err != nil {
+		return err
+	}
+
+	return r.Set(biz.CacheKeyEnvironment, string(encoded))
 }
 
 func (r *cacheRepo) UpdateRewrites() error {

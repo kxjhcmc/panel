@@ -85,7 +85,7 @@ func CurrentInfo(nets, disks []string) types.CurrentInfo {
 
 // RestartPanel 重启面板
 func RestartPanel() {
-	_ = shell.ExecfAsync("sleep 1 && systemctl restart panel")
+	_ = shell.ExecfAsync("sleep 1 && systemctl restart acepanel")
 }
 
 // IsChina 是否中国大陆
@@ -97,7 +97,7 @@ func IsChina() bool {
 	client.SetRetryCount(3)
 	client.SetTLSClientConfig(&tls.Config{InsecureSkipVerify: true})
 
-	resp, err := client.R().Get("https://www.qualcomm.cn/cdn-cgi/trace")
+	resp, err := client.R().Get("https://perfops.cloudflareperf.com/cdn-cgi/trace")
 	if err != nil || !resp.IsSuccess() {
 		return false
 	}
@@ -123,7 +123,7 @@ func GetPublicIPv4() (string, error) {
 		},
 	})
 
-	resp, err := client.R().Get("https://www.qualcomm.cn/cdn-cgi/trace")
+	resp, err := client.R().Get("https://perfops.cloudflareperf.com/cdn-cgi/trace")
 	if err != nil || !resp.IsSuccess() {
 		return "", errors.New("failed to get public ipv4 address")
 	}
@@ -145,7 +145,7 @@ func GetPublicIPv6() (string, error) {
 		},
 	})
 
-	resp, err := client.R().Get("https://www.qualcomm.cn/cdn-cgi/trace")
+	resp, err := client.R().Get("https://perfops.cloudflareperf.com/cdn-cgi/trace")
 	if err != nil || !resp.IsSuccess() {
 		return "", errors.New("failed to get public ipv6 address")
 	}
@@ -159,9 +159,7 @@ func GetLocalIPv4() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer func(conn stdnet.Conn) {
-		_ = conn.Close()
-	}(conn)
+	defer func(conn stdnet.Conn) { _ = conn.Close() }(conn)
 
 	local := conn.LocalAddr().(*stdnet.UDPAddr)
 	return local.IP.String(), nil
@@ -173,9 +171,7 @@ func GetLocalIPv6() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer func(conn stdnet.Conn) {
-		_ = conn.Close()
-	}(conn)
+	defer func(conn stdnet.Conn) { _ = conn.Close() }(conn)
 
 	local := conn.LocalAddr().(*stdnet.UDPAddr)
 	return local.IP.String(), nil
