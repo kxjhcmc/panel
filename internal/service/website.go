@@ -35,9 +35,20 @@ func (s *WebsiteService) GetRewrites(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *WebsiteService) GetDefaultConfig(w http.ResponseWriter, r *http.Request) {
-	index, _ := io.Read(filepath.Join(app.Root, "server/nginx/html/index.html"))
-	stop, _ := io.Read(filepath.Join(app.Root, "server/nginx/html/stop.html"))
-	notFound, _ := io.Read(filepath.Join(app.Root, "server/nginx/html/404.html"))
+	webServer, _ := s.settingRepo.Get(biz.SettingKeyWebserver)
+	var htmlPath string
+	switch webServer {
+	case "nginx":
+		htmlPath = filepath.Join(app.Root, "server/nginx/html")
+	case "apache":
+		htmlPath = filepath.Join(app.Root, "server/apache/htdocs")
+	default:
+		htmlPath = filepath.Join(app.Root, "server/nginx/html")
+	}
+
+	index, _ := io.Read(filepath.Join(htmlPath, "index.html"))
+	stop, _ := io.Read(filepath.Join(htmlPath, "stop.html"))
+	notFound, _ := io.Read(filepath.Join(htmlPath, "404.html"))
 	tlsVersions, _ := s.settingRepo.GetSlice(biz.SettingKeyWebsiteTLSVersions)
 	cipherSuites, _ := s.settingRepo.Get(biz.SettingKeyWebsiteCipherSuites)
 
@@ -113,7 +124,7 @@ func (s *WebsiteService) Create(w http.ResponseWriter, r *http.Request) {
 		req.Path = filepath.Join(req.Path, req.Name, "public")
 	}
 
-	if _, err = s.websiteRepo.Create(req); err != nil {
+	if _, err = s.websiteRepo.Create(r.Context(), req); err != nil {
 		Error(w, http.StatusInternalServerError, "%v", err)
 		return
 	}
@@ -144,7 +155,7 @@ func (s *WebsiteService) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err = s.websiteRepo.Update(req); err != nil {
+	if err = s.websiteRepo.Update(r.Context(), req); err != nil {
 		Error(w, http.StatusInternalServerError, "%v", err)
 		return
 	}
@@ -159,7 +170,7 @@ func (s *WebsiteService) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err = s.websiteRepo.Delete(req); err != nil {
+	if err = s.websiteRepo.Delete(r.Context(), req); err != nil {
 		Error(w, http.StatusInternalServerError, "%v", err)
 		return
 	}

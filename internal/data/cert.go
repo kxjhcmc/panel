@@ -27,17 +27,19 @@ import (
 )
 
 type certRepo struct {
-	t      *gotext.Locale
-	db     *gorm.DB
-	log    *slog.Logger
-	client *acme.Client
+	t           *gotext.Locale
+	db          *gorm.DB
+	log         *slog.Logger
+	settingRepo biz.SettingRepo
+	client      *acme.Client
 }
 
-func NewCertRepo(t *gotext.Locale, db *gorm.DB, log *slog.Logger) biz.CertRepo {
+func NewCertRepo(t *gotext.Locale, db *gorm.DB, log *slog.Logger, settingRepo biz.SettingRepo) biz.CertRepo {
 	return &certRepo{
-		t:   t,
-		db:  db,
-		log: log,
+		t:           t,
+		db:          db,
+		log:         log,
+		settingRepo: settingRepo,
 	}
 }
 
@@ -89,7 +91,7 @@ func (r *certRepo) GetByWebsite(WebsiteID uint) (*biz.Cert, error) {
 	return cert, err
 }
 
-func (r *certRepo) Upload(req *request.CertUpload) (*biz.Cert, error) {
+func (r *certRepo) Upload(ctx context.Context, req *request.CertUpload) (*biz.Cert, error) {
 	info, err := pkgcert.ParseCert(req.Cert)
 	if err != nil {
 		return nil, errors.New(r.t.Get("failed to parse certificate: %v", err))
@@ -108,10 +110,13 @@ func (r *certRepo) Upload(req *request.CertUpload) (*biz.Cert, error) {
 		return nil, err
 	}
 
+	// 记录日志
+	r.log.Info("cert uploaded", slog.String("type", biz.OperationTypeCert), slog.Uint64("operator_id", getOperatorID(ctx)), slog.Uint64("id", uint64(cert.ID)))
+
 	return cert, nil
 }
 
-func (r *certRepo) Create(req *request.CertCreate) (*biz.Cert, error) {
+func (r *certRepo) Create(ctx context.Context, req *request.CertCreate) (*biz.Cert, error) {
 	cert := &biz.Cert{
 		AccountID:   req.AccountID,
 		WebsiteID:   req.WebsiteID,
@@ -123,10 +128,14 @@ func (r *certRepo) Create(req *request.CertCreate) (*biz.Cert, error) {
 	if err := r.db.Create(cert).Error; err != nil {
 		return nil, err
 	}
+
+	// 记录日志
+	r.log.Info("cert created", slog.String("type", biz.OperationTypeCert), slog.Uint64("operator_id", getOperatorID(ctx)), slog.Uint64("id", uint64(cert.ID)), slog.String("cert_type", req.Type))
+
 	return cert, nil
 }
 
-func (r *certRepo) Update(req *request.CertUpdate) error {
+func (r *certRepo) Update(ctx context.Context, req *request.CertUpdate) error {
 	info, err := pkgcert.ParseCert(req.Cert)
 	if err == nil && req.Type == "upload" {
 		req.Domains = info.DNSNames
@@ -135,7 +144,7 @@ func (r *certRepo) Update(req *request.CertUpdate) error {
 		return errors.New(r.t.Get("upload certificate cannot be set to auto renewal"))
 	}
 
-	return r.db.Model(&biz.Cert{}).Where("id = ?", req.ID).Select("*").Updates(&biz.Cert{
+	if err = r.db.Model(&biz.Cert{}).Where("id = ?", req.ID).Select("*").Updates(&biz.Cert{
 		ID:          req.ID,
 		AccountID:   req.AccountID,
 		WebsiteID:   req.WebsiteID,
@@ -146,11 +155,25 @@ func (r *certRepo) Update(req *request.CertUpdate) error {
 		Script:      req.Script,
 		Domains:     req.Domains,
 		AutoRenewal: req.AutoRenewal,
-	}).Error
+	}).Error; err != nil {
+		return err
+	}
+
+	// 记录日志
+	r.log.Info("cert updated", slog.String("type", biz.OperationTypeCert), slog.Uint64("operator_id", getOperatorID(ctx)), slog.Uint64("id", uint64(req.ID)))
+
+	return nil
 }
 
-func (r *certRepo) Delete(id uint) error {
-	return r.db.Model(&biz.Cert{}).Where("id = ?", id).Delete(&biz.Cert{}).Error
+func (r *certRepo) Delete(ctx context.Context, id uint) error {
+	if err := r.db.Model(&biz.Cert{}).Where("id = ?", id).Delete(&biz.Cert{}).Error; err != nil {
+		return err
+	}
+
+	// 记录日志
+	r.log.Info("cert deleted", slog.String("type", biz.OperationTypeCert), slog.Uint64("operator_id", getOperatorID(ctx)), slog.Uint64("id", uint64(id)))
+
+	return nil
 }
 
 func (r *certRepo) ObtainAuto(id uint) (*acme.Certificate, error) {
@@ -164,6 +187,8 @@ func (r *certRepo) ObtainAuto(id uint) (*acme.Certificate, error) {
 		return nil, err
 	}
 
+	webServer, _ := r.settingRepo.Get(biz.SettingKeyWebserver)
+
 	if cert.DNS != nil {
 		client.UseDns(cert.DNS.Type, cert.DNS.Data)
 	} else {
@@ -176,7 +201,7 @@ func (r *certRepo) ObtainAuto(id uint) (*acme.Certificate, error) {
 				}
 			}
 			conf := fmt.Sprintf("%s/sites/%s/config/site/001-acme.conf", app.Root, cert.Website.Name)
-			client.UseHTTP(conf)
+			client.UseHTTP(conf, webServer)
 		}
 	}
 
@@ -243,7 +268,13 @@ func (r *certRepo) ObtainPanel(account *biz.CertAccount, ips []string) ([]byte, 
 	if err != nil {
 		return nil, nil, err
 	}
-	client.UsePanel(ips, filepath.Join(app.Root, "server/nginx/conf/acme.conf"))
+
+	webServer, _ := r.settingRepo.Get(biz.SettingKeyWebserver)
+	confPath := filepath.Join(app.Root, "server/nginx/conf/acme.conf")
+	if webServer == "apache" {
+		confPath = filepath.Join(app.Root, "server/apache/conf/extra/acme.conf")
+	}
+	client.UsePanel(ips, confPath, webServer)
 
 	ssl, err := client.ObtainIPCertificate(context.Background(), ips, acme.KeyEC256)
 	if err != nil {
@@ -259,7 +290,7 @@ func (r *certRepo) ObtainSelfSigned(id uint) error {
 		return err
 	}
 
-	crt, key, err := pkgcert.GenerateSelfSigned(cert.Domains)
+	crt, key, err := pkgcert.GenerateSelfSignedRSA(cert.Domains)
 	if err != nil {
 		return err
 	}
@@ -296,6 +327,8 @@ func (r *certRepo) Renew(id uint) (*acme.Certificate, error) {
 		return nil, errors.New(r.t.Get("this certificate has not been obtained successfully and cannot be renewed"))
 	}
 
+	webServer, _ := r.settingRepo.Get(biz.SettingKeyWebserver)
+
 	if cert.DNS != nil {
 		client.UseDns(cert.DNS.Type, cert.DNS.Data)
 	} else {
@@ -308,7 +341,7 @@ func (r *certRepo) Renew(id uint) (*acme.Certificate, error) {
 				}
 			}
 			conf := fmt.Sprintf("%s/sites/%s/config/site/001-acme.conf", app.Root, cert.Website.Name)
-			client.UseHTTP(conf)
+			client.UseHTTP(conf, webServer)
 		}
 	}
 
@@ -410,9 +443,18 @@ func (r *certRepo) Deploy(ID, WebsiteID uint) error {
 	if err = io.Write(fmt.Sprintf("%s/sites/%s/config/private.key", app.Root, website.Name), cert.Key, 0600); err != nil {
 		return err
 	}
-	if err = systemctl.Reload("nginx"); err != nil {
-		_, err = shell.Execf("nginx -t")
-		return err
+
+	webServer, _ := r.settingRepo.Get(biz.SettingKeyWebserver)
+	if webServer == "apache" {
+		if err = systemctl.Reload("apache"); err != nil {
+			_, err = shell.Execf("apachectl -t")
+			return err
+		}
+	} else {
+		if err = systemctl.Reload("nginx"); err != nil {
+			_, err = shell.Execf("nginx -t")
+			return err
+		}
 	}
 
 	return nil

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/moby/moby/api/types/registry"
 	"github.com/moby/moby/client"
 
@@ -58,6 +59,25 @@ func (r *containerImageRepo) List() ([]types.ContainerImage, error) {
 	return images, nil
 }
 
+// Exist 检查镜像是否存在
+func (r *containerImageRepo) Exist(name string) (bool, error) {
+	apiClient, err := getDockerClient("/var/run/docker.sock")
+	if err != nil {
+		return false, err
+	}
+	defer func(apiClient *client.Client) { _ = apiClient.Close() }(apiClient)
+
+	_, err = apiClient.ImageInspect(context.Background(), name)
+	if err != nil {
+		if cerrdefs.IsNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+
+	return true, nil
+}
+
 // Pull 拉取镜像
 func (r *containerImageRepo) Pull(req *request.ContainerImagePull) error {
 	apiClient, err := getDockerClient("/var/run/docker.sock")
@@ -86,7 +106,6 @@ func (r *containerImageRepo) Pull(req *request.ContainerImagePull) error {
 	}
 	defer func(out client.ImagePullResponse) { _ = out.Close() }(out)
 
-	// TODO 实现流式显示拉取进度
 	return out.Wait(context.Background())
 }
 

@@ -22,6 +22,7 @@ type Http struct {
 	home             *service.HomeService
 	task             *service.TaskService
 	website          *service.WebsiteService
+	project          *service.ProjectService
 	database         *service.DatabaseService
 	databaseServer   *service.DatabaseServerService
 	databaseUser     *service.DatabaseUserService
@@ -43,6 +44,7 @@ type Http struct {
 	containerImage   *service.ContainerImageService
 	containerVolume  *service.ContainerVolumeService
 	file             *service.FileService
+	log              *service.LogService
 	monitor          *service.MonitorService
 	setting          *service.SettingService
 	systemctl        *service.SystemctlService
@@ -50,6 +52,7 @@ type Http struct {
 	toolboxBenchmark *service.ToolboxBenchmarkService
 	toolboxSSH       *service.ToolboxSSHService
 	toolboxDisk      *service.ToolboxDiskService
+	toolboxLog       *service.ToolboxLogService
 	webhook          *service.WebHookService
 	apps             *apploader.Loader
 }
@@ -61,6 +64,7 @@ func NewHttp(
 	home *service.HomeService,
 	task *service.TaskService,
 	website *service.WebsiteService,
+	project *service.ProjectService,
 	database *service.DatabaseService,
 	databaseServer *service.DatabaseServerService,
 	databaseUser *service.DatabaseUserService,
@@ -82,6 +86,7 @@ func NewHttp(
 	containerImage *service.ContainerImageService,
 	containerVolume *service.ContainerVolumeService,
 	file *service.FileService,
+	log *service.LogService,
 	monitor *service.MonitorService,
 	setting *service.SettingService,
 	systemctl *service.SystemctlService,
@@ -89,6 +94,7 @@ func NewHttp(
 	toolboxBenchmark *service.ToolboxBenchmarkService,
 	toolboxSSH *service.ToolboxSSHService,
 	toolboxDisk *service.ToolboxDiskService,
+	toolboxLog *service.ToolboxLogService,
 	webhook *service.WebHookService,
 	apps *apploader.Loader,
 ) *Http {
@@ -99,6 +105,7 @@ func NewHttp(
 		home:             home,
 		task:             task,
 		website:          website,
+		project:          project,
 		database:         database,
 		databaseServer:   databaseServer,
 		databaseUser:     databaseUser,
@@ -120,6 +127,7 @@ func NewHttp(
 		containerImage:   containerImage,
 		containerVolume:  containerVolume,
 		file:             file,
+		log:              log,
 		monitor:          monitor,
 		setting:          setting,
 		systemctl:        systemctl,
@@ -127,6 +135,7 @@ func NewHttp(
 		toolboxBenchmark: toolboxBenchmark,
 		toolboxSSH:       toolboxSSH,
 		toolboxDisk:      toolboxDisk,
+		toolboxLog:       toolboxLog,
 		webhook:          webhook,
 		apps:             apps,
 	}
@@ -197,6 +206,14 @@ func (route *Http) Register(r *chi.Mux) {
 			r.Post("/{id}/reset_config", route.website.ResetConfig)
 			r.Post("/{id}/status", route.website.UpdateStatus)
 			r.Post("/{id}/obtain_cert", route.website.ObtainCert)
+		})
+
+		r.Route("/project", func(r chi.Router) {
+			r.Get("/", route.project.List)
+			r.Post("/", route.project.Create)
+			r.Get("/{id}", route.project.Get)
+			r.Put("/{id}", route.project.Update)
+			r.Delete("/{id}", route.project.Delete)
 		})
 
 		r.Route("/database", func(r chi.Router) {
@@ -274,6 +291,7 @@ func (route *Http) Register(r *chi.Mux) {
 			r.Post("/uninstall", route.app.Uninstall)
 			r.Post("/update", route.app.Update)
 			r.Post("/update_show", route.app.UpdateShow)
+			r.Post("/update_order", route.app.UpdateOrder)
 			r.Get("/is_installed", route.app.IsInstalled)
 			r.Get("/update_cache", route.app.UpdateCache)
 		})
@@ -287,6 +305,7 @@ func (route *Http) Register(r *chi.Mux) {
 			r.Get("/is_installed", route.environment.IsInstalled)
 			r.Route("/php", func(r chi.Router) {
 				r.Post("/{version}/set_cli", route.environmentPHP.SetCli)
+				r.Get("/{version}/phpinfo", route.environmentPHP.PHPInfo)
 				r.Get("/{version}/config", route.environmentPHP.GetConfig)
 				r.Post("/{version}/config", route.environmentPHP.UpdateConfig)
 				r.Get("/{version}/fpm_config", route.environmentPHP.GetFPMConfig)
@@ -380,6 +399,7 @@ func (route *Http) Register(r *chi.Mux) {
 			})
 			r.Route("/image", func(r chi.Router) {
 				r.Get("/", route.containerImage.List)
+				r.Get("/exist", route.containerImage.Exist)
 				r.Post("/", route.containerImage.Pull)
 				r.Delete("/{id}", route.containerImage.Remove)
 				r.Post("/prune", route.containerImage.Prune)
@@ -409,6 +429,10 @@ func (route *Http) Register(r *chi.Mux) {
 			r.Post("/compress", route.file.Compress)
 			r.Post("/un_compress", route.file.UnCompress)
 			r.Get("/list", route.file.List)
+		})
+
+		r.Route("/log", func(r chi.Router) {
+			r.Get("/list", route.log.List)
 		})
 
 		r.Route("/monitor", func(r chi.Router) {
@@ -482,6 +506,11 @@ func (route *Http) Register(r *chi.Mux) {
 			r.Post("/lvm/lv", route.toolboxDisk.CreateLV)
 			r.Delete("/lvm/lv", route.toolboxDisk.RemoveLV)
 			r.Post("/lvm/lv/extend", route.toolboxDisk.ExtendLV)
+		})
+
+		r.Route("/toolbox_log", func(r chi.Router) {
+			r.Get("/scan", route.toolboxLog.Scan)
+			r.Post("/clean", route.toolboxLog.Clean)
 		})
 
 		r.Route("/webhook", func(r chi.Router) {

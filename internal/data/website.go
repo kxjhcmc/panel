@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
@@ -35,6 +36,7 @@ import (
 type websiteRepo struct {
 	t              *gotext.Locale
 	db             *gorm.DB
+	log            *slog.Logger
 	cache          biz.CacheRepo
 	database       biz.DatabaseRepo
 	databaseServer biz.DatabaseServerRepo
@@ -44,10 +46,11 @@ type websiteRepo struct {
 	setting        biz.SettingRepo
 }
 
-func NewWebsiteRepo(t *gotext.Locale, db *gorm.DB, cache biz.CacheRepo, database biz.DatabaseRepo, databaseServer biz.DatabaseServerRepo, databaseUser biz.DatabaseUserRepo, cert biz.CertRepo, certAccount biz.CertAccountRepo, setting biz.SettingRepo) biz.WebsiteRepo {
+func NewWebsiteRepo(t *gotext.Locale, db *gorm.DB, log *slog.Logger, cache biz.CacheRepo, database biz.DatabaseRepo, databaseServer biz.DatabaseServerRepo, databaseUser biz.DatabaseUserRepo, cert biz.CertRepo, certAccount biz.CertAccountRepo, setting biz.SettingRepo) biz.WebsiteRepo {
 	return &websiteRepo{
 		t:              t,
 		db:             db,
+		log:            log,
 		cache:          cache,
 		database:       database,
 		databaseServer: databaseServer,
@@ -78,21 +81,35 @@ func (r *websiteRepo) GetRewrites() (map[string]string, error) {
 }
 
 func (r *websiteRepo) UpdateDefaultConfig(req *request.WebsiteDefaultConfig) error {
-	if err := io.Write(filepath.Join(app.Root, "server/nginx/html/index.html"), req.Index, 0644); err != nil {
+	webServer, err := r.setting.Get(biz.SettingKeyWebserver)
+	if err != nil {
 		return err
 	}
-	if err := io.Write(filepath.Join(app.Root, "server/nginx/html/stop.html"), req.Stop, 0644); err != nil {
+	var htmlPath string
+	switch webServer {
+	case "nginx":
+		htmlPath = filepath.Join(app.Root, "server/nginx/html")
+	case "apache":
+		htmlPath = filepath.Join(app.Root, "server/apache/htdocs")
+	default:
+		htmlPath = filepath.Join(app.Root, "server/nginx/html")
+	}
+
+	if err = io.Write(filepath.Join(htmlPath, "index.html"), req.Index, 0644); err != nil {
+		return err
+	}
+	if err = io.Write(filepath.Join(htmlPath, "stop.html"), req.Stop, 0644); err != nil {
 		return err
 	}
 	if req.NotFound != "" {
-		if err := io.Write(filepath.Join(app.Root, "server/nginx/html/404.html"), req.NotFound, 0644); err != nil {
+		if err = io.Write(filepath.Join(htmlPath, "404.html"), req.NotFound, 0644); err != nil {
 			return err
 		}
 	}
-	if err := r.setting.SetSlice(biz.SettingKeyWebsiteTLSVersions, req.TLSVersions); err != nil {
+	if err = r.setting.SetSlice(biz.SettingKeyWebsiteTLSVersions, req.TLSVersions); err != nil {
 		return err
 	}
-	if err := r.setting.Set(biz.SettingKeyWebsiteCipherSuites, req.CipherSuites); err != nil {
+	if err = r.setting.Set(biz.SettingKeyWebsiteCipherSuites, req.CipherSuites); err != nil {
 		return err
 	}
 
@@ -232,7 +249,7 @@ func (r *websiteRepo) List(typ string, page, limit uint) ([]*biz.Website, int64,
 	return websites, total, nil
 }
 
-func (r *websiteRepo) Create(req *request.WebsiteCreate) (*biz.Website, error) {
+func (r *websiteRepo) Create(ctx context.Context, req *request.WebsiteCreate) (*biz.Website, error) {
 	w := &biz.Website{
 		Name:   req.Name,
 		Type:   biz.WebsiteType(req.Type),
@@ -240,6 +257,11 @@ func (r *websiteRepo) Create(req *request.WebsiteCreate) (*biz.Website, error) {
 		Path:   req.Path,
 		SSL:    false,
 		Remark: req.Remark,
+	}
+
+	webServer, err := r.setting.Get(biz.SettingKeyWebserver)
+	if err != nil {
+		return nil, err
 	}
 
 	vhost, err := r.getVhost(w)
@@ -287,8 +309,14 @@ func (r *websiteRepo) Create(req *request.WebsiteCreate) (*biz.Website, error) {
 		return nil, err
 	}
 	// 404 页面
-	// TODO 需要兼容 Apache
-	if err = vhost.SetConfig("010-error-404.conf", "site", `error_page 404 /404.html;`); err != nil {
+	var errorPageConfig string
+	switch webServer {
+	case "nginx":
+		errorPageConfig = `error_page 404 /404.html;`
+	case "apache":
+		errorPageConfig = `ErrorDocument 404 /404.html`
+	}
+	if err = vhost.SetConfig("010-error-404.conf", "site", errorPageConfig); err != nil {
 		return nil, err
 	}
 
@@ -312,8 +340,10 @@ func (r *websiteRepo) Create(req *request.WebsiteCreate) (*biz.Website, error) {
 		if err = phpVhost.SetConfig("010-rewrite.conf", "site", ""); err != nil {
 			return nil, err
 		}
-		// TODO 需要兼容 Apache
-		if err = phpVhost.SetConfig("010-cache.conf", "site", `# browser cache
+		var cacheConfig string
+		switch webServer {
+		case "nginx":
+			cacheConfig = `# browser cache
 location ~ .*\.(bmp|jpg|jpeg|png|gif|svg|ico|tiff|webp|avif|heif|heic|jxl)$ {
     expires 30d;
     access_log /dev/null;
@@ -328,7 +358,38 @@ location ~ .*\.(js|css|ttf|otf|woff|woff2|eot)$ {
 location ~ ^/(\.user.ini|\.htaccess|\.git|\.svn|\.env) {
     return 404;
 }
-`); err != nil {
+`
+		case "apache":
+			cacheConfig = `# browser cache
+<IfModule mod_expires.c>
+    ExpiresActive On
+    ExpiresByType image/bmp "access plus 30 days"
+    ExpiresByType image/jpeg "access plus 30 days"
+    ExpiresByType image/png "access plus 30 days"
+    ExpiresByType image/gif "access plus 30 days"
+    ExpiresByType image/svg+xml "access plus 30 days"
+    ExpiresByType image/x-icon "access plus 30 days"
+    ExpiresByType image/tiff "access plus 30 days"
+    ExpiresByType image/webp "access plus 30 days"
+    ExpiresByType image/avif "access plus 30 days"
+    ExpiresByType image/heif "access plus 30 days"
+    ExpiresByType image/heic "access plus 30 days"
+    ExpiresByType image/jxl "access plus 30 days"
+    ExpiresByType text/css "access plus 6 hours"
+    ExpiresByType application/javascript "access plus 6 hours"
+    ExpiresByType font/ttf "access plus 6 hours"
+    ExpiresByType font/otf "access plus 6 hours"
+    ExpiresByType font/woff "access plus 6 hours"
+    ExpiresByType font/woff2 "access plus 6 hours"
+    ExpiresByType application/vnd.ms-fontobject "access plus 6 hours"
+</IfModule>
+# deny sensitive files
+<FilesMatch "^(\.user\.ini|\.htaccess|\.git|\.svn|\.env)">
+    Require all denied
+</FilesMatch>
+`
+		}
+		if err = phpVhost.SetConfig("010-cache.conf", "site", cacheConfig); err != nil {
 			return nil, err
 		}
 	}
@@ -355,9 +416,15 @@ location ~ ^/(\.user.ini|\.htaccess|\.git|\.svn|\.env) {
 	var notFound []byte
 
 	// 如果存在自定义 404 页面，则使用自定义的
-	// TODO 需要兼容 Apache
-	if io.Exists(filepath.Join(app.Root, "server/nginx/html/404.html")) {
-		notFound, _ = os.ReadFile(filepath.Join(app.Root, "server/nginx/html/404.html"))
+	var custom404Path string
+	switch webServer {
+	case "nginx":
+		custom404Path = filepath.Join(app.Root, "server/nginx/html/404.html")
+	case "apache":
+		custom404Path = filepath.Join(app.Root, "server/apache/htdocs/404.html")
+	}
+	if io.Exists(custom404Path) {
+		notFound, _ = os.ReadFile(custom404Path)
 	} else {
 		switch app.Locale {
 		case "zh_CN":
@@ -425,6 +492,9 @@ location ~ ^/(\.user.ini|\.htaccess|\.git|\.svn|\.env) {
 		return nil, err
 	}
 
+	// 记录日志
+	r.log.Info("website created", slog.String("type", biz.OperationTypeWebsite), slog.Uint64("operator_id", getOperatorID(ctx)), slog.String("name", req.Name), slog.String("website_type", req.Type), slog.String("path", req.Path))
+
 	// 重载 Web 服务器
 	if err = r.reloadWebServer(); err != nil {
 		return nil, err
@@ -437,7 +507,7 @@ location ~ ^/(\.user.ini|\.htaccess|\.git|\.svn|\.env) {
 		if err != nil {
 			return nil, errors.New(r.t.Get("can't find %s database server, please add it first", name))
 		}
-		if err = r.database.Create(&request.DatabaseCreate{
+		if err = r.database.Create(ctx, &request.DatabaseCreate{
 			ServerID:   server.ID,
 			Name:       req.DBName,
 			CreateUser: true,
@@ -453,7 +523,7 @@ location ~ ^/(\.user.ini|\.htaccess|\.git|\.svn|\.env) {
 	return w, nil
 }
 
-func (r *websiteRepo) Update(req *request.WebsiteUpdate) error {
+func (r *websiteRepo) Update(ctx context.Context, req *request.WebsiteUpdate) error {
 	website := new(biz.Website)
 	if err := r.db.Where("id", req.ID).First(website).Error; err != nil {
 		return err
@@ -585,10 +655,13 @@ func (r *websiteRepo) Update(req *request.WebsiteUpdate) error {
 		return err
 	}
 
+	// 记录日志
+	r.log.Info("website updated", slog.String("type", biz.OperationTypeWebsite), slog.Uint64("operator_id", getOperatorID(ctx)), slog.Uint64("id", uint64(req.ID)), slog.String("name", website.Name))
+
 	return r.reloadWebServer()
 }
 
-func (r *websiteRepo) Delete(req *request.WebsiteDelete) error {
+func (r *websiteRepo) Delete(ctx context.Context, req *request.WebsiteDelete) error {
 	website := new(biz.Website)
 	if err := r.db.Preload("Cert").Where("id", req.ID).First(website).Error; err != nil {
 		return err
@@ -605,17 +678,20 @@ func (r *websiteRepo) Delete(req *request.WebsiteDelete) error {
 	if req.DB {
 		if mysql, err := r.databaseServer.GetByName("local_mysql"); err == nil {
 			_ = r.databaseUser.DeleteByNames(mysql.ID, []string{website.Name})
-			_ = r.database.Delete(mysql.ID, website.Name)
+			_ = r.database.Delete(ctx, mysql.ID, website.Name)
 		}
 		if postgres, err := r.databaseServer.GetByName("local_postgresql"); err == nil {
 			_ = r.databaseUser.DeleteByNames(postgres.ID, []string{website.Name})
-			_ = r.database.Delete(postgres.ID, website.Name)
+			_ = r.database.Delete(ctx, postgres.ID, website.Name)
 		}
 	}
 
 	if err := r.db.Delete(website).Error; err != nil {
 		return err
 	}
+
+	// 记录日志
+	r.log.Info("website deleted", slog.String("type", biz.OperationTypeWebsite), slog.Uint64("operator_id", getOperatorID(ctx)), slog.Uint64("id", uint64(req.ID)), slog.String("name", website.Name))
 
 	return r.reloadWebServer()
 }
@@ -791,7 +867,7 @@ func (r *websiteRepo) ObtainCert(ctx context.Context, id uint) error {
 	newCert, err := r.cert.GetByWebsite(website.ID)
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			newCert, err = r.cert.Create(&request.CertCreate{
+			newCert, err = r.cert.Create(ctx, &request.CertCreate{
 				Type:        string(acme.KeyEC256),
 				Domains:     website.Domains,
 				AutoRenewal: true,

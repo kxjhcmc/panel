@@ -19,7 +19,7 @@ const (
 type Website struct {
 	ID        uint        `gorm:"primaryKey" json:"id"`
 	Name      string      `gorm:"not null;default:'';unique" json:"name"`
-	Type      WebsiteType `gorm:"not null;default:'static'" json:"type"`
+	Type      WebsiteType `gorm:"not null;index;default:'static'" json:"type"`
 	Status    bool        `gorm:"not null;default:true" json:"status"`
 	Path      string      `gorm:"not null;default:''" json:"path"`
 	SSL       bool        `gorm:"not null;default:false" json:"ssl"`
@@ -40,9 +40,9 @@ type WebsiteRepo interface {
 	Get(id uint) (*types.WebsiteSetting, error)
 	GetByName(name string) (*types.WebsiteSetting, error)
 	List(typ string, page, limit uint) ([]*Website, int64, error)
-	Create(req *request.WebsiteCreate) (*Website, error)
-	Update(req *request.WebsiteUpdate) error
-	Delete(req *request.WebsiteDelete) error
+	Create(ctx context.Context, req *request.WebsiteCreate) (*Website, error)
+	Update(ctx context.Context, req *request.WebsiteUpdate) error
+	Delete(ctx context.Context, req *request.WebsiteDelete) error
 	ClearLog(id uint) error
 	UpdateRemark(id uint, remark string) error
 	ResetConfig(id uint) error

@@ -7,7 +7,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/acepanel/panel/pkg/webserver/types"
 )
@@ -28,7 +27,7 @@ func parseProxyFiles(siteDir string) ([]types.Proxy, error) {
 		return nil, err
 	}
 
-	var proxies []types.Proxy
+	proxies := make([]types.Proxy, 0)
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
@@ -66,6 +65,7 @@ func parseProxyFile(filePath string) (*types.Proxy, error) {
 
 	contentStr := string(content)
 	proxy := &types.Proxy{
+		Resolver: []string{},
 		Replaces: make(map[string]string),
 	}
 
@@ -86,10 +86,10 @@ func parseProxyFile(filePath string) (*types.Proxy, error) {
 		proxy.Host = matches[1]
 	}
 
-	// 解析 SSLProxyEngine 和 ProxySSL* (SNI)
+	// 解析 SSLProxyEngine 和 SNI
 	if regexp.MustCompile(`SSLProxyEngine\s+On`).MatchString(contentStr) {
-		// 尝试获取 SNI
-		sniPattern := regexp.MustCompile(`ProxyPassMatch.*ssl:([^/\s]+)`)
+		// 尝试从 # SNI: xxx 注释中获取 SNI
+		sniPattern := regexp.MustCompile(`#\s*SNI:\s*(\S+)`)
 		if sm := sniPattern.FindStringSubmatch(contentStr); sm != nil {
 			proxy.SNI = sm[1]
 		}
@@ -105,17 +105,12 @@ func parseProxyFile(filePath string) (*types.Proxy, error) {
 		proxy.Cache = true
 	}
 
-	// 解析 ProxyTimeout (resolver timeout)
-	timeoutPattern := regexp.MustCompile(`ProxyTimeout\s+(\d+)`)
-	if tm := timeoutPattern.FindStringSubmatch(contentStr); tm != nil {
-		timeout, _ := strconv.Atoi(tm[1])
-		proxy.ResolverTimeout = time.Duration(timeout) * time.Second
-	}
-
 	// 解析 Substitute (响应内容替换)
-	subPattern := regexp.MustCompile(`Substitute\s+"s/([^/]+)/([^/]*)/[gin]*"`)
-	subMatches := subPattern.FindAllStringSubmatch(contentStr, -1)
-	for _, sm := range subMatches {
+	// 格式: Substitute "s|from|to|n" 或 Substitute "s/from/to/n"
+	// 使用 | 作为分隔符以支持包含 / 的内容
+	subPatternPipe := regexp.MustCompile(`Substitute\s+"s\|([^|]*)\|([^|]*)\|[gin]*"`)
+	subMatchesPipe := subPatternPipe.FindAllStringSubmatch(contentStr, -1)
+	for _, sm := range subMatchesPipe {
 		proxy.Replaces[sm[1]] = sm[2]
 	}
 
@@ -185,8 +180,23 @@ func generateProxyConfig(proxy types.Proxy) string {
 	var sb strings.Builder
 
 	location := proxy.Location
-	if location == "" {
-		location = "/"
+	// 将 Nginx 风格的 location 转换为 Apache 格式
+	// ^~ / -> /
+	// ~ ^/api -> /api (正则匹配需要使用 ProxyPassMatch)
+	location = strings.TrimPrefix(location, "^~ ")
+	location = strings.TrimPrefix(location, "~ ")
+	location = strings.TrimPrefix(location, "= ")
+	// 如果 location 以 ^ 开头（正则），去掉它
+	location = strings.TrimPrefix(location, "^")
+	// 确保 location 以 / 开头
+	if !strings.HasPrefix(location, "/") {
+		location = "/" + location
+	}
+
+	// Pass 不以 / 结尾时，添加 /
+	// 垃圾 Apache 需要这样才不报错
+	if !strings.HasSuffix(proxy.Pass, "/") {
+		proxy.Pass += "/"
 	}
 
 	sb.WriteString(fmt.Sprintf("# Reverse proxy: %s -> %s\n", location, proxy.Pass))
@@ -205,27 +215,21 @@ func generateProxyConfig(proxy types.Proxy) string {
 		sb.WriteString("    ProxyPreserveHost On\n")
 	}
 
-	// 标准代理头
-	sb.WriteString("    RequestHeader set X-Real-IP \"%{REMOTE_ADDR}e\"\n")
-	sb.WriteString("    RequestHeader set X-Forwarded-For \"%{X-Forwarded-For}e\"\n")
-	sb.WriteString("    RequestHeader set X-Forwarded-Proto \"%{REQUEST_SCHEME}e\"\n")
-
 	// SSL/SNI 配置
 	if proxy.SNI != "" || strings.HasPrefix(proxy.Pass, "https://") {
 		sb.WriteString("    SSLProxyEngine On\n")
 		sb.WriteString("    SSLProxyVerify none\n")
 		sb.WriteString("    SSLProxyCheckPeerCN off\n")
 		sb.WriteString("    SSLProxyCheckPeerName off\n")
+		if proxy.SNI != "" {
+			// 垃圾 Apache 不支持自定义 SNI，写这里只是备注一下
+			sb.WriteString(fmt.Sprintf("    # SNI: %s\n", proxy.SNI))
+		}
 	}
 
 	// Buffering 配置
 	if proxy.Buffering {
 		sb.WriteString("    ProxyIOBufferSize 65536\n")
-	}
-
-	// Timeout 配置
-	if proxy.ResolverTimeout > 0 {
-		sb.WriteString(fmt.Sprintf("    ProxyTimeout %d\n", int(proxy.ResolverTimeout.Seconds())))
 	}
 
 	// Cache 配置
@@ -241,7 +245,8 @@ func generateProxyConfig(proxy types.Proxy) string {
 		sb.WriteString("    <IfModule mod_substitute.c>\n")
 		sb.WriteString("        AddOutputFilterByType SUBSTITUTE text/html text/plain text/xml\n")
 		for from, to := range proxy.Replaces {
-			sb.WriteString(fmt.Sprintf("        Substitute \"s/%s/%s/n\"\n", from, to))
+			// 使用 | 作为分隔符以支持包含 / 的内容
+			sb.WriteString(fmt.Sprintf("        Substitute \"s|%s|%s|n\"\n", from, to))
 		}
 		sb.WriteString("    </IfModule>\n")
 	}
@@ -261,7 +266,7 @@ func parseBalancerFiles(sharedDir string) ([]types.Upstream, error) {
 		return nil, err
 	}
 
-	var upstreams []types.Upstream
+	upstreams := make([]types.Upstream, 0)
 	for _, entry := range entries {
 		if entry.IsDir() {
 			continue
@@ -294,8 +299,9 @@ func parseBalancerFile(filePath string, name string) (*types.Upstream, error) {
 
 	contentStr := string(content)
 	upstream := &types.Upstream{
-		Name:    name,
-		Servers: make(map[string]string),
+		Name:     name,
+		Servers:  make(map[string]string),
+		Resolver: []string{},
 	}
 
 	// 解析 <Proxy balancer://name> 块
@@ -306,29 +312,25 @@ func parseBalancerFile(filePath string, name string) (*types.Upstream, error) {
 	// </Proxy>
 
 	// 解析 BalancerMember
-	memberPattern := regexp.MustCompile(`BalancerMember\s+(\S+)(?:\s+(.+))?`)
-	memberMatches := memberPattern.FindAllStringSubmatch(contentStr, -1)
-	for _, mm := range memberMatches {
-		addr := mm[1]
-		options := ""
-		if len(mm) > 2 {
-			options = strings.TrimSpace(mm[2])
+	memberPattern := regexp.MustCompile(`^\s*BalancerMember\s+(\S+)(?:\s+(.*))?$`)
+	lines := strings.Split(contentStr, "\n")
+	for _, line := range lines {
+		if mm := memberPattern.FindStringSubmatch(line); mm != nil {
+			addr := mm[1]
+			options := ""
+			if len(mm) > 2 {
+				options = strings.TrimSpace(mm[2])
+			}
+			upstream.Servers[addr] = options
 		}
-		upstream.Servers[addr] = options
 	}
 
 	// 解析负载均衡方法
 	lbMethodPattern := regexp.MustCompile(`lbmethod=(\S+)`)
 	if lm := lbMethodPattern.FindStringSubmatch(contentStr); lm != nil {
-		switch lm[1] {
-		case "byrequests":
-			upstream.Algo = ""
-		case "bytraffic":
-			upstream.Algo = "bytraffic"
-		case "bybusyness":
-			upstream.Algo = "least_conn"
-		case "heartbeat":
-			upstream.Algo = "heartbeat"
+		// byrequests 是默认值，不需要存储
+		if lm[1] != "byrequests" {
+			upstream.Algo = lm[1]
 		}
 	}
 
@@ -408,13 +410,8 @@ func generateBalancerConfig(upstream types.Upstream) string {
 
 	// 负载均衡方法
 	lbMethod := "byrequests" // 默认轮询
-	switch upstream.Algo {
-	case "least_conn":
-		lbMethod = "bybusyness"
-	case "bytraffic":
-		lbMethod = "bytraffic"
-	case "heartbeat":
-		lbMethod = "heartbeat"
+	if upstream.Algo != "" {
+		lbMethod = upstream.Algo
 	}
 	sb.WriteString(fmt.Sprintf("        ProxySet lbmethod=%s\n", lbMethod))
 

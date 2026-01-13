@@ -165,14 +165,19 @@ func (v *baseVhost) Listen() []types.Listen {
 func (v *baseVhost) SetListen(listens []types.Listen) error {
 	var args []string
 	for _, l := range listens {
-		args = append(args, l.Address)
+		addr := l.Address
+		// 如果只是端口号，添加 *: 前缀
+		if !strings.Contains(addr, ":") {
+			addr = "*:" + addr
+		}
+		args = append(args, addr)
 	}
 	v.vhost.Args = args
 	return nil
 }
 
 func (v *baseVhost) ServerName() []string {
-	var names []string
+	names := make([]string, 0)
 
 	// 获取 ServerName
 	serverName := v.vhost.GetDirectiveValue("ServerName")
@@ -213,7 +218,7 @@ func (v *baseVhost) Index() []string {
 	if values != nil {
 		return values
 	}
-	return nil
+	return []string{}
 }
 
 func (v *baseVhost) SetIndex(index []string) error {
@@ -636,14 +641,14 @@ func (v *PHPVhost) PHP() uint {
 	}
 
 	// 从配置内容中提取版本号
-	// 格式: proxy:unix:/tmp/php-cgi-84.sock|fcgi://localhost
-	idx := strings.Index(content, "php-cgi-")
+	// 格式: Include /opt/ace/server/apache/conf/extra/enable-php-85.conf
+	idx := strings.Index(content, "enable-php-")
 	if idx == -1 {
 		return 0
 	}
 
 	var result uint
-	_, err := fmt.Sscanf(content[idx:], "php-cgi-%d.sock", &result)
+	_, err := fmt.Sscanf(content[idx:], "enable-php-%d.conf", &result)
 	if err != nil {
 		return 0
 	}
@@ -655,12 +660,9 @@ func (v *PHPVhost) SetPHP(version uint) error {
 		return v.RemoveConfig("010-php.conf", "site")
 	}
 
-	// 生成 PHP-FPM 配置
-	// sock 路径格式: unix:/tmp/php-cgi-84.sock
-	content := fmt.Sprintf(`<FilesMatch \.php$>
-    SetHandler "proxy:unix:/tmp/php-cgi-%d.sock|fcgi://localhost"
-</FilesMatch>
-`, version)
+	// 生成 PHP-FPM 配置，直接 Include Apache 的 PHP-FPM 配置文件
+	// 配置文件路径: /opt/ace/server/apache/conf/extra/enable-php-85.conf
+	content := fmt.Sprintf("Include conf/extra/enable-php-%d.conf\n", version)
 
 	return v.SetConfig("010-php.conf", "site", content)
 }

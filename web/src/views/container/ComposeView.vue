@@ -3,6 +3,7 @@ import { NButton, NCheckbox, NDataTable, NFlex, NInput, NPopconfirm, NTag } from
 import { useGettext } from 'vue3-gettext'
 
 import container from '@/api/panel/container'
+import PtyTerminalModal from '@/components/common/PtyTerminalModal.vue'
 import { useFileStore } from '@/store'
 import { formatDateTime } from '@/utils'
 
@@ -10,7 +11,7 @@ const { $gettext } = useGettext()
 const fileStore = useFileStore()
 const router = useRouter()
 
-const forcePush = ref(false)
+const forcePull = ref(false)
 
 const createModel = ref({
   name: '',
@@ -19,6 +20,8 @@ const createModel = ref({
 })
 const createModal = ref(false)
 
+const selectedRowKeys = ref<any>([])
+
 const updateModel = ref({
   name: '',
   compose: '',
@@ -26,7 +29,30 @@ const updateModel = ref({
 })
 const updateModal = ref(false)
 
+// Compose 启动状态
+const upModal = ref(false)
+const upComposeName = ref('')
+const upCommand = ref('')
+
+// 处理 Compose 启动
+const handleComposeUp = (row: any, force: boolean) => {
+  upComposeName.value = row.name
+  let cmd = `docker compose -f ${row.path}/docker-compose.yml up -d`
+  if (force) {
+    cmd += ' --pull always'
+  }
+  upCommand.value = cmd
+  upModal.value = true
+}
+
+// Compose 启动完成
+const handleUpComplete = () => {
+  refresh()
+  forcePull.value = false
+}
+
 const columns: any = [
+  { type: 'selection', fixed: 'left' },
   {
     title: $gettext('Name'),
     key: 'name',
@@ -101,18 +127,7 @@ const columns: any = [
           {
             showIcon: false,
             onPositiveClick: () => {
-              const messageReactive = window.$message.loading($gettext('Starting...'), {
-                duration: 0
-              })
-              useRequest(container.composeUp(row.name, forcePush.value))
-                .onSuccess(() => {
-                  refresh()
-                  forcePush.value = false
-                  window.$message.success($gettext('Start successful'))
-                })
-                .onComplete(() => {
-                  messageReactive?.destroy()
-                })
+              handleComposeUp(row, forcePull.value)
             }
           },
           {
@@ -137,8 +152,8 @@ const columns: any = [
                     h(
                       NCheckbox,
                       {
-                        checked: forcePush.value,
-                        onUpdateChecked: (v) => (forcePush.value = v)
+                        checked: forcePull.value,
+                        onUpdateChecked: (v) => (forcePull.value = v)
                       },
                       { default: () => $gettext('Force pull images') }
                     )
@@ -171,7 +186,7 @@ const columns: any = [
               useRequest(container.composeDown(row.name))
                 .onSuccess(() => {
                   refresh()
-                  forcePush.value = false
+                  forcePull.value = false
                   window.$message.success($gettext('Stop successful'))
                 })
                 .onComplete(() => {
@@ -282,6 +297,15 @@ const handleUpdate = () => {
     })
 }
 
+const handleBatchDelete = async () => {
+  const promises = selectedRowKeys.value.map((name: any) => container.composeRemove(name))
+  await Promise.all(promises)
+
+  selectedRowKeys.value = []
+  refresh()
+  window.$message.success($gettext('Delete successful'))
+}
+
 onMounted(() => {
   refresh()
 })
@@ -290,9 +314,17 @@ onMounted(() => {
 <template>
   <n-flex vertical :size="20">
     <n-flex>
-      <n-button type="primary" @click="createModal = true">{{
-        $gettext('Create Compose')
-      }}</n-button>
+      <n-button type="primary" @click="createModal = true">
+        {{ $gettext('Create Compose') }}
+      </n-button>
+      <n-popconfirm @positive-click="handleBatchDelete">
+        <template #trigger>
+          <n-button type="error" :disabled="selectedRowKeys.length === 0" ghost>
+            {{ $gettext('Delete') }}
+          </n-button>
+        </template>
+        {{ $gettext('Are you sure you want to delete the selected composes?') }}
+      </n-popconfirm>
     </n-flex>
     <n-data-table
       striped
@@ -302,6 +334,7 @@ onMounted(() => {
       :data="data"
       :columns="columns"
       :row-key="(row: any) => row.name"
+      v-model:checked-row-keys="selectedRowKeys"
       v-model:page="page"
       v-model:pageSize="pageSize"
       :pagination="{
@@ -329,11 +362,7 @@ onMounted(() => {
         <n-input v-model:value="createModel.name" type="text" />
       </n-form-item>
       <n-form-item path="compose" :label="$gettext('Compose')">
-        <n-input
-          v-model:value="createModel.compose"
-          type="textarea"
-          :autosize="{ minRows: 10, maxRows: 20 }"
-        />
+        <common-editor v-model:value="createModel.compose" lang="yaml" height="40vh" />
       </n-form-item>
       <n-form-item path="envs" :label="$gettext('Environment Variables')">
         <n-dynamic-input
@@ -359,11 +388,7 @@ onMounted(() => {
   >
     <n-form :model="updateModel">
       <n-form-item path="compose" :label="$gettext('Compose')">
-        <n-input
-          v-model:value="updateModel.compose"
-          type="textarea"
-          :autosize="{ minRows: 10, maxRows: 20 }"
-        />
+        <common-editor v-model:value="updateModel.compose" lang="yaml" height="40vh" />
       </n-form-item>
       <n-form-item path="envs" :label="$gettext('Environment Variables')">
         <n-dynamic-input
@@ -378,4 +403,10 @@ onMounted(() => {
       {{ $gettext('Submit') }}
     </n-button>
   </n-modal>
+  <pty-terminal-modal
+    v-model:show="upModal"
+    :title="$gettext('Starting Compose') + ' - ' + upComposeName"
+    :command="upCommand"
+    @complete="handleUpComplete"
+  />
 </template>

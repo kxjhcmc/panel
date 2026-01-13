@@ -140,7 +140,6 @@ func (s *CliService) Fix(ctx context.Context, cmd *cli.Command) error {
 }
 
 func (s *CliService) Info(ctx context.Context, cmd *cli.Command) error {
-	// TODO 未来加权限设置之后这里需要优化
 	user := new(biz.User)
 	if err := s.db.First(user).Error; err != nil {
 		return errors.New(s.t.Get("Failed to get user info: %v", err))
@@ -196,7 +195,7 @@ func (s *CliService) Info(ctx context.Context, cmd *cli.Command) error {
 
 	fmt.Println(s.t.Get("Please choose the appropriate address to access the panel based on your network situation"))
 	fmt.Println(s.t.Get("If you cannot access, please check whether the server's security group and firewall allow port %d", port))
-	fmt.Println(s.t.Get("If you still cannot access, try running panel-cli https off to turn off panel HTTPS"))
+	fmt.Println(s.t.Get("If you still cannot access, try running `acepanel https off` to turn off panel HTTPS"))
 	fmt.Println(s.t.Get("Warning: After turning off panel HTTPS, the security of the panel will be greatly reduced, please operate with caution"))
 
 	return nil
@@ -362,10 +361,8 @@ func (s *CliService) HTTPSGenerate(ctx context.Context, cmd *cli.Command) error 
 		names = append(names, rv6)
 	}
 
-	crt, key, err := cert.GenerateSelfSigned(names)
-	if err != nil {
-		return err
-	}
+	var crt, key []byte
+	var err error
 
 	if s.conf.HTTP.ACME {
 		ip, err := s.settingRepo.Get(biz.SettingKeyPublicIPs)
@@ -378,7 +375,7 @@ func (s *CliService) HTTPSGenerate(ctx context.Context, cmd *cli.Command) error 
 		}
 
 		var user biz.User
-		if err := s.db.First(&user).Error; err != nil {
+		if err = s.db.First(&user).Error; err != nil {
 			return errors.New(s.t.Get("Failed to get a panel user: %v", err))
 		}
 		account, err := s.certAccountRepo.GetDefault(user.ID)
@@ -386,10 +383,18 @@ func (s *CliService) HTTPSGenerate(ctx context.Context, cmd *cli.Command) error 
 			return errors.New(s.t.Get("Failed to get ACME account: %v", err))
 		}
 		crt, key, err = s.certRepo.ObtainPanel(account, ips)
-		if err != nil {
-			return errors.New(s.t.Get("Failed to obtain ACME certificate: %v", err))
+		if err == nil {
+			fmt.Println(s.t.Get("Successfully obtained SSL certificate via ACME"))
+		} else {
+			fmt.Println(s.t.Get("Failed to obtain ACME certificate, using self-signed certificate"))
 		}
-		fmt.Println(s.t.Get("Successfully obtained ACME certificate"))
+	}
+
+	if crt == nil || key == nil {
+		crt, key, err = cert.GenerateSelfSignedRSA(names)
+		if err != nil {
+			return err
+		}
 	}
 
 	if err = io.Write(filepath.Join(app.Root, "panel/storage/cert.pem"), string(crt), 0600); err != nil {
@@ -536,7 +541,7 @@ func (s *CliService) WebsiteCreate(ctx context.Context, cmd *cli.Command) error 
 		DB:      false,
 	}
 
-	website, err := s.websiteRepo.Create(req)
+	website, err := s.websiteRepo.Create(ctx, req)
 	if err != nil {
 		return err
 	}
@@ -554,7 +559,7 @@ func (s *CliService) WebsiteRemove(ctx context.Context, cmd *cli.Command) error 
 		ID: website.ID,
 	}
 
-	if err = s.websiteRepo.Delete(req); err != nil {
+	if err = s.websiteRepo.Delete(ctx, req); err != nil {
 		return err
 	}
 
@@ -573,7 +578,7 @@ func (s *CliService) WebsiteDelete(ctx context.Context, cmd *cli.Command) error 
 		DB:   true,
 	}
 
-	if err = s.websiteRepo.Delete(req); err != nil {
+	if err = s.websiteRepo.Delete(ctx, req); err != nil {
 		return err
 	}
 
@@ -625,7 +630,7 @@ func (s *CliService) BackupWebsite(ctx context.Context, cmd *cli.Command) error 
 	fmt.Println(s.hr)
 	fmt.Println(s.t.Get("|-Backup type: website"))
 	fmt.Println(s.t.Get("|-Backup target: %s", cmd.String("name")))
-	if err := s.backupRepo.Create(biz.BackupTypeWebsite, cmd.String("name"), cmd.String("path")); err != nil {
+	if err := s.backupRepo.Create(ctx, biz.BackupTypeWebsite, cmd.String("name"), cmd.String("path")); err != nil {
 		return errors.New(s.t.Get("Backup failed: %v", err))
 	}
 	fmt.Println(s.hr)
@@ -641,7 +646,7 @@ func (s *CliService) BackupDatabase(ctx context.Context, cmd *cli.Command) error
 	fmt.Println(s.t.Get("|-Backup type: database"))
 	fmt.Println(s.t.Get("|-Database: %s", cmd.String("type")))
 	fmt.Println(s.t.Get("|-Backup target: %s", cmd.String("name")))
-	if err := s.backupRepo.Create(biz.BackupType(cmd.String("type")), cmd.String("name"), cmd.String("path")); err != nil {
+	if err := s.backupRepo.Create(ctx, biz.BackupType(cmd.String("type")), cmd.String("name"), cmd.String("path")); err != nil {
 		return errors.New(s.t.Get("Backup failed: %v", err))
 	}
 	fmt.Println(s.hr)
@@ -655,7 +660,7 @@ func (s *CliService) BackupPanel(ctx context.Context, cmd *cli.Command) error {
 	fmt.Println(s.t.Get("★ Start backup [%s]", time.Now().Format(time.DateTime)))
 	fmt.Println(s.hr)
 	fmt.Println(s.t.Get("|-Backup type: panel"))
-	if err := s.backupRepo.Create(biz.BackupTypePanel, "", cmd.String("path")); err != nil {
+	if err := s.backupRepo.Create(ctx, biz.BackupTypePanel, "", cmd.String("path")); err != nil {
 		return errors.New(s.t.Get("Backup failed: %v", err))
 	}
 	fmt.Println(s.hr)
@@ -942,7 +947,7 @@ func (s *CliService) Init(ctx context.Context, cmd *cli.Command) error {
 		return errors.New(s.t.Get("Initialization failed: %v", err))
 	}
 
-	_, err = s.userRepo.Create("admin", value, str.Random(8)+"@yourdomain.com")
+	_, err = s.userRepo.Create(ctx, "admin", value, str.Random(8)+"@yourdomain.com")
 	if err != nil {
 		return errors.New(s.t.Get("Initialization failed: %v", err))
 	}

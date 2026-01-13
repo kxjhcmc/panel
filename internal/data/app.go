@@ -217,7 +217,7 @@ func (r *appRepo) Install(channel, slug string) error {
 
 	// 下载回调
 	if err = r.api.AppCallback(slug); err != nil {
-		r.log.Warn("[App] download callback failed", slog.String("app", slug), slog.Any("err", err))
+		r.log.Warn("download callback failed", slog.String("type", biz.OperationTypeApp), slog.Uint64("operator_id", 0), slog.String("app", slug), slog.Any("err", err))
 	}
 
 	if app.IsCli {
@@ -332,7 +332,7 @@ func (r *appRepo) Update(slug string) error {
 
 	// 下载回调
 	if err = r.api.AppCallback(slug); err != nil {
-		r.log.Warn("[App] download callback failed", slog.String("app", slug), slog.Any("err", err))
+		r.log.Warn("download callback failed", slog.String("type", biz.OperationTypeApp), slog.Uint64("operator_id", 0), slog.String("app", slug), slog.Any("err", err))
 	}
 
 	if app.IsCli {
@@ -357,6 +357,15 @@ func (r *appRepo) UpdateShow(slug string, show bool) error {
 	item.Show = show
 
 	return r.db.Save(item).Error
+}
+
+func (r *appRepo) UpdateOrder(slugs []string) error {
+	for i, slug := range slugs {
+		if err := r.db.Model(&biz.App{}).Where("slug = ?", slug).Update("show_order", i).Error; err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (r *appRepo) preCheck(app *api.App) error {

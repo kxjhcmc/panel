@@ -24,8 +24,10 @@ var ProviderSet = wire.NewSet(
 	NewFileService,
 	NewFirewallService,
 	NewHomeService,
+	NewLogService,
 	NewMonitorService,
 	NewProcessService,
+	NewProjectService,
 	NewSafeService,
 	NewSettingService,
 	NewSSHService,
@@ -39,5 +41,6 @@ var ProviderSet = wire.NewSet(
 	NewToolboxBenchmarkService,
 	NewToolboxSSHService,
 	NewToolboxDiskService,
+	NewToolboxLogService,
 	NewWsService,
 )
