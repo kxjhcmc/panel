@@ -1,0 +1,53 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'                 # 自动在推 tag 时运行
+  workflow_dispatch:          # ✅ 手动触发入口
+
+permissions:
+  contents: write            # 允许创建 Release
+
+jobs:
+  goreleaser:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          cache: true
+          go-version: 'stable'
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          run_install: true
+          package_json_file: web/package.json
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: 'pnpm'
+          cache-dependency-path: web/pnpm-lock.yaml
+      - name: Build frontend
+        working-directory: web
+        run: |
+          cp .env.production .env
+          cp settings/proxy-config.example.ts settings/proxy-config.ts
+          pnpm run gettext:compile
+          pnpm build
+      - name: Set environment variables
+        run: |
+          echo "GOVERSION=$(go version | cut -d' ' -f3)" >> $GITHUB_ENV
+          echo "HOSTNAME=$(hostname)" >> $GITHUB_ENV
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          version: latest
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
