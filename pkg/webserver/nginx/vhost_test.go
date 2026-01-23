@@ -249,16 +249,17 @@ func (s *VhostTestSuite) TestRateLimit() {
 	s.Nil(s.vhost.RateLimit())
 
 	limit := &types.RateLimit{
-		Rate: "512k",
-		Zone: map[string]string{
-			"perip": "10",
-		},
+		PerServer: 300,
+		PerIP:     25,
+		Rate:      512,
 	}
 	s.NoError(s.vhost.SetRateLimit(limit))
 
 	got := s.vhost.RateLimit()
 	s.NotNil(got)
-	s.Equal("512k", got.Rate)
+	s.Equal(300, got.PerServer)
+	s.Equal(25, got.PerIP)
+	s.Equal(512, got.Rate)
 
 	s.NoError(s.vhost.ClearRateLimit())
 	s.Nil(s.vhost.RateLimit())
@@ -519,7 +520,7 @@ func (s *ProxyVhostTestSuite) TestProxyConfig() {
 	proxies := []types.Proxy{
 		{
 			Location:  "/",
-			Pass:      "http://backend",
+			Pass:      "https://backend",
 			Host:      "example.com",
 			SNI:       "example.com",
 			Buffering: true,
@@ -533,7 +534,7 @@ func (s *ProxyVhostTestSuite) TestProxyConfig() {
 	s.NoError(err)
 
 	s.Contains(string(content), "location /")
-	s.Contains(string(content), "proxy_pass http://backend")
+	s.Contains(string(content), "proxy_pass https://backend")
 	s.Contains(string(content), "proxy_set_header Host")
 	s.Contains(string(content), "example.com")
 	s.Contains(string(content), "proxy_ssl_name")

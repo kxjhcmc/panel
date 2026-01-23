@@ -1,10 +1,11 @@
 <script lang="ts" setup>
-import { NButton, NDataTable, NFlex, NPopconfirm, NTag } from 'naive-ui'
+import { NButton, NDataTable, NFlex, NPopconfirm, NSwitch, NTag } from 'naive-ui'
 import { useGettext } from 'vue3-gettext'
 
 import project from '@/api/panel/project'
 import systemctl from '@/api/panel/systemctl'
 import RealtimeLog from '@/components/common/RealtimeLog.vue'
+import { useFileStore } from '@/store'
 
 const type = defineModel<string>('type', { type: String, required: true })
 const createModal = defineModel<boolean>('createModal', { type: Boolean, required: true })
@@ -13,7 +14,9 @@ const editId = defineModel<number>('editId', { type: Number, required: true })
 const logModal = ref(false)
 const logService = ref('')
 
+const fileStore = useFileStore()
 const { $gettext } = useGettext()
+const router = useRouter()
 const selectedRowKeys = ref<any>([])
 
 const typeMap: Record<string, string> = {
@@ -56,9 +59,35 @@ const columns: any = [
     render(row: any) {
       return h(
         NTag,
-        { type: row.status === 'running' ? 'success' : 'default' },
-        { default: () => (row.status === 'running' ? $gettext('Running') : $gettext('Stopped')) }
+        { type: row.status === 'active' ? 'success' : 'default' },
+        {
+          default: () => {
+            switch (row.status) {
+              case 'active':
+                return $gettext('Running')
+              case 'inactive':
+                return $gettext('Stopped')
+              case 'failed':
+                return $gettext('Failed')
+              default:
+                return $gettext('Inactive')
+            }
+          }
+        }
       )
+    }
+  },
+  {
+    title: $gettext('Autostart'),
+    key: 'enabled',
+    width: 100,
+    render(row: any) {
+      return h(NSwitch, {
+        size: 'small',
+        rubberBand: false,
+        value: row.enabled,
+        onUpdateValue: (value: boolean) => handleToggleAutostart(row, value)
+      })
     }
   },
   {
@@ -66,24 +95,68 @@ const columns: any = [
     key: 'root_dir',
     minWidth: 200,
     resizable: true,
-    ellipsis: { tooltip: true }
+    render(row: any) {
+      return h(
+        NTag,
+        {
+          class: 'cursor-pointer hover:opacity-60',
+          type: 'info',
+          onClick: () => {
+            fileStore.path = row.root_dir
+            router.push({ name: 'file-index' })
+          }
+        },
+        { default: () => row.root_dir }
+      )
+    }
   },
   {
     title: $gettext('Actions'),
     key: 'actions',
-    width: 300,
+    width: 420,
     hideInExcel: true,
     render(row: any) {
-      return [
+      const buttons = [
         h(
           NButton,
           {
             size: 'small',
-            type: row.status === 'running' ? 'warning' : 'success',
+            type: row.status === 'active' ? 'warning' : 'success',
             onClick: () => handleToggleStatus(row)
           },
-          { default: () => (row.status === 'running' ? $gettext('Stop') : $gettext('Start')) }
-        ),
+          { default: () => (row.status === 'active' ? $gettext('Stop') : $gettext('Start')) }
+        )
+      ]
+
+      // 仅为运行中的项目显示重启和重载按钮
+      if (row.status === 'active') {
+        buttons.push(
+          h(
+            NButton,
+            {
+              size: 'small',
+              type: 'warning',
+              secondary: true,
+              style: 'margin-left: 10px;',
+              onClick: () => handleRestart(row)
+            },
+            { default: () => $gettext('Restart') }
+          ),
+          h(
+            NButton,
+            {
+              size: 'small',
+              type: 'info',
+              secondary: true,
+              style: 'margin-left: 10px;',
+              onClick: () => handleReload(row)
+            },
+            { default: () => $gettext('Reload') }
+          )
+        )
+      }
+
+      buttons.push(
         h(
           NButton,
           {
@@ -125,7 +198,9 @@ const columns: any = [
               )
           }
         )
-      ]
+      )
+
+      return buttons
     }
   }
 ]
@@ -141,15 +216,43 @@ const { loading, data, page, total, pageSize, pageCount, refresh } = usePaginati
 )
 
 const handleToggleStatus = (row: any) => {
-  if (row.status === 'running') {
+  if (row.status === 'active') {
     useRequest(systemctl.stop(row.name)).onSuccess(() => {
-      row.status = 'stopped'
+      row.status = 'inactive'
       window.$message.success($gettext('Stopped successfully'))
     })
   } else {
     useRequest(systemctl.start(row.name)).onSuccess(() => {
-      row.status = 'running'
+      row.status = 'active'
       window.$message.success($gettext('Started successfully'))
+    })
+  }
+}
+
+const handleRestart = (row: any) => {
+  useRequest(systemctl.restart(row.name)).onSuccess(() => {
+    refresh()
+    window.$message.success($gettext('Restarted successfully'))
+  })
+}
+
+const handleReload = (row: any) => {
+  useRequest(systemctl.reload(row.name)).onSuccess(() => {
+    refresh()
+    window.$message.success($gettext('Reloaded successfully'))
+  })
+}
+
+const handleToggleAutostart = (row: any, enabled: boolean) => {
+  if (enabled) {
+    useRequest(systemctl.enable(row.name)).onSuccess(() => {
+      row.enabled = true
+      window.$message.success($gettext('Autostart enabled'))
+    })
+  } else {
+    useRequest(systemctl.disable(row.name)).onSuccess(() => {
+      row.enabled = false
+      window.$message.success($gettext('Autostart disabled'))
     })
   }
 }
@@ -209,7 +312,7 @@ watch(type, () => {
       striped
       remote
       :loading="loading"
-      :scroll-x="1200"
+      :scroll-x="1300"
       :columns="columns"
       :data="data"
       :row-key="(row: any) => row.id"

@@ -16,14 +16,17 @@ const model = defineModel<any>('model', { type: Object, required: true })
 // 目录选择器
 const showPathSelector = ref(false)
 const pathSelectorPath = ref('/opt/ace')
-const pathSelectorTarget = ref<'website' | 'backup'>('website')
+const pathSelectorTarget = ref<'website' | 'backup' | 'project'>('website')
 
-const handleSelectPath = (target: 'website' | 'backup') => {
+const handleSelectPath = (target: 'website' | 'backup' | 'project') => {
   pathSelectorTarget.value = target
-  pathSelectorPath.value =
-    target === 'website'
-      ? model.value.website_path || '/opt/ace/sites'
-      : model.value.backup_path || '/opt/ace/backup'
+  if (target === 'website') {
+    pathSelectorPath.value = model.value.website_path || '/opt/ace/sites'
+  } else if (target === 'backup') {
+    pathSelectorPath.value = model.value.backup_path || '/opt/ace/backup'
+  } else {
+    pathSelectorPath.value = model.value.project_path || '/opt/ace/projects'
+  }
   showPathSelector.value = true
 }
 
@@ -31,8 +34,10 @@ watch(showPathSelector, (val) => {
   if (!val && pathSelectorPath.value) {
     if (pathSelectorTarget.value === 'website') {
       model.value.website_path = pathSelectorPath.value
-    } else {
+    } else if (pathSelectorTarget.value === 'backup') {
       model.value.backup_path = pathSelectorPath.value
+    } else {
+      model.value.project_path = pathSelectorPath.value
     }
   }
 })
@@ -57,11 +62,16 @@ const channels = [
   }
 ]
 
+// 不允许隐藏的菜单项（首页 home/home-index 和设置页 setting/setting-index）
+const forbiddenHiddenMenus = ['home', 'home-index', 'setting', 'setting-index']
+
 // 获取菜单选项
 const getOption = (route: RouteType): TreeSelectOption => {
+  const isDisabled = forbiddenHiddenMenus.includes(route.name as string)
   let menuItem: TreeSelectOption = {
     label: route.meta?.title ? translateTitle(route.meta.title) : route.name,
-    key: route.name
+    key: route.name,
+    disabled: isDisabled
   }
 
   const visibleChildren = route.children
@@ -73,9 +83,12 @@ const getOption = (route: RouteType): TreeSelectOption => {
   if (visibleChildren.length === 1) {
     // 单个子路由处理
     const singleRoute = visibleChildren[0]
+    const isSingleDisabled = forbiddenHiddenMenus.includes(singleRoute.name as string)
     menuItem.label = singleRoute.meta?.title
       ? translateTitle(singleRoute.meta.title)
       : singleRoute.name
+    // 父路由或子路由任一被禁止则禁用该菜单项
+    menuItem.disabled = isDisabled || isSingleDisabled
     const visibleItems = singleRoute.children
       ? singleRoute.children.filter((item: RouteType) => item.name && !item.isHidden)
       : []
@@ -124,6 +137,19 @@ const menus = computed<TreeSelectOption[]>(() => {
         <n-input-group>
           <n-input v-model:value="model.backup_path" :placeholder="$gettext('/opt/ace/backup')" />
           <n-button @click="handleSelectPath('backup')">
+            <template #icon>
+              <i-mdi-folder-open />
+            </template>
+          </n-button>
+        </n-input-group>
+      </n-form-item>
+      <n-form-item :label="$gettext('Default Project Directory')">
+        <n-input-group>
+          <n-input
+            v-model:value="model.project_path"
+            :placeholder="$gettext('/opt/ace/projects')"
+          />
+          <n-button @click="handleSelectPath('project')">
             <template #icon>
               <i-mdi-folder-open />
             </template>

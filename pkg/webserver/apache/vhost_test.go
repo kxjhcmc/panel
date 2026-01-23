@@ -237,12 +237,13 @@ func (s *VhostTestSuite) TestRateLimit() {
 	s.Nil(s.vhost.RateLimit())
 
 	limit := &types.RateLimit{
-		Rate: "512",
+		Rate: 512,
 	}
 	s.NoError(s.vhost.SetRateLimit(limit))
 
 	got := s.vhost.RateLimit()
 	s.NotNil(got)
+	s.Equal(512, got.Rate)
 
 	s.NoError(s.vhost.ClearRateLimit())
 	s.Nil(s.vhost.RateLimit())
@@ -324,9 +325,8 @@ func (s *VhostTestSuite) TestDirectoryBlock() {
 func (s *VhostTestSuite) TestPHPFilesMatchBlock() {
 	s.NoError(s.vhost.SetPHP(84))
 
-	// PHP 配置现在在独立文件中
 	content := s.vhost.Config("010-php.conf", "site")
-	s.Contains(content, "Include conf/extra/enable-php-84.conf")
+	s.Contains(content, "proxy:unix:/tmp/php-cgi-84.sock|fcgi://localhost/")
 }
 
 func (s *VhostTestSuite) TestDefaultVhostConfIncludesServerD() {

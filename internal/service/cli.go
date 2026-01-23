@@ -127,6 +127,9 @@ func (s *CliService) Sync(ctx context.Context, cmd *cli.Command) error {
 	if err := s.cacheRepo.UpdateEnvironments(); err != nil {
 		return errors.New(s.t.Get("Failed to synchronize app data: %v", err))
 	}
+	if err := s.cacheRepo.UpdateTemplates(); err != nil {
+		return errors.New(s.t.Get("Failed to synchronize app data: %v", err))
+	}
 	if err := s.cacheRepo.UpdateRewrites(); err != nil {
 		return errors.New(s.t.Get("Failed to synchronize rewrite rules: %v", err))
 	}
@@ -625,33 +628,12 @@ func (s *CliService) DatabaseDeleteServer(ctx context.Context, cmd *cli.Command)
 }
 
 func (s *CliService) BackupWebsite(ctx context.Context, cmd *cli.Command) error {
-	fmt.Println(s.hr)
-	fmt.Println(s.t.Get("★ Start backup [%s]", time.Now().Format(time.DateTime)))
-	fmt.Println(s.hr)
-	fmt.Println(s.t.Get("|-Backup type: website"))
-	fmt.Println(s.t.Get("|-Backup target: %s", cmd.String("name")))
-	if err := s.backupRepo.Create(ctx, biz.BackupTypeWebsite, cmd.String("name"), cmd.String("path")); err != nil {
-		return errors.New(s.t.Get("Backup failed: %v", err))
-	}
-	fmt.Println(s.hr)
-	fmt.Println(s.t.Get("☆ Backup successful [%s]", time.Now().Format(time.DateTime)))
-	fmt.Println(s.hr)
+	_ = s.backupRepo.Create(ctx, biz.BackupTypeWebsite, cmd.String("name"), cmd.Uint("storage"))
 	return nil
 }
 
 func (s *CliService) BackupDatabase(ctx context.Context, cmd *cli.Command) error {
-	fmt.Println(s.hr)
-	fmt.Println(s.t.Get("★ Start backup [%s]", time.Now().Format(time.DateTime)))
-	fmt.Println(s.hr)
-	fmt.Println(s.t.Get("|-Backup type: database"))
-	fmt.Println(s.t.Get("|-Database: %s", cmd.String("type")))
-	fmt.Println(s.t.Get("|-Backup target: %s", cmd.String("name")))
-	if err := s.backupRepo.Create(ctx, biz.BackupType(cmd.String("type")), cmd.String("name"), cmd.String("path")); err != nil {
-		return errors.New(s.t.Get("Backup failed: %v", err))
-	}
-	fmt.Println(s.hr)
-	fmt.Println(s.t.Get("☆ Backup successful [%s]", time.Now().Format(time.DateTime)))
-	fmt.Println(s.hr)
+	_ = s.backupRepo.Create(ctx, biz.BackupType(cmd.String("type")), cmd.String("name"), cmd.Uint("storage"))
 	return nil
 }
 
@@ -660,7 +642,7 @@ func (s *CliService) BackupPanel(ctx context.Context, cmd *cli.Command) error {
 	fmt.Println(s.t.Get("★ Start backup [%s]", time.Now().Format(time.DateTime)))
 	fmt.Println(s.hr)
 	fmt.Println(s.t.Get("|-Backup type: panel"))
-	if err := s.backupRepo.Create(ctx, biz.BackupTypePanel, "", cmd.String("path")); err != nil {
+	if err := s.backupRepo.CreatePanel(); err != nil {
 		return errors.New(s.t.Get("Backup failed: %v", err))
 	}
 	fmt.Println(s.hr)
@@ -670,23 +652,25 @@ func (s *CliService) BackupPanel(ctx context.Context, cmd *cli.Command) error {
 }
 
 func (s *CliService) BackupClear(ctx context.Context, cmd *cli.Command) error {
-	path, err := s.backupRepo.GetPath(biz.BackupType(cmd.String("type")))
-	if err != nil {
-		return err
-	}
-	if cmd.String("path") != "" {
-		path = cmd.String("path")
-	}
 
 	fmt.Println(s.hr)
 	fmt.Println(s.t.Get("★ Start cleaning [%s]", time.Now().Format(time.DateTime)))
 	fmt.Println(s.hr)
 	fmt.Println(s.t.Get("|-Cleaning type: %s", cmd.String("type")))
 	fmt.Println(s.t.Get("|-Cleaning target: %s", cmd.String("file")))
-	fmt.Println(s.t.Get("|-Keep count: %d", cmd.Int("save")))
-	if err = s.backupRepo.ClearExpired(path, cmd.String("file"), cmd.Int("save")); err != nil {
-		return errors.New(s.t.Get("Cleaning failed: %v", err))
+	fmt.Println(s.t.Get("|-Keep count: %d", cmd.Uint("keep")))
+
+	if cmd.Uint("storage") != 0 {
+		if err := s.backupRepo.ClearStorageExpired(cmd.Uint("storage"), biz.BackupType(cmd.String("type")), cmd.String("file"), cmd.Uint("keep")); err != nil {
+			return errors.New(s.t.Get("Cleaning failed: %v", err))
+		}
+	} else {
+		path := s.backupRepo.GetDefaultPath(biz.BackupType(cmd.String("type")))
+		if err := s.backupRepo.ClearExpired(path, cmd.String("file"), cmd.Uint("keep")); err != nil {
+			return errors.New(s.t.Get("Cleaning failed: %v", err))
+		}
 	}
+
 	fmt.Println(s.hr)
 	fmt.Println(s.t.Get("☆ Cleaning successful [%s]", time.Now().Format(time.DateTime)))
 	fmt.Println(s.hr)
@@ -711,6 +695,9 @@ func (s *CliService) CutoffWebsite(ctx context.Context, cmd *cli.Command) error 
 	if err = s.backupRepo.CutoffLog(path, filepath.Join(app.Root, "sites", website.Name, "log", "access.log")); err != nil {
 		return err
 	}
+	if err = s.backupRepo.CutoffLog(path, filepath.Join(app.Root, "sites", website.Name, "log", "error.log")); err != nil {
+		return err
+	}
 	fmt.Println(s.hr)
 	fmt.Println(s.t.Get("☆ Rotation successful [%s]", time.Now().Format(time.DateTime)))
 	fmt.Println(s.hr)
@@ -721,18 +708,27 @@ func (s *CliService) CutoffClear(ctx context.Context, cmd *cli.Command) error {
 	if cmd.String("type") != "website" {
 		return errors.New(s.t.Get("Currently only website log rotation is supported"))
 	}
-	path := cmd.String("path")
-	if cmd.String("path") == "" {
-		return errors.New(s.t.Get("Please specify the log rotation path"))
+
+	website, err := s.websiteRepo.GetByName(cmd.String("name"))
+	if err != nil {
+		return err
+	}
+
+	path := filepath.Join(app.Root, "sites", website.Name, "log")
+	if cmd.String("path") != "" {
+		path = cmd.String("path")
 	}
 
 	fmt.Println(s.hr)
 	fmt.Println(s.t.Get("★ Start cleaning rotated logs [%s]", time.Now().Format(time.DateTime)))
 	fmt.Println(s.hr)
 	fmt.Println(s.t.Get("|-Cleaning type: %s", cmd.String("type")))
-	fmt.Println(s.t.Get("|-Cleaning target: %s", cmd.String("file")))
-	fmt.Println(s.t.Get("|-Keep count: %d", cmd.Int("save")))
-	if err := s.backupRepo.ClearExpired(path, cmd.String("file"), cmd.Int("save")); err != nil {
+	fmt.Println(s.t.Get("|-Cleaning target: %s", website.Name))
+	fmt.Println(s.t.Get("|-Keep count: %d", cmd.Uint("keep")))
+	if err = s.backupRepo.ClearExpired(path, "access.log", cmd.Uint("keep")); err != nil {
+		return err
+	}
+	if err = s.backupRepo.ClearExpired(path, "error.log", cmd.Uint("keep")); err != nil {
 		return err
 	}
 	fmt.Println(s.hr)
@@ -932,6 +928,7 @@ func (s *CliService) Init(ctx context.Context, cmd *cli.Command) error {
 		{Key: biz.SettingKeyMonitorDays, Value: "30"},
 		{Key: biz.SettingKeyBackupPath, Value: filepath.Join(app.Root, "backup")},
 		{Key: biz.SettingKeyWebsitePath, Value: filepath.Join(app.Root, "sites")},
+		{Key: biz.SettingKeyProjectPath, Value: filepath.Join(app.Root, "projects")},
 		{Key: biz.SettingKeyWebsiteTLSVersions, Value: `["TLSv1.2","TLSv1.3"]`},
 		{Key: biz.SettingKeyWebsiteCipherSuites, Value: `ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384:DHE-RSA-CHACHA20-POLY1305`},
 		{Key: biz.SettingKeyOfflineMode, Value: "false"},

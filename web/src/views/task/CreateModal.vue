@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import app from '@/api/panel/app'
+import storage from '@/api/panel/backup-storage'
 import cron from '@/api/panel/cron'
 import home from '@/api/panel/home'
 import website from '@/api/panel/website'
@@ -15,14 +16,15 @@ const createModel = ref({
   name: '',
   type: 'shell',
   target: '',
-  save: 1,
+  keep: 1,
   backup_type: 'website',
-  backup_path: '',
+  backup_storage: 0,
   script: $gettext('# Enter your script content here'),
   time: '* * * * *'
 })
 
 const websites = ref<any>([])
+const storages = ref<any[]>([])
 
 const { data: installedEnvironment } = useRequest(home.installedEnvironment, {
   initialData: {
@@ -64,6 +66,32 @@ watch(createModel, (value) => {
   }
 })
 
+const generateTaskName = () => {
+  const type = createModel.value.type
+  const target = createModel.value.target
+
+  if (type === 'backup') {
+    const backupTypeMap: Record<string, string> = {
+      website: $gettext('Backup Website'),
+      mysql: $gettext('Backup MySQL'),
+      postgres: $gettext('Backup PostgreSQL')
+    }
+    const prefix = backupTypeMap[createModel.value.backup_type] || $gettext('Backup')
+    createModel.value.name = target ? `${prefix} - ${target}` : prefix
+  } else if (type === 'cutoff') {
+    createModel.value.name = target
+      ? `${$gettext('Log Rotation')} - ${target}`
+      : $gettext('Log Rotation')
+  }
+}
+
+watch(
+  () => [createModel.value.type, createModel.value.backup_type, createModel.value.target],
+  () => {
+    generateTaskName()
+  }
+)
+
 onMounted(() => {
   useRequest(app.isInstalled('nginx')).onSuccess(({ data }) => {
     if (data) {
@@ -77,6 +105,15 @@ onMounted(() => {
         createModel.value.target = websites.value[0]?.value
       })
     }
+  })
+  useRequest(storage.list(1, 10000)).onSuccess(({ data }: { data: any }) => {
+    for (const item of data.items) {
+      storages.value.push({
+        label: item.name,
+        value: item.id
+      })
+    }
+    createModel.value.backup_storage = storages.value[0]?.value || 0
   })
 })
 </script>
@@ -143,14 +180,15 @@ onMounted(() => {
       >
         <n-input v-model:value="createModel.target" :placeholder="$gettext('Database Name')" />
       </n-form-item>
-      <n-form-item v-if="createModel.type === 'backup'" :label="$gettext('Save Directory')">
-        <n-input
-          v-model:value="createModel.backup_path"
-          :placeholder="$gettext('Save Directory')"
+      <n-form-item v-if="createModel.type === 'backup'" :label="$gettext('Backup Storage')">
+        <n-select
+          v-model:value="createModel.backup_storage"
+          :options="storages"
+          :placeholder="$gettext('Select backup storage')"
         />
       </n-form-item>
       <n-form-item v-if="createModel.type !== 'shell'" :label="$gettext('Retention Count')">
-        <n-input-number v-model:value="createModel.save" />
+        <n-input-number v-model:value="createModel.keep" />
       </n-form-item>
     </n-form>
     <n-button type="info" :loading="loading" @click="handleSubmit" mt-10 block>

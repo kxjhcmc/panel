@@ -35,7 +35,7 @@ const themeStore = useThemeStore()
       </n-scrollbar>
     </n-drawer>
 
-    <article flex-col flex-1 overflow-hidden>
+    <article flex flex-col flex-1 overflow-hidden>
       <header
         :style="`height: ${themeStore.header.height}px`"
         dark="bg-dark border-0"
@@ -48,7 +48,7 @@ const themeStore = useThemeStore()
       >
         <app-header />
       </header>
-      <section bg="#f5f6fb" flex-1 overflow-hidden dark:bg-hex-101014>
+      <section bg="#f5f6fb" flex flex-col flex-1 overflow-hidden dark:bg-hex-101014>
         <app-main />
       </section>
     </article>

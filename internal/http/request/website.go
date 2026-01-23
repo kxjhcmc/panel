@@ -66,6 +66,24 @@ type WebsiteUpdate struct {
 	// 反向代理
 	Upstreams []types.Upstream `json:"upstreams"`
 	Proxies   []types.Proxy    `json:"proxies"`
+
+	// 重定向
+	Redirects []types.Redirect `json:"redirects"`
+
+	// 高级设置
+	RateLimit *types.RateLimit  `json:"rate_limit"` // 限流限速配置
+	RealIP    *types.RealIP     `json:"real_ip"`    // 真实 IP 配置
+	BasicAuth map[string]string `json:"basic_auth"` // 基本认证配置
+
+	// 自定义配置
+	CustomConfigs []WebsiteCustomConfig `json:"custom_configs"`
+}
+
+// WebsiteCustomConfig 网站自定义配置请求
+type WebsiteCustomConfig struct {
+	Name    string `json:"name" validate:"required|regex:^[a-zA-Z0-9_-]+$"` // 配置名称
+	Scope   string `json:"scope" validate:"required|in:site,shared"`        // 作用域: site(此网站), shared(全局)
+	Content string `json:"content"`                                         // 配置内容
 }
 
 type WebsiteUpdateRemark struct {

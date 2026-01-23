@@ -6,6 +6,7 @@ import "github.com/google/wire"
 var ProviderSet = wire.NewSet(
 	NewAppRepo,
 	NewBackupRepo,
+	NewBackupAccountRepo,
 	NewCacheRepo,
 	NewCertRepo,
 	NewCertAccountRepo,
@@ -27,6 +28,7 @@ var ProviderSet = wire.NewSet(
 	NewSettingRepo,
 	NewSSHRepo,
 	NewTaskRepo,
+	NewTemplateRepo,
 	NewUserRepo,
 	NewUserTokenRepo,
 	NewWebHookRepo,

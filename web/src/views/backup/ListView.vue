@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import backup from '@/api/panel/backup'
+import storage from '@/api/panel/backup-storage'
 import type { MessageReactive } from 'naive-ui'
 import { NButton, NDataTable, NFlex, NInput, NPopconfirm } from 'naive-ui'
 import { useGettext } from 'vue3-gettext'
@@ -19,8 +20,10 @@ const uploadModal = ref(false)
 const createModal = ref(false)
 const createModel = ref({
   target: '',
-  path: ''
+  storage: 0
 })
+
+const storages = ref<any[]>([])
 
 const restoreModal = ref(false)
 const restoreModel = ref({
@@ -115,13 +118,13 @@ const { loading, data, page, total, pageSize, pageCount, refresh } = usePaginati
 )
 
 const handleCreate = () => {
-  useRequest(backup.create(type.value, createModel.value.target, createModel.value.path)).onSuccess(
-    () => {
-      createModal.value = false
-      window.$bus.emit('backup:refresh')
-      window.$message.success($gettext('Created successfully'))
-    }
-  )
+  useRequest(
+    backup.create(type.value, createModel.value.target, createModel.value.storage)
+  ).onSuccess(() => {
+    createModal.value = false
+    window.$bus.emit('backup:refresh')
+    window.$message.success($gettext('Created successfully'))
+  })
 }
 
 const handleRestore = () => {
@@ -178,6 +181,15 @@ onMounted(() => {
       })
     }
   })
+  useRequest(storage.list(1, 10000)).onSuccess(({ data }: { data: any }) => {
+    for (const item of data.items) {
+      storages.value.push({
+        label: item.name,
+        value: item.id
+      })
+    }
+    createModel.value.storage = storages.value[0]?.value || 0
+  })
   refresh()
   window.$bus.on('backup:refresh', refresh)
 })
@@ -189,6 +201,13 @@ onUnmounted(() => {
 
 <template>
   <n-flex vertical :size="20">
+    <n-alert type="info">
+      {{
+        $gettext(
+          'Only local backups are displayed here. Remote backups are stored in the corresponding backup storage.'
+        )
+      }}
+    </n-alert>
     <n-flex>
       <n-button type="primary" @click="createModal = true">{{
         $gettext('Create Backup')
@@ -244,12 +263,11 @@ onUnmounted(() => {
           :placeholder="$gettext('Enter database name')"
         />
       </n-form-item>
-      <n-form-item path="path" :label="$gettext('Save Directory')">
-        <n-input
-          v-model:value="createModel.path"
-          type="text"
-          @keydown.enter.prevent
-          :placeholder="$gettext('Leave empty to use default path')"
+      <n-form-item path="storage" :label="$gettext('Backup Storage')">
+        <n-select
+          v-model:value="createModel.storage"
+          :options="storages"
+          :placeholder="$gettext('Select backup storage')"
         />
       </n-form-item>
     </n-form>

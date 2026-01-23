@@ -88,13 +88,13 @@ func (s *EnvironmentPHPService) GetConfig(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	config, err := io.Read(fmt.Sprintf("%s/server/php/%d/etc/php.ini", app.Root, req.Version))
+	ini, err := io.Read(fmt.Sprintf("%s/server/php/%d/etc/php.ini", app.Root, req.Version))
 	if err != nil {
 		Error(w, http.StatusInternalServerError, "%v", err)
 		return
 	}
 
-	Success(w, config)
+	Success(w, ini)
 }
 
 func (s *EnvironmentPHPService) UpdateConfig(w http.ResponseWriter, r *http.Request) {
@@ -127,13 +127,13 @@ func (s *EnvironmentPHPService) GetFPMConfig(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	config, err := io.Read(fmt.Sprintf("%s/server/php/%d/etc/php-fpm.conf", app.Root, req.Version))
+	ini, err := io.Read(fmt.Sprintf("%s/server/php/%d/etc/php-fpm.conf", app.Root, req.Version))
 	if err != nil {
 		Error(w, http.StatusInternalServerError, "%v", err)
 		return
 	}
 
-	Success(w, config)
+	Success(w, ini)
 }
 
 func (s *EnvironmentPHPService) UpdateFPMConfig(w http.ResponseWriter, r *http.Request) {
@@ -587,8 +587,8 @@ func (s *EnvironmentPHPService) getModules(version uint) []types.EnvironmentPHPM
 		},
 	}
 
-	// Swow 不支持 PHP 8.0 以下版本且目前不支持 PHP 8.4
-	if version >= 80 && version < 84 {
+	// Swow 不支持 PHP 8.0 以下版本
+	if version >= 80 {
 		modules = append(modules, types.EnvironmentPHPModule{
 			Name:        "Swow",
 			Slug:        "Swow",

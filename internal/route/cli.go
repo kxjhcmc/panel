@@ -188,7 +188,7 @@ func (route *Cli) Commands() []*cli.Command {
 							Name:  "path",
 							Usage: route.t.Get("Path where the website is hosted (default path if not filled)"),
 						},
-						&cli.IntFlag{
+						&cli.UintFlag{
 							Name:  "php",
 							Usage: route.t.Get("PHP version used by the website (not used if not filled)"),
 						},
@@ -301,10 +301,10 @@ func (route *Cli) Commands() []*cli.Command {
 							Usage:    route.t.Get("Website name"),
 							Required: true,
 						},
-						&cli.StringFlag{
-							Name:    "path",
-							Aliases: []string{"p"},
-							Usage:   route.t.Get("Save directory (default path if not filled)"),
+						&cli.UintFlag{
+							Name:    "storage",
+							Aliases: []string{"s"},
+							Usage:   route.t.Get("Storage ID (local storage if not filled)"),
 						},
 					},
 				},
@@ -325,10 +325,10 @@ func (route *Cli) Commands() []*cli.Command {
 							Usage:    route.t.Get("Database name"),
 							Required: true,
 						},
-						&cli.StringFlag{
-							Name:    "path",
-							Aliases: []string{"p"},
-							Usage:   route.t.Get("Save directory (default path if not filled)"),
+						&cli.UintFlag{
+							Name:    "storage",
+							Aliases: []string{"s"},
+							Usage:   route.t.Get("Storage ID (local storage if not filled)"),
 						},
 					},
 				},
@@ -336,13 +336,7 @@ func (route *Cli) Commands() []*cli.Command {
 					Name:   "panel",
 					Usage:  route.t.Get("Backup panel"),
 					Action: route.cli.BackupPanel,
-					Flags: []cli.Flag{
-						&cli.StringFlag{
-							Name:    "path",
-							Aliases: []string{"p"},
-							Usage:   route.t.Get("Save directory (default path if not filled)"),
-						},
-					},
+					Flags:  []cli.Flag{},
 				},
 				{
 					Name:   "clear",
@@ -361,16 +355,16 @@ func (route *Cli) Commands() []*cli.Command {
 							Usage:    route.t.Get("Backup file"),
 							Required: true,
 						},
-						&cli.IntFlag{
-							Name:     "save",
-							Aliases:  []string{"s"},
+						&cli.UintFlag{
+							Name:     "keep",
+							Aliases:  []string{"k"},
 							Usage:    route.t.Get("Number of backups to keep"),
 							Required: true,
 						},
-						&cli.StringFlag{
-							Name:    "path",
-							Aliases: []string{"p"},
-							Usage:   route.t.Get("Backup directory (default path if not filled)"),
+						&cli.UintFlag{
+							Name:    "storage",
+							Aliases: []string{"s"},
+							Usage:   route.t.Get("Storage ID (local storage if not filled)"),
 						},
 					},
 				},
@@ -391,7 +385,6 @@ func (route *Cli) Commands() []*cli.Command {
 							Usage:    route.t.Get("Website name"),
 							Required: true,
 						},
-
 						&cli.StringFlag{
 							Name:    "path",
 							Aliases: []string{"p"},
@@ -411,14 +404,14 @@ func (route *Cli) Commands() []*cli.Command {
 							Required: true,
 						},
 						&cli.StringFlag{
-							Name:     "file",
-							Aliases:  []string{"f"},
-							Usage:    route.t.Get("Rotation file"),
+							Name:     "name",
+							Aliases:  []string{"n"},
+							Usage:    route.t.Get("Website name"),
 							Required: true,
 						},
-						&cli.IntFlag{
-							Name:     "save",
-							Aliases:  []string{"s"},
+						&cli.UintFlag{
+							Name:     "keep",
+							Aliases:  []string{"k"},
 							Usage:    route.t.Get("Number of logs to keep"),
 							Required: true,
 						},

@@ -1,6 +1,7 @@
 package data
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -206,6 +208,21 @@ func (r *websiteRepo) Get(id uint) (*types.WebsiteSetting, error) {
 		setting.Proxies = proxyVhost.Proxies()
 	}
 
+	// 重定向配置
+	if redirectVhost, ok := vhost.(webservertypes.VhostRedirect); ok {
+		setting.Redirects = redirectVhost.Redirects()
+	}
+
+	// 高级设置（限流限速、真实 IP、基本认证）
+	setting.RateLimit = vhost.RateLimit()
+	setting.RealIP = vhost.RealIP()
+	// 读取基本认证用户列表
+	setting.BasicAuth = r.readBasicAuthUsers(website.Name)
+
+	// 自定义配置
+	configDir := filepath.Join(app.Root, "sites", website.Name, "config")
+	setting.CustomConfigs = r.getCustomConfigs(configDir)
+
 	return setting, err
 }
 
@@ -335,6 +352,9 @@ func (r *websiteRepo) Create(ctx context.Context, req *request.WebsiteCreate) (*
 	// PHP 支持
 	if phpVhost, ok := vhost.(webservertypes.PHPVhost); ok {
 		if err = phpVhost.SetPHP(req.PHP); err != nil {
+			return nil, err
+		}
+		if err = phpVhost.SetIndex([]string{"index.php", "index.html"}); err != nil {
 			return nil, err
 		}
 		if err = phpVhost.SetConfig("010-rewrite.conf", "site", ""); err != nil {
@@ -647,6 +667,57 @@ func (r *websiteRepo) Update(ctx context.Context, req *request.WebsiteUpdate) er
 		}
 	}
 
+	// 重定向配置
+	if redirectVhost, ok := vhost.(webservertypes.VhostRedirect); ok {
+		if err = redirectVhost.SetRedirects(req.Redirects); err != nil {
+			return err
+		}
+	}
+
+	// 高级设置（限流限速、真实 IP、基本认证）
+	if req.RateLimit != nil {
+		if err = vhost.SetRateLimit(req.RateLimit); err != nil {
+			return err
+		}
+	} else {
+		if err = vhost.ClearRateLimit(); err != nil {
+			return err
+		}
+	}
+	// 真实 IP 配置
+	if req.RealIP != nil {
+		if err = vhost.SetRealIP(req.RealIP); err != nil {
+			return err
+		}
+	} else {
+		if err = vhost.ClearRealIP(); err != nil {
+			return err
+		}
+	}
+	// 基本认证创建 htpasswd 文件
+	if len(req.BasicAuth) > 0 {
+		htpasswdPath := filepath.Join(app.Root, "sites", website.Name, "htpasswd")
+		if err = r.writeBasicAuthUsers(htpasswdPath, req.BasicAuth); err != nil {
+			return err
+		}
+		if err = vhost.SetBasicAuth(map[string]string{"user_file": htpasswdPath}); err != nil {
+			return err
+		}
+	} else {
+		// 清除基本认证配置和 htpasswd 文件
+		htpasswdPath := filepath.Join(app.Root, "sites", website.Name, "htpasswd")
+		_ = io.Remove(htpasswdPath)
+		if err = vhost.ClearBasicAuth(); err != nil {
+			return err
+		}
+	}
+
+	// 自定义配置
+	configDir := filepath.Join(app.Root, "sites", website.Name, "config")
+	if err = r.saveCustomConfigs(configDir, req.CustomConfigs); err != nil {
+		return err
+	}
+
 	// 保存配置
 	if err = vhost.Save(); err != nil {
 		return err
@@ -894,6 +965,141 @@ func (r *websiteRepo) ObtainCert(ctx context.Context, id uint) error {
 	return r.cert.Deploy(newCert.ID, website.ID)
 }
 
+// customConfigStartNum 自定义配置起始序号
+const customConfigStartNum = 800
+
+// customConfigEndNum 自定义配置结束序号
+const customConfigEndNum = 999
+
+// getCustomConfigs 获取网站自定义配置列表
+func (r *websiteRepo) getCustomConfigs(configDir string) []types.WebsiteCustomConfig {
+	var configs []types.WebsiteCustomConfig
+
+	// 从 site 和 shared 目录读取自定义配置
+	for _, scope := range []string{"site", "shared"} {
+		scopeDir := filepath.Join(configDir, scope)
+		entries, err := os.ReadDir(scopeDir)
+		if err != nil {
+			continue
+		}
+
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			// 匹配文件名格式: 800-999-name.conf
+			name := entry.Name()
+			if !strings.HasSuffix(name, ".conf") {
+				continue
+			}
+			// 解析序号
+			parts := strings.SplitN(name, "-", 2)
+			if len(parts) < 2 {
+				continue
+			}
+			num, err := strconv.Atoi(parts[0])
+			if err != nil || num < customConfigStartNum || num > customConfigEndNum {
+				continue
+			}
+			// 提取配置名称（去掉序号前缀和.conf后缀）
+			configName := strings.TrimSuffix(parts[1], ".conf")
+			if configName == "" {
+				continue
+			}
+			// 读取配置内容
+			content, err := io.Read(filepath.Join(scopeDir, name))
+			if err != nil {
+				continue
+			}
+
+			configs = append(configs, types.WebsiteCustomConfig{
+				Name:    configName,
+				Scope:   scope,
+				Content: content,
+			})
+		}
+	}
+
+	return configs
+}
+
+// saveCustomConfigs 保存网站自定义配置
+func (r *websiteRepo) saveCustomConfigs(configDir string, configs []request.WebsiteCustomConfig) error {
+	if err := r.clearCustomConfigs(configDir); err != nil {
+		return err
+	}
+
+	// 分别跟踪 site 和 shared 目录的序号
+	siteNum := customConfigStartNum
+	sharedNum := customConfigStartNum
+
+	for _, cfg := range configs {
+		var num int
+		switch cfg.Scope {
+		case "site":
+			num = siteNum
+			siteNum++
+		case "shared":
+			num = sharedNum
+			sharedNum++
+		default:
+			return fmt.Errorf("invalid config scope: %s", cfg.Scope)
+		}
+
+		if num > customConfigEndNum {
+			return errors.New(r.t.Get("maximum number of custom configurations reached (limit: %d)", customConfigEndNum-customConfigStartNum+1))
+		}
+
+		fileName := fmt.Sprintf("%03d-%s.conf", num, cfg.Name)
+		filePath := filepath.Join(configDir, cfg.Scope, fileName)
+
+		if err := io.Write(filePath, cfg.Content, 0600); err != nil {
+			return fmt.Errorf("failed to write custom config: %w", err)
+		}
+	}
+
+	return nil
+}
+
+// clearCustomConfigs 清除网站自定义配置文件
+func (r *websiteRepo) clearCustomConfigs(configDir string) error {
+	for _, scope := range []string{"site", "shared"} {
+		scopeDir := filepath.Join(configDir, scope)
+		entries, err := os.ReadDir(scopeDir)
+		if err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return err
+		}
+
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+
+			name := entry.Name()
+			if !strings.HasSuffix(name, ".conf") {
+				continue
+			}
+			parts := strings.SplitN(name, "-", 2)
+			if len(parts) < 2 {
+				continue
+			}
+			num, err := strconv.Atoi(parts[0])
+			if err != nil || num < customConfigStartNum || num > customConfigEndNum {
+				continue
+			}
+			filePath := filepath.Join(scopeDir, name)
+			if err = os.Remove(filePath); err != nil && !os.IsNotExist(err) {
+				return fmt.Errorf("failed to remove custom config: %w", err)
+			}
+		}
+	}
+
+	return nil
+}
+
 func (r *websiteRepo) getVhost(website *biz.Website) (webservertypes.Vhost, error) {
 	webServer, err := r.setting.Get(biz.SettingKeyWebserver)
 	if err != nil {
@@ -938,7 +1144,7 @@ func (r *websiteRepo) reloadWebServer() error {
 			return err
 		}
 	case "apache":
-		if err = systemctl.Reload("httpd"); err != nil {
+		if err = systemctl.Reload("apache"); err != nil {
 			_, err = shell.Execf("apachectl configtest")
 			return err
 		}
@@ -947,4 +1153,54 @@ func (r *websiteRepo) reloadWebServer() error {
 	}
 
 	return nil
+}
+
+// readBasicAuthUsers 读取 htpasswd 文件中的用户列表
+func (r *websiteRepo) readBasicAuthUsers(siteName string) map[string]string {
+	htpasswdPath := filepath.Join(app.Root, "sites", siteName, "htpasswd")
+	if !io.Exists(htpasswdPath) {
+		return nil
+	}
+
+	file, err := os.Open(htpasswdPath)
+	if err != nil {
+		return nil
+	}
+	defer func(file *os.File) { _ = file.Close() }(file)
+
+	users := make(map[string]string)
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		// htpasswd 格式: username:password
+		parts := strings.SplitN(line, ":", 2)
+		if len(parts) == 2 {
+			users[parts[0]] = parts[1]
+		}
+	}
+
+	if len(users) == 0 {
+		return nil
+	}
+	return users
+}
+
+// writeBasicAuthUsers 将用户凭证写入 htpasswd 文件
+func (r *websiteRepo) writeBasicAuthUsers(htpasswdPath string, users map[string]string) error {
+	var lines []string
+	for username, password := range users {
+		if username == "" || password == "" {
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("%s:%s", username, password))
+	}
+
+	content := strings.Join(lines, "\n")
+	if content != "" {
+		content += "\n"
+	}
+	return io.Write(htpasswdPath, content, 0644) // 必须 0644，Nginx 在运行中以 www 用户读取
 }

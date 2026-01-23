@@ -34,7 +34,12 @@ func (s *BackupService) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	list, _ := s.backupRepo.List(biz.BackupType(req.Type))
+	list, err := s.backupRepo.List(biz.BackupType(req.Type))
+	if err != nil {
+		Error(w, http.StatusInternalServerError, "%v", err)
+		return
+	}
+
 	paged, total := Paginate(r, list)
 
 	Success(w, chix.M{
@@ -50,7 +55,7 @@ func (s *BackupService) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err = s.backupRepo.Create(r.Context(), biz.BackupType(req.Type), req.Target, req.Path); err != nil {
+	if err = s.backupRepo.Create(r.Context(), biz.BackupType(req.Type), req.Target, req.Storage); err != nil {
 		Error(w, http.StatusInternalServerError, "%v", err)
 		return
 	}
@@ -78,11 +83,7 @@ func (s *BackupService) Upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	path, err := s.backupRepo.GetPath(biz.BackupType(req.Type))
-	if err != nil {
-		Error(w, http.StatusInternalServerError, "%v", err)
-		return
-	}
+	path := s.backupRepo.GetDefaultPath(biz.BackupType(req.Type))
 	if io.Exists(filepath.Join(path, req.File.Filename)) {
 		Error(w, http.StatusForbidden, s.t.Get("target backup %s already exists", path))
 		return

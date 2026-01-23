@@ -6,24 +6,40 @@ import (
 )
 
 type Template struct {
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
-	Slug         string    `json:"slug"`
-	Icon         string    `json:"icon"`
-	Name         string    `json:"name"`
-	Description  string    `json:"description"`
-	Categories   []string  `json:"categories"`
-	Version      string    `json:"version"`
-	Compose      string    `json:"compose"`
-	Environments []struct {
-		Name    string            `json:"name"`              // 变量名
-		Type    string            `json:"type"`              // 变量类型， text, password, number, port, select
-		Options map[string]string `json:"options,omitempty"` // 下拉框选项，key -> value
-		Default string            `json:"default"`           // 默认值
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
+	Slug          string    `json:"slug"`
+	Icon          string    `json:"icon"`
+	Name          string    `json:"name"`
+	Description   string    `json:"description"`
+	Website       string    `json:"website"`
+	Categories    []string  `json:"categories"`
+	Architectures []string  `json:"architectures"`
+	Compose       string    `json:"compose"`
+	Environments  []struct {
+		Name        string            `json:"name"`              // 变量名
+		Description string            `json:"description"`       // 变量描述
+		Type        string            `json:"type"`              // 变量类型， text, password, number, port, select
+		Options     map[string]string `json:"options,omitempty"` // 下拉框选项，key -> value
+		Default     any               `json:"default,omitempty"` // 默认值，string or number
 	} `json:"environments"`
 }
 
 type Templates []*Template
+
+// FilterByCategory 按分类过滤模版
+func (t Templates) FilterByCategory(category string) Templates {
+	filtered := make(Templates, 0)
+	for _, tpl := range t {
+		for _, cat := range tpl.Categories {
+			if cat == category {
+				filtered = append(filtered, tpl)
+				break
+			}
+		}
+	}
+	return filtered
+}
 
 // Templates 返回所有模版
 func (r *API) Templates() (*Templates, error) {

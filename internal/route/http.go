@@ -16,45 +16,51 @@ import (
 )
 
 type Http struct {
-	conf             *config.Config
-	user             *service.UserService
-	userToken        *service.UserTokenService
-	home             *service.HomeService
-	task             *service.TaskService
-	website          *service.WebsiteService
-	project          *service.ProjectService
-	database         *service.DatabaseService
-	databaseServer   *service.DatabaseServerService
-	databaseUser     *service.DatabaseUserService
-	backup           *service.BackupService
-	cert             *service.CertService
-	certDNS          *service.CertDNSService
-	certAccount      *service.CertAccountService
-	app              *service.AppService
-	environment      *service.EnvironmentService
-	environmentPHP   *service.EnvironmentPHPService
-	cron             *service.CronService
-	process          *service.ProcessService
-	safe             *service.SafeService
-	firewall         *service.FirewallService
-	ssh              *service.SSHService
-	container        *service.ContainerService
-	containerCompose *service.ContainerComposeService
-	containerNetwork *service.ContainerNetworkService
-	containerImage   *service.ContainerImageService
-	containerVolume  *service.ContainerVolumeService
-	file             *service.FileService
-	log              *service.LogService
-	monitor          *service.MonitorService
-	setting          *service.SettingService
-	systemctl        *service.SystemctlService
-	toolboxSystem    *service.ToolboxSystemService
-	toolboxBenchmark *service.ToolboxBenchmarkService
-	toolboxSSH       *service.ToolboxSSHService
-	toolboxDisk      *service.ToolboxDiskService
-	toolboxLog       *service.ToolboxLogService
-	webhook          *service.WebHookService
-	apps             *apploader.Loader
+	conf              *config.Config
+	user              *service.UserService
+	userToken         *service.UserTokenService
+	home              *service.HomeService
+	task              *service.TaskService
+	website           *service.WebsiteService
+	project           *service.ProjectService
+	database          *service.DatabaseService
+	databaseServer    *service.DatabaseServerService
+	databaseUser      *service.DatabaseUserService
+	backup            *service.BackupService
+	backupStorage     *service.BackupStorageService
+	cert              *service.CertService
+	certDNS           *service.CertDNSService
+	certAccount       *service.CertAccountService
+	app               *service.AppService
+	environment       *service.EnvironmentService
+	environmentGo     *service.EnvironmentGoService
+	environmentJava   *service.EnvironmentJavaService
+	environmentNodejs *service.EnvironmentNodejsService
+	environmentPHP    *service.EnvironmentPHPService
+	environmentPython *service.EnvironmentPythonService
+	cron              *service.CronService
+	process           *service.ProcessService
+	safe              *service.SafeService
+	firewall          *service.FirewallService
+	ssh               *service.SSHService
+	container         *service.ContainerService
+	containerCompose  *service.ContainerComposeService
+	containerNetwork  *service.ContainerNetworkService
+	containerImage    *service.ContainerImageService
+	containerVolume   *service.ContainerVolumeService
+	file              *service.FileService
+	log               *service.LogService
+	monitor           *service.MonitorService
+	setting           *service.SettingService
+	systemctl         *service.SystemctlService
+	toolboxSystem     *service.ToolboxSystemService
+	toolboxBenchmark  *service.ToolboxBenchmarkService
+	toolboxSSH        *service.ToolboxSSHService
+	toolboxDisk       *service.ToolboxDiskService
+	toolboxLog        *service.ToolboxLogService
+	webhook           *service.WebHookService
+	template          *service.TemplateService
+	apps              *apploader.Loader
 }
 
 func NewHttp(
@@ -69,12 +75,17 @@ func NewHttp(
 	databaseServer *service.DatabaseServerService,
 	databaseUser *service.DatabaseUserService,
 	backup *service.BackupService,
+	backupStorage *service.BackupStorageService,
 	cert *service.CertService,
 	certDNS *service.CertDNSService,
 	certAccount *service.CertAccountService,
 	app *service.AppService,
 	environment *service.EnvironmentService,
+	environmentGo *service.EnvironmentGoService,
+	environmentJava *service.EnvironmentJavaService,
+	environmentNodejs *service.EnvironmentNodejsService,
 	environmentPHP *service.EnvironmentPHPService,
+	environmentPython *service.EnvironmentPythonService,
 	cron *service.CronService,
 	process *service.ProcessService,
 	safe *service.SafeService,
@@ -96,48 +107,55 @@ func NewHttp(
 	toolboxDisk *service.ToolboxDiskService,
 	toolboxLog *service.ToolboxLogService,
 	webhook *service.WebHookService,
+	template *service.TemplateService,
 	apps *apploader.Loader,
 ) *Http {
 	return &Http{
-		conf:             conf,
-		user:             user,
-		userToken:        userToken,
-		home:             home,
-		task:             task,
-		website:          website,
-		project:          project,
-		database:         database,
-		databaseServer:   databaseServer,
-		databaseUser:     databaseUser,
-		backup:           backup,
-		cert:             cert,
-		certDNS:          certDNS,
-		certAccount:      certAccount,
-		app:              app,
-		environment:      environment,
-		environmentPHP:   environmentPHP,
-		cron:             cron,
-		process:          process,
-		safe:             safe,
-		firewall:         firewall,
-		ssh:              ssh,
-		container:        container,
-		containerCompose: containerCompose,
-		containerNetwork: containerNetwork,
-		containerImage:   containerImage,
-		containerVolume:  containerVolume,
-		file:             file,
-		log:              log,
-		monitor:          monitor,
-		setting:          setting,
-		systemctl:        systemctl,
-		toolboxSystem:    toolboxSystem,
-		toolboxBenchmark: toolboxBenchmark,
-		toolboxSSH:       toolboxSSH,
-		toolboxDisk:      toolboxDisk,
-		toolboxLog:       toolboxLog,
-		webhook:          webhook,
-		apps:             apps,
+		conf:              conf,
+		user:              user,
+		userToken:         userToken,
+		home:              home,
+		task:              task,
+		website:           website,
+		project:           project,
+		database:          database,
+		databaseServer:    databaseServer,
+		databaseUser:      databaseUser,
+		backup:            backup,
+		backupStorage:     backupStorage,
+		cert:              cert,
+		certDNS:           certDNS,
+		certAccount:       certAccount,
+		app:               app,
+		environment:       environment,
+		environmentGo:     environmentGo,
+		environmentJava:   environmentJava,
+		environmentNodejs: environmentNodejs,
+		environmentPHP:    environmentPHP,
+		environmentPython: environmentPython,
+		cron:              cron,
+		process:           process,
+		safe:              safe,
+		firewall:          firewall,
+		ssh:               ssh,
+		container:         container,
+		containerCompose:  containerCompose,
+		containerNetwork:  containerNetwork,
+		containerImage:    containerImage,
+		containerVolume:   containerVolume,
+		file:              file,
+		log:               log,
+		monitor:           monitor,
+		setting:           setting,
+		systemctl:         systemctl,
+		toolboxSystem:     toolboxSystem,
+		toolboxBenchmark:  toolboxBenchmark,
+		toolboxSSH:        toolboxSSH,
+		toolboxDisk:       toolboxDisk,
+		toolboxLog:        toolboxLog,
+		webhook:           webhook,
+		template:          template,
+		apps:              apps,
 	}
 }
 
@@ -250,6 +268,14 @@ func (route *Http) Register(r *chi.Mux) {
 			r.Post("/{type}/restore", route.backup.Restore)
 		})
 
+		r.Route("/backup_storage", func(r chi.Router) {
+			r.Get("/", route.backupStorage.List)
+			r.Post("/", route.backupStorage.Create)
+			r.Put("/{id}", route.backupStorage.Update)
+			r.Get("/{id}", route.backupStorage.Get)
+			r.Delete("/{id}", route.backupStorage.Delete)
+		})
+
 		r.Route("/cert", func(r chi.Router) {
 			r.Get("/ca_providers", route.cert.CAProviders)
 			r.Get("/dns_providers", route.cert.DNSProviders)
@@ -300,9 +326,22 @@ func (route *Http) Register(r *chi.Mux) {
 			r.Get("/types", route.environment.Types)
 			r.Get("/list", route.environment.List)
 			r.Post("/install", route.environment.Install)
-			r.Get("/uninstall", route.environment.Uninstall)
-			r.Put("/update", route.environment.Update)
+			r.Post("/uninstall", route.environment.Uninstall)
+			r.Post("/update", route.environment.Update)
 			r.Get("/is_installed", route.environment.IsInstalled)
+			r.Route("/go", func(r chi.Router) {
+				r.Post("/{slug}/set_cli", route.environmentGo.SetCli)
+				r.Get("/{slug}/proxy", route.environmentGo.GetProxy)
+				r.Post("/{slug}/proxy", route.environmentGo.SetProxy)
+			})
+			r.Route("/java", func(r chi.Router) {
+				r.Post("/{slug}/set_cli", route.environmentJava.SetCli)
+			})
+			r.Route("/nodejs", func(r chi.Router) {
+				r.Post("/{slug}/set_cli", route.environmentNodejs.SetCli)
+				r.Get("/{slug}/registry", route.environmentNodejs.GetRegistry)
+				r.Post("/{slug}/registry", route.environmentNodejs.SetRegistry)
+			})
 			r.Route("/php", func(r chi.Router) {
 				r.Post("/{version}/set_cli", route.environmentPHP.SetCli)
 				r.Get("/{version}/phpinfo", route.environmentPHP.PHPInfo)
@@ -318,6 +357,11 @@ func (route *Http) Register(r *chi.Mux) {
 				r.Get("/{version}/modules", route.environmentPHP.ModuleList)
 				r.Post("/{version}/modules", route.environmentPHP.InstallModule)
 				r.Delete("/{version}/modules", route.environmentPHP.UninstallModule)
+			})
+			r.Route("/python", func(r chi.Router) {
+				r.Post("/{slug}/set_cli", route.environmentPython.SetCli)
+				r.Get("/{slug}/mirror", route.environmentPython.GetMirror)
+				r.Post("/{slug}/mirror", route.environmentPython.SetMirror)
 			})
 		})
 
@@ -338,8 +382,6 @@ func (route *Http) Register(r *chi.Mux) {
 		})
 
 		r.Route("/safe", func(r chi.Router) {
-			r.Get("/ssh", route.safe.GetSSH)
-			r.Post("/ssh", route.safe.UpdateSSH)
 			r.Get("/ping", route.safe.GetPingStatus)
 			r.Post("/ping", route.safe.UpdatePingStatus)
 		})
@@ -429,6 +471,10 @@ func (route *Http) Register(r *chi.Mux) {
 			r.Post("/compress", route.file.Compress)
 			r.Post("/un_compress", route.file.UnCompress)
 			r.Get("/list", route.file.List)
+			// 分块上传
+			r.Post("/chunk/start", route.file.ChunkUploadStart)
+			r.Post("/chunk/upload", route.file.ChunkUploadChunk)
+			r.Post("/chunk/finish", route.file.ChunkUploadFinish)
 		})
 
 		r.Route("/log", func(r chi.Router) {
@@ -468,6 +514,8 @@ func (route *Http) Register(r *chi.Mux) {
 			r.Post("/timezone", route.toolboxSystem.UpdateTimezone)
 			r.Post("/time", route.toolboxSystem.UpdateTime)
 			r.Post("/sync_time", route.toolboxSystem.SyncTime)
+			r.Get("/ntp_servers", route.toolboxSystem.GetNTPServers)
+			r.Post("/ntp_servers", route.toolboxSystem.UpdateNTPServers)
 			r.Get("/hostname", route.toolboxSystem.GetHostname)
 			r.Post("/hostname", route.toolboxSystem.UpdateHostname)
 			r.Get("/hosts", route.toolboxSystem.GetHosts)
@@ -519,6 +567,13 @@ func (route *Http) Register(r *chi.Mux) {
 			r.Put("/{id}", route.webhook.Update)
 			r.Get("/{id}", route.webhook.Get)
 			r.Delete("/{id}", route.webhook.Delete)
+		})
+
+		r.Route("/template", func(r chi.Router) {
+			r.Get("/", route.template.List)
+			r.Get("/{slug}", route.template.Get)
+			r.Post("/", route.template.Create)
+			r.Post("/{slug}/callback", route.template.Callback)
 		})
 
 		r.Route("/apps", func(r chi.Router) {

@@ -12,6 +12,11 @@ const props = defineProps({
   service: {
     type: String,
     required: false
+  },
+  language: {
+    type: String,
+    required: false,
+    default: 'systemdlog'
   }
 })
 
@@ -82,7 +87,8 @@ defineExpose({
 </script>
 
 <template>
-  <n-log ref="logRef" :log="log" trim :rows="40" />
+  <n-log v-if="log" ref="logRef" :log="log" trim :rows="40" :language="props.language" />
+  <n-empty v-else :description="$gettext('No logs available')" />
 </template>
 
 <style scoped lang="scss"></style>

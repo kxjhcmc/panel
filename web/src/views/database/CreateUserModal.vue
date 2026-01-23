@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import database from '@/api/panel/database'
+import { generateRandomString } from '@/utils'
 import { NButton, NInput } from 'naive-ui'
 import { useGettext } from 'vue3-gettext'
 
@@ -16,11 +17,21 @@ const createModel = ref({
 
 const servers = ref<{ label: string; value: string }[]>([])
 
-const hostType = [
+const hostTypeOptions = [
   { label: $gettext('Local (localhost)'), value: 'localhost' },
   { label: $gettext('All (%)'), value: '%' },
-  { label: $gettext('Specific'), value: '' }
+  { label: $gettext('Specific'), value: 'specific' }
 ]
+const hostType = ref('localhost')
+
+// 监听 hostType 变化，同步到 createModel.host
+watch(hostType, (val) => {
+  if (val !== 'specific') {
+    createModel.value.host = val
+  } else {
+    createModel.value.host = ''
+  }
+})
 
 const handleCreate = () => {
   useRequest(() => database.userCreate(createModel.value)).onSuccess(() => {
@@ -83,23 +94,28 @@ watch(
           />
         </n-form-item>
         <n-form-item path="password" :label="$gettext('Password')">
-          <n-input
-            v-model:value="createModel.password"
-            type="password"
-            show-password-on="click"
-            @keydown.enter.prevent
-            :placeholder="$gettext('Enter password')"
-          />
+          <n-input-group>
+            <n-input
+              v-model:value="createModel.password"
+              type="password"
+              show-password-on="click"
+              @keydown.enter.prevent
+              :placeholder="$gettext('Enter password')"
+            />
+            <n-button @click="createModel.password = generateRandomString(16)">
+              {{ $gettext('Generate') }}
+            </n-button>
+          </n-input-group>
         </n-form-item>
         <n-form-item path="host-select" :label="$gettext('Host (MySQL only)')">
           <n-select
-            v-model:value="createModel.host"
+            v-model:value="hostType"
             @keydown.enter.prevent
             :placeholder="$gettext('Select host')"
-            :options="hostType"
+            :options="hostTypeOptions"
           />
         </n-form-item>
-        <n-form-item v-if="createModel.host === ''" path="host" :label="$gettext('Specific Host')">
+        <n-form-item v-if="hostType === 'specific'" path="host" :label="$gettext('Specific Host')">
           <n-input
             v-model:value="createModel.host"
             type="text"

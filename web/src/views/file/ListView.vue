@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import {
   NButton,
+  NCheckbox,
   NEllipsis,
   NFlex,
   NPopconfirm,
@@ -252,7 +253,54 @@ const confirmImmutableOperation = (row: any, callback: () => void) => {
 // 判断是否多选
 const isMultiSelect = computed(() => selected.value.length > 1)
 
+// 全选状态
+const isAllSelected = computed(() => {
+  return data.value.length > 0 && selected.value.length === data.value.length
+})
+
+// 部分选中状态（用于全选复选框的 indeterminate 状态）
+const isIndeterminate = computed(() => {
+  return selected.value.length > 0 && selected.value.length < data.value.length
+})
+
+// 切换全选
+const toggleSelectAll = () => {
+  if (isAllSelected.value) {
+    selected.value = []
+  } else {
+    selected.value = data.value.map((item: any) => item.full)
+  }
+}
+
+// 切换单个项目的选中状态（用于复选框点击）
+const toggleCheckbox = (item: any) => {
+  const index = selected.value.indexOf(item.full)
+  if (index > -1) {
+    selected.value.splice(index, 1)
+  } else {
+    selected.value.push(item.full)
+  }
+}
+
+// 空白区域右键菜单是否激活
+const isEmptyContextMenu = ref(false)
+
 const options = computed<DropdownOption[]>(() => {
+  // 空白区域右键菜单
+  if (isEmptyContextMenu.value) {
+    const options: DropdownOption[] = [
+      { label: $gettext('New File'), key: 'new-file' },
+      { label: $gettext('New Folder'), key: 'new-folder' }
+    ]
+    if (marked.value.length) {
+      options.unshift({
+        label: $gettext('Paste'),
+        key: 'paste'
+      })
+    }
+    return options
+  }
+
   // 多选情况下显示简化菜单
   if (isMultiSelect.value) {
     const options: DropdownOption[] = [
@@ -455,8 +503,32 @@ const handleContextMenu = (item: any, event: MouseEvent) => {
   }
 
   nextTick().then(() => {
+    isEmptyContextMenu.value = false
     showDropdown.value = true
     selectedRow.value = item
+    dropdownX.value = event.clientX
+    dropdownY.value = event.clientY
+  })
+}
+
+// 处理空白区域右键菜单
+const handleEmptyContextMenu = (event: MouseEvent) => {
+  // 如果点击的是文件项，不处理
+  const target = event.target as HTMLElement
+  if (target.closest('.file-item')) return
+  // 列表视图表头不触发
+  if (target.closest('.list-header')) return
+
+  event.preventDefault()
+  showDropdown.value = false
+
+  // 清除选中
+  selected.value = []
+
+  nextTick().then(() => {
+    isEmptyContextMenu.value = true
+    showDropdown.value = true
+    selectedRow.value = null
     dropdownX.value = event.clientX
     dropdownY.value = event.clientY
   })
@@ -827,6 +899,23 @@ const handlePaste = () => {
 }
 
 const handleSelect = (key: string) => {
+  // 空白区域菜单选项
+  if (isEmptyContextMenu.value) {
+    switch (key) {
+      case 'paste':
+        handlePaste()
+        break
+      case 'new-file':
+        startInlineCreate(false)
+        break
+      case 'new-folder':
+        startInlineCreate(true)
+        break
+    }
+    onCloseDropdown()
+    return
+  }
+
   const items = isMultiSelect.value ? getSelectedItems() : [selectedRow.value]
 
   switch (key) {
@@ -1244,8 +1333,8 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="flex flex-col gap-4" :style="themeStyles">
-    <n-spin :show="loading">
+  <div class="flex flex-col flex-1 gap-4 min-h-0" :style="themeStyles">
+    <n-spin :show="loading" class="flex flex-col flex-1 min-h-0">
       <div
         ref="gridContainerRef"
         class="file-container"
@@ -1254,12 +1343,21 @@ onUnmounted(() => {
           'list-mode': fileStore.viewType === 'list'
         }"
         @mousedown="onSelectionStart"
+        @contextmenu="handleEmptyContextMenu"
       >
         <!-- 框选框 -->
         <div v-if="selectionBox" class="selection-box" :style="selectionBoxStyle" />
 
         <!-- 列表视图表头 -->
         <div v-if="fileStore.viewType === 'list'" class="list-header">
+          <div class="list-col col-checkbox">
+            <n-checkbox
+              :checked="isAllSelected"
+              :indeterminate="isIndeterminate"
+              @update:checked="toggleSelectAll"
+              @click.stop
+            />
+          </div>
           <div
             class="list-col col-name hover:text-primary cursor-pointer select-none"
             @click="handleSort('name')"
@@ -1309,6 +1407,9 @@ onUnmounted(() => {
           </template>
           <!-- 列表视图 -->
           <template v-else>
+            <div class="list-col col-checkbox">
+              <n-checkbox disabled />
+            </div>
             <div class="list-col col-name">
               <the-icon
                 :icon="inlineCreateIsDir ? 'mdi:folder' : 'mdi:file-document-outline'"
@@ -1359,10 +1460,7 @@ onUnmounted(() => {
               @keydown="handleInlineRenameKeydown"
               @click.stop
             />
-            <span
-              v-else
-              class="text-center max-w-full"
-            >
+            <span v-else class="text-center max-w-full">
               <n-ellipsis
                 :line-clamp="2"
                 class="text-12 leading-normal break-all"
@@ -1375,6 +1473,13 @@ onUnmounted(() => {
 
           <!-- 列表视图 -->
           <template v-else>
+            <div class="list-col col-checkbox">
+              <n-checkbox
+                :checked="isSelected(item)"
+                @update:checked="toggleCheckbox(item)"
+                @click.stop
+              />
+            </div>
             <div class="list-col col-name">
               <the-icon :icon="getFileIcon(item)" :size="20" :color="getIconColor(item)" />
               <!-- 内联重命名输入框 -->
@@ -1387,11 +1492,7 @@ onUnmounted(() => {
                 @keydown="handleInlineRenameKeydown"
                 @click.stop
               />
-              <n-ellipsis
-                v-else
-                class="flex-1 overflow-hidden"
-                :tooltip="{ width: 300 }"
-              >
+              <n-ellipsis v-else class="flex-1 overflow-hidden" :tooltip="{ width: 300 }">
                 {{ item.symlink ? item.name + ' -> ' + item.link : item.name }}
               </n-ellipsis>
               <the-icon
@@ -1547,7 +1648,11 @@ onUnmounted(() => {
   />
 
   <!-- 编辑弹窗 -->
-  <edit-modal v-model:show="editorModal" v-model:minimized="editorMinimized" v-model:file="currentFile" />
+  <edit-modal
+    v-model:show="editorModal"
+    v-model:minimized="editorMinimized"
+    v-model:file="currentFile"
+  />
   <!-- 预览弹窗 -->
   <preview-modal v-model:show="previewModal" v-model:path="currentFile" />
   <!-- 解压弹窗 -->
@@ -1582,7 +1687,7 @@ onUnmounted(() => {
 <style scoped lang="scss">
 .file-container {
   position: relative;
-  height: 60vh;
+  flex: 1;
   overflow: auto;
   background: var(--card-color);
   border-radius: 3px;
@@ -1596,6 +1701,7 @@ onUnmounted(() => {
     align-content: start;
     gap: 16px;
     padding: 16px;
+    border: none;
 
     .file-item {
       display: flex;
@@ -1636,7 +1742,7 @@ onUnmounted(() => {
     .list-header {
       display: flex;
       align-items: center;
-      padding: 8px 16px;
+      padding: 8px 16px 8px 8px;
       background: var(--card-color);
       border-bottom: 1px solid var(--border-color);
       font-weight: 500;
@@ -1649,7 +1755,7 @@ onUnmounted(() => {
     .file-item {
       display: flex;
       align-items: center;
-      padding: 6px 16px;
+      padding: 6px 16px 6px 8px;
       border-bottom: 1px solid var(--border-color);
       cursor: pointer;
       transition: all 0.1s ease;
@@ -1669,10 +1775,6 @@ onUnmounted(() => {
       &.cut {
         opacity: 0.5;
       }
-
-      &:last-child {
-        border-bottom: none;
-      }
     }
   }
 }
@@ -1682,6 +1784,12 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   gap: 8px;
+
+  &.col-checkbox {
+    width: 24px;
+    flex-shrink: 0;
+    justify-content: center;
+  }
 
   &.col-name {
     flex: 1;
@@ -1779,5 +1887,12 @@ onUnmounted(() => {
   .list-mode & {
     flex: 1;
   }
+}
+
+// n-spin 内部容器填满
+:deep(.n-spin-content) {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
 }
 </style>
