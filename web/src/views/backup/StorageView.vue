@@ -17,8 +17,13 @@ const typeOptions = [
 ]
 
 const styleOptions = [
-  { label: 'Virtual Hosted', value: 'virtual_hosted' },
+  { label: 'Virtual Hosted', value: 'virtual-hosted' },
   { label: 'Path', value: 'path' }
+]
+
+const schemeOptions = [
+  { label: 'HTTPS', value: 'https' },
+  { label: 'HTTP', value: 'http' }
 ]
 
 const sftpAuthOptions = [
@@ -32,9 +37,10 @@ const defaultModel = {
   info: {
     access_key: '',
     secret_key: '',
-    style: 'virtual_hosted',
-    region: '',
+    style: 'virtual-hosted',
+    region: 'us-east-1',
     endpoint: '',
+    scheme: 'https',
     bucket: '',
     host: '',
     port: 22,
@@ -253,6 +259,9 @@ onMounted(() => {
             :placeholder="$gettext('Enter endpoint URL')"
           />
         </n-form-item>
+        <n-form-item :label="$gettext('Scheme')">
+          <n-select v-model:value="createModel.info.scheme" :options="schemeOptions" />
+        </n-form-item>
         <n-form-item :label="$gettext('Bucket')" required>
           <n-input
             v-model:value="createModel.info.bucket"
@@ -392,17 +401,14 @@ onMounted(() => {
         <n-form-item :label="$gettext('Style')">
           <n-select v-model:value="editModel.info.style" :options="styleOptions" />
         </n-form-item>
-        <n-form-item :label="$gettext('Region')">
-          <n-input
-            v-model:value="editModel.info.region"
-            :placeholder="$gettext('Enter region (e.g., us-east-1)')"
-          />
-        </n-form-item>
         <n-form-item :label="$gettext('Endpoint')" required>
           <n-input
             v-model:value="editModel.info.endpoint"
             :placeholder="$gettext('Enter endpoint URL')"
           />
+        </n-form-item>
+        <n-form-item :label="$gettext('Scheme')">
+          <n-select v-model:value="editModel.info.scheme" :options="schemeOptions" />
         </n-form-item>
         <n-form-item :label="$gettext('Bucket')" required>
           <n-input

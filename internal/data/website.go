@@ -3,7 +3,6 @@ package data
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -23,7 +22,6 @@ import (
 	"github.com/acepanel/panel/internal/biz"
 	"github.com/acepanel/panel/internal/http/request"
 	"github.com/acepanel/panel/pkg/acme"
-	"github.com/acepanel/panel/pkg/api"
 	"github.com/acepanel/panel/pkg/cert"
 	"github.com/acepanel/panel/pkg/embed"
 	"github.com/acepanel/panel/pkg/io"
@@ -64,19 +62,24 @@ func NewWebsiteRepo(t *gotext.Locale, db *gorm.DB, log *slog.Logger, cache biz.C
 }
 
 func (r *websiteRepo) GetRewrites() (map[string]string, error) {
-	cached, err := r.cache.Get(biz.CacheKeyRewrites)
+	webServer, err := r.setting.Get(biz.SettingKeyWebserver)
 	if err != nil {
-		return nil, err
+		return make(map[string]string), nil
 	}
 
-	var rewrites api.Rewrites
-	if err = json.Unmarshal([]byte(cached), &rewrites); err != nil {
-		return nil, err
+	entries, err := embed.RewritesFS.ReadDir(filepath.Join("rewrites", webServer))
+	if err != nil {
+		return make(map[string]string), nil
 	}
 
 	rw := make(map[string]string)
-	for rewrite := range slices.Values(rewrites) {
-		rw[rewrite.Name] = rewrite.Content
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		if content, err := embed.RewritesFS.ReadFile(filepath.Join("rewrites", webServer, entry.Name())); err == nil {
+			rw[strings.TrimSuffix(entry.Name(), filepath.Ext(entry.Name()))] = string(content)
+		}
 	}
 
 	return rw, nil
@@ -123,7 +126,6 @@ func (r *websiteRepo) Count() (int64, error) {
 	if err := r.db.Model(&biz.Website{}).Count(&count).Error; err != nil {
 		return 0, err
 	}
-
 	return count, nil
 }
 
@@ -741,10 +743,13 @@ func (r *websiteRepo) Delete(ctx context.Context, req *request.WebsiteDelete) er
 		return errors.New(r.t.Get("website %s has bound certificates, please delete the certificate first", website.Name))
 	}
 
-	_ = io.Remove(filepath.Join(app.Root, "sites", website.Name))
-
 	if req.Path {
-		_ = io.Remove(website.Path)
+		_ = io.Remove(filepath.Join(app.Root, "sites", website.Name))
+	} else {
+		// 仅删除配置和日志
+		_ = io.Remove(filepath.Join(app.Root, "sites", website.Name, "config"))
+		_ = io.Remove(filepath.Join(app.Root, "sites", website.Name, "log"))
+		_ = io.Remove(filepath.Join(app.Root, "sites", website.Name, "htpasswd"))
 	}
 	if req.DB {
 		if mysql, err := r.databaseServer.GetByName("local_mysql"); err == nil {

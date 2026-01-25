@@ -3,6 +3,7 @@ defineOptions({
   name: 'apps-postgresql-index'
 })
 
+import copy2clipboard from '@vavt/copy2clipboard'
 import { NButton, NDataTable } from 'naive-ui'
 import { useGettext } from 'vue3-gettext'
 
@@ -12,6 +13,9 @@ import ServiceStatus from '@/components/common/ServiceStatus.vue'
 const { $gettext } = useGettext()
 const currentTab = ref('status')
 
+const { data: postgresPassword } = useRequest(postgresql.postgresPassword, {
+  initialData: ''
+})
 const { data: log } = useRequest(postgresql.log, {
   initialData: ''
 })
@@ -55,13 +59,53 @@ const handleClearLog = async () => {
   await postgresql.clearLog()
   window.$message.success($gettext('Cleared successfully'))
 }
+
+const handleSetPostgresPassword = () => {
+  useRequest(postgresql.setPostgresPassword(postgresPassword.value)).onSuccess(() => {
+    window.$message.success($gettext('Modified successfully'))
+  })
+}
+
+const handleCopyPostgresPassword = () => {
+  copy2clipboard(postgresPassword.value).then(() => {
+    window.$message.success($gettext('Copied successfully'))
+  })
+}
 </script>
 
 <template>
   <common-page show-footer>
     <n-tabs v-model:value="currentTab" type="line" animated>
       <n-tab-pane name="status" :tab="$gettext('Running Status')">
-        <service-status service="postgresql" show-reload />
+        <n-flex vertical>
+          <service-status service="postgresql" show-reload />
+          <n-card :title="$gettext('Super Password')">
+            <n-flex vertical>
+              <n-alert type="info">
+                {{
+                  $gettext(
+                    'The "postgres" superuser password is used to manage the database system. Keep it safe!'
+                  )
+                }}
+              </n-alert>
+              <n-flex>
+                <n-input-group>
+                  <n-input
+                    v-model:value="postgresPassword"
+                    type="password"
+                    show-password-on="click"
+                  />
+                  <n-button type="primary" ghost @click="handleCopyPostgresPassword">
+                    {{ $gettext('Copy') }}
+                  </n-button>
+                </n-input-group>
+                <n-button type="primary" @click="handleSetPostgresPassword">
+                  {{ $gettext('Save') }}
+                </n-button>
+              </n-flex>
+            </n-flex>
+          </n-card>
+        </n-flex>
       </n-tab-pane>
       <n-tab-pane name="config" :tab="$gettext('Main Configuration')">
         <n-flex vertical>

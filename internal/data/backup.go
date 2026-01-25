@@ -164,7 +164,7 @@ func (r *backupRepo) Create(ctx context.Context, typ biz.BackupType, target stri
 func (r *backupRepo) CreatePanel() error {
 	start := time.Now()
 
-	backup := filepath.Join(r.GetDefaultPath(biz.BackupTypePanel), "panel", fmt.Sprintf("panel_%s.zip", time.Now().Format("20060102150405")))
+	backup := filepath.Join(r.GetDefaultPath(biz.BackupTypePanel), fmt.Sprintf("panel_%s.zip", time.Now().Format("20060102150405")))
 
 	temp, err := os.MkdirTemp("", "ace-backup-*")
 	if err != nil {
@@ -402,9 +402,10 @@ func (r *backupRepo) getStorage(backupStorage biz.BackupStorage) (storage.Storag
 		return storage.NewS3(storage.S3Config{
 			Region:          backupStorage.Info.Region,
 			Bucket:          backupStorage.Info.Bucket,
-			AccessKeyID:     backupStorage.Info.AccessKey,
-			SecretAccessKey: backupStorage.Info.SecretKey,
+			AccessKey:       backupStorage.Info.AccessKey,
+			SecretKey:       backupStorage.Info.SecretKey,
 			Endpoint:        backupStorage.Info.Endpoint,
+			Scheme:          backupStorage.Info.Scheme,
 			BasePath:        backupStorage.Info.Path,
 			AddressingStyle: storage.S3AddressingStyle(backupStorage.Info.Style),
 		})
@@ -531,7 +532,11 @@ func (r *backupRepo) createMySQL(name string, storage storage.Storage, target st
 
 // createPostgres 创建 PostgreSQL 备份
 func (r *backupRepo) createPostgres(name string, storage storage.Storage, target string) error {
-	postgres, err := db.NewPostgres("postgres", "", "127.0.0.1", 5432)
+	postgresPassword, err := r.setting.Get(biz.SettingKeyPostgresPassword)
+	if err != nil {
+		return err
+	}
+	postgres, err := db.NewPostgres("postgres", postgresPassword, "127.0.0.1", 5432)
 	if err != nil {
 		return err
 	}
@@ -553,9 +558,11 @@ func (r *backupRepo) createPostgres(name string, storage storage.Storage, target
 
 	// 导出数据库
 	name = name + ".sql"
-	if _, err = shell.Execf(`su - postgres -c "pg_dump '%s'" > '%s'`, target, filepath.Join(tmpDir, name)); err != nil {
+	_ = os.Setenv("PGPASSWORD", postgresPassword)
+	if _, err = shell.Execf(`pg_dump -h 127.0.0.1 -U postgres '%s' > '%s'`, target, filepath.Join(tmpDir, name)); err != nil {
 		return err
 	}
+	_ = os.Unsetenv("PGPASSWORD")
 
 	// 压缩备份文件
 	if err = io.Compress(tmpDir, []string{name}, filepath.Join(tmpDir, name+".zip")); err != nil {
@@ -618,9 +625,6 @@ func (r *backupRepo) restoreMySQL(backup, target string) error {
 	if exist, _ := mysql.DatabaseExists(target); !exist {
 		return errors.New(r.t.Get("database does not exist: %s", target))
 	}
-	if err = os.Setenv("MYSQL_PWD", rootPassword); err != nil {
-		return err
-	}
 
 	clean := false
 	if !strings.HasSuffix(backup, ".sql") {
@@ -631,12 +635,11 @@ func (r *backupRepo) restoreMySQL(backup, target string) error {
 		clean = true
 	}
 
+	_ = os.Setenv("MYSQL_PWD", rootPassword)
 	if _, err = shell.Execf(`mysql -u root '%s' < '%s'`, target, backup); err != nil {
 		return err
 	}
-	if err = os.Unsetenv("MYSQL_PWD"); err != nil {
-		return err
-	}
+	_ = os.Unsetenv("MYSQL_PWD")
 	if clean {
 		_ = io.Remove(filepath.Dir(backup))
 	}
@@ -646,7 +649,11 @@ func (r *backupRepo) restoreMySQL(backup, target string) error {
 
 // restorePostgres 恢复 PostgreSQL 备份
 func (r *backupRepo) restorePostgres(backup, target string) error {
-	postgres, err := db.NewPostgres("postgres", "", "127.0.0.1", 5432)
+	postgresPassword, err := r.setting.Get(biz.SettingKeyPostgresPassword)
+	if err != nil {
+		return err
+	}
+	postgres, err := db.NewPostgres("postgres", postgresPassword, "127.0.0.1", 5432)
 	if err != nil {
 		return err
 	}
@@ -664,9 +671,11 @@ func (r *backupRepo) restorePostgres(backup, target string) error {
 		clean = true
 	}
 
-	if _, err = shell.Execf(`su - postgres -c "psql '%s'" < '%s'`, target, backup); err != nil {
+	_ = os.Setenv("PGPASSWORD", postgresPassword)
+	if _, err = shell.Execf(`psql -h 127.0.0.1 -U postgres '%s' < '%s'`, target, backup); err != nil {
 		return err
 	}
+	_ = os.Unsetenv("PGPASSWORD")
 	if clean {
 		_ = io.Remove(filepath.Dir(backup))
 	}
