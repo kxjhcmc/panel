@@ -9,7 +9,40 @@ import (
 	"strings"
 
 	"github.com/acepanel/panel/pkg/webserver/types"
+	"github.com/samber/lo"
 )
+
+// parseDurationToSeconds 将时长字符串转换为秒数
+// 支持格式: "10s", "5m", "1h", "1d"
+func parseDurationToSeconds(duration string) int {
+	duration = strings.TrimSpace(duration)
+	if duration == "" {
+		return 600 // 默认 10 分钟
+	}
+
+	// 提取数字和单位
+	re := regexp.MustCompile(`^(\d+)([smhd]?)$`)
+	matches := re.FindStringSubmatch(duration)
+	if matches == nil {
+		return 600
+	}
+
+	value, _ := strconv.Atoi(matches[1])
+	unit := matches[2]
+
+	switch unit {
+	case "s", "":
+		return value
+	case "m":
+		return value * 60
+	case "h":
+		return value * 3600
+	case "d":
+		return value * 86400
+	default:
+		return value
+	}
+}
 
 // proxyFilePattern 匹配代理配置文件名 (200-299)
 var proxyFilePattern = regexp.MustCompile(`^(\d{3})-proxy\.conf$`)
@@ -66,6 +99,7 @@ func parseProxyFile(filePath string) (*types.Proxy, error) {
 	contentStr := string(content)
 	proxy := &types.Proxy{
 		Resolver: []string{},
+		Headers:  make(map[string]string),
 		Replaces: make(map[string]string),
 	}
 
@@ -102,7 +136,24 @@ func parseProxyFile(filePath string) (*types.Proxy, error) {
 
 	// 解析 CacheEnable
 	if regexp.MustCompile(`CacheEnable`).MatchString(contentStr) {
-		proxy.Cache = true
+		proxy.Cache = &types.CacheConfig{
+			Valid:             make(map[string]string),
+			NoCacheConditions: []string{},
+			UseStale:          []string{},
+			Methods:           []string{},
+		}
+
+		// 解析 CacheDefaultExpire
+		expirePattern := regexp.MustCompile(`CacheDefaultExpire\s+(\d+)`)
+		if em := expirePattern.FindStringSubmatch(contentStr); em != nil {
+			seconds, _ := strconv.Atoi(em[1])
+			minutes := seconds / 60
+			if minutes > 0 {
+				proxy.Cache.Valid["any"] = fmt.Sprintf("%dm", minutes)
+			} else {
+				proxy.Cache.Valid["any"] = fmt.Sprintf("%ds", seconds)
+			}
+		}
 	}
 
 	// 解析 Substitute (响应内容替换)
@@ -112,6 +163,17 @@ func parseProxyFile(filePath string) (*types.Proxy, error) {
 	subMatchesPipe := subPatternPipe.FindAllStringSubmatch(contentStr, -1)
 	for _, sm := range subMatchesPipe {
 		proxy.Replaces[sm[1]] = sm[2]
+	}
+
+	// 解析自定义请求头 (排除 Host)
+	headerPattern := regexp.MustCompile(`RequestHeader\s+set\s+(\S+)\s+"([^"]+)"`)
+	headerMatches := headerPattern.FindAllStringSubmatch(contentStr, -1)
+	for _, hm := range headerMatches {
+		headerName := hm[1]
+		headerValue := hm[2]
+		if headerName != "Host" {
+			proxy.Headers[headerName] = headerValue
+		}
 	}
 
 	return proxy, nil
@@ -210,11 +272,7 @@ func generateProxyConfig(proxy types.Proxy) string {
 	sb.WriteString(fmt.Sprintf("    ProxyPassReverse %s %s\n", location, proxy.Pass))
 
 	// Host 配置
-	if proxy.Host != "" {
-		sb.WriteString(fmt.Sprintf("    RequestHeader set Host \"%s\"\n", proxy.Host))
-	} else {
-		sb.WriteString("    ProxyPreserveHost On\n")
-	}
+	sb.WriteString(lo.If(proxy.Host != "", fmt.Sprintf("    RequestHeader set Host \"%s\"\n", proxy.Host)).Else("    ProxyPreserveHost On\n"))
 
 	// SSL/SNI 配置
 	if proxy.SNI != "" || strings.HasPrefix(proxy.Pass, "https://") {
@@ -234,10 +292,29 @@ func generateProxyConfig(proxy types.Proxy) string {
 	}
 
 	// Cache 配置
-	if proxy.Cache {
+	if proxy.Cache != nil {
 		sb.WriteString("    <IfModule mod_cache.c>\n")
 		sb.WriteString(fmt.Sprintf("        CacheEnable disk %s\n", location))
-		sb.WriteString("        CacheDefaultExpire 600\n")
+
+		// 从 Valid 中获取默认过期时间
+		expireSeconds := 600 // 默认 10 分钟
+		if len(proxy.Cache.Valid) > 0 {
+			// 取第一个值作为默认过期时间
+			for _, duration := range proxy.Cache.Valid {
+				expireSeconds = parseDurationToSeconds(duration)
+				break
+			}
+		}
+		sb.WriteString(fmt.Sprintf("        CacheDefaultExpire %d\n", expireSeconds))
+		sb.WriteString("    </IfModule>\n")
+	}
+
+	// 自定义请求头
+	if len(proxy.Headers) > 0 {
+		sb.WriteString("    <IfModule mod_headers.c>\n")
+		for name, value := range proxy.Headers {
+			sb.WriteString(fmt.Sprintf("        RequestHeader set %s \"%s\"\n", name, value))
+		}
 		sb.WriteString("    </IfModule>\n")
 	}
 
@@ -403,19 +480,11 @@ func generateBalancerConfig(upstream types.Upstream) string {
 
 	// 服务器列表
 	for addr, options := range upstream.Servers {
-		if options != "" {
-			sb.WriteString(fmt.Sprintf("        BalancerMember %s %s\n", addr, options))
-		} else {
-			sb.WriteString(fmt.Sprintf("        BalancerMember %s\n", addr))
-		}
+		sb.WriteString(fmt.Sprintf("        BalancerMember %s\n", lo.If(options != "", addr+" "+options).Else(addr)))
 	}
 
 	// 负载均衡方法
-	lbMethod := "byrequests" // 默认轮询
-	if upstream.Algo != "" {
-		lbMethod = upstream.Algo
-	}
-	sb.WriteString(fmt.Sprintf("        ProxySet lbmethod=%s\n", lbMethod))
+	sb.WriteString(fmt.Sprintf("        ProxySet lbmethod=%s\n", lo.If(upstream.Algo != "", upstream.Algo).Else("byrequests")))
 
 	// 连接池配置
 	if upstream.Keepalive > 0 {

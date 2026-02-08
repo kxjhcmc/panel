@@ -44,6 +44,7 @@ const updateModel = ref<any>({
   script: ''
 })
 const updateModal = ref(false)
+const updateCertLoading = ref(false)
 const updateCert = ref<any>()
 const showModal = ref(false)
 const showModel = ref<any>({
@@ -128,7 +129,7 @@ const columns: any = [
   {
     title: $gettext('Issuer'),
     key: 'issuer',
-    width: 120,
+    width: 250,
     ellipsis: { tooltip: true },
     render(row: any) {
       return row.issuer == '' ? $gettext('None') : row.issuer
@@ -199,7 +200,7 @@ const columns: any = [
                 onClick: () => {
                   deployModel.value.id = row.id
                   if (row.website_id != 0) {
-                    deployModel.value.websites.push(row.website_id)
+                    deployModel.value.websites = [row.website_id]
                   }
                   deployModal.value = true
                 }
@@ -322,20 +323,25 @@ const { loading, data, page, total, pageSize, pageCount, refresh } = usePaginati
 )
 
 const handleUpdateCert = () => {
-  useRequest(cert.certUpdate(updateCert.value, updateModel.value)).onSuccess(() => {
-    refresh()
-    updateModal.value = false
-    updateModel.value.domains = []
-    updateModel.value.type = 'P256'
-    updateModel.value.dns_id = null
-    updateModel.value.account_id = null
-    updateModel.value.website_id = null
-    updateModel.value.auto_renewal = true
-    updateModel.value.cert = ''
-    updateModel.value.key = ''
-    updateModel.value.script = ''
-    window.$message.success($gettext('Update successful'))
-  })
+  updateCertLoading.value = true
+  useRequest(cert.certUpdate(updateCert.value, updateModel.value))
+    .onSuccess(() => {
+      refresh()
+      updateModal.value = false
+      updateModel.value.domains = []
+      updateModel.value.type = 'P256'
+      updateModel.value.dns_id = null
+      updateModel.value.account_id = null
+      updateModel.value.website_id = null
+      updateModel.value.auto_renewal = true
+      updateModel.value.cert = ''
+      updateModel.value.key = ''
+      updateModel.value.script = ''
+      window.$message.success($gettext('Update successful'))
+    })
+    .onComplete(() => {
+      updateCertLoading.value = false
+    })
 }
 
 const handleAutoRenewalUpdate = (row: any) => {
@@ -521,7 +527,7 @@ onUnmounted(() => {
           />
         </n-form-item>
       </n-form>
-      <n-button type="info" block @click="handleUpdateCert">{{ $gettext('Submit') }}</n-button>
+      <n-button type="info" block :loading="updateCertLoading" :disabled="updateCertLoading" @click="handleUpdateCert">{{ $gettext('Submit') }}</n-button>
     </n-space>
   </n-modal>
   <n-modal
@@ -533,7 +539,10 @@ onUnmounted(() => {
     :bordered="false"
     :segmented="false"
   >
-    <n-space vertical>
+    <n-flex vertical>
+      <n-alert type="info">
+        {{ $gettext('If website not enabled HTTPS, please enable it after deployment.') }}
+      </n-alert>
       <n-form :model="deployModel">
         <n-form-item path="website_id" :label="$gettext('Website')">
           <n-select
@@ -546,7 +555,7 @@ onUnmounted(() => {
         </n-form-item>
       </n-form>
       <n-button type="info" block @click="handleDeployCert">{{ $gettext('Submit') }}</n-button>
-    </n-space>
+    </n-flex>
   </n-modal>
   <n-modal
     v-model:show="showModal"

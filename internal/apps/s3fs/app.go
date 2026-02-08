@@ -94,17 +94,19 @@ func (s *App) Create(w http.ResponseWriter, r *http.Request) {
 		service.Error(w, http.StatusInternalServerError, s.t.Get("failed to create passwd file: %v", err))
 		return
 	}
-	if _, err = shell.Execf(`echo 's3fs#%s %s fuse _netdev,allow_other,nonempty,url=%s,passwd_file=/etc/passwd-s3fs-%s 0 0' >> /etc/fstab`, req.Bucket, req.Path, req.URL, cast.ToString(id)); err != nil {
+	if _, err = shell.Execf(`echo 's3fs#%s %s fuse3 _netdev,allow_other,url=%s,passwd_file=/etc/passwd-s3fs-%s 0 0' >> /etc/fstab`, req.Bucket, req.Path, req.URL, cast.ToString(id)); err != nil {
 		service.Error(w, http.StatusInternalServerError, "%v", err)
 		return
 	}
 	if _, err = shell.Execf("mount -a"); err != nil {
 		_, _ = shell.Execf(`sed -i 's@^s3fs#%s\s%s.*$@@g' /etc/fstab`, req.Bucket, req.Path)
+		_ = os.Remove("/etc/passwd-s3fs-" + cast.ToString(id))
 		service.Error(w, http.StatusInternalServerError, "%v", err)
 		return
 	}
 	if _, err = shell.Execf(`df -h | grep '%s'`, req.Path); err != nil {
 		_, _ = shell.Execf(`sed -i 's@^s3fs#%s\s%s.*$@@g' /etc/fstab`, req.Bucket, req.Path)
+		_ = os.Remove("/etc/passwd-s3fs-" + cast.ToString(id))
 		service.Error(w, http.StatusInternalServerError, s.t.Get("mount failed: %v", err))
 		return
 	}
@@ -138,7 +140,7 @@ func (s *App) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, _ = shell.Execf(`fusermount -uz '%s'`, mount.Path)
+	_, _ = shell.Execf(`fusermount3 -uz '%s'`, mount.Path)
 	_, err2 := shell.Execf(`umount -lf '%s'`, mount.Path)
 	// 卸载之后再检查下是否还有挂载
 	if _, err = shell.Execf(`df -h | grep '%s'`, mount.Path); err == nil {

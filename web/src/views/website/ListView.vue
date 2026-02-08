@@ -1,11 +1,13 @@
 <script lang="ts" setup>
-import { NButton, NCheckbox, NDataTable, NFlex, NInput, NSwitch, NTag } from 'naive-ui'
+import { NButton, NCheckbox, NDataTable, NFlex, NInput, NPopover, NSwitch, NTag } from 'naive-ui'
 import { useGettext } from 'vue3-gettext'
 
 import website from '@/api/panel/website'
 import DeleteConfirm from '@/components/common/DeleteConfirm.vue'
+import TheIcon from '@/components/custom/TheIcon.vue'
 import { useFileStore } from '@/store'
 import { isNullOrUndef } from '@/utils'
+import copy2clipboard from '@vavt/copy2clipboard'
 
 const type = defineModel<string>('type', { type: String, required: true }) // 网站类型
 const createModal = defineModel<boolean>('createModal', { type: Boolean, required: true }) // 创建网站
@@ -23,7 +25,89 @@ const columns: any = [
     key: 'name',
     width: 200,
     resizable: true,
-    ellipsis: { tooltip: true }
+    ellipsis: { tooltip: true },
+    render(row: any) {
+      const elements = [h('span', {}, row.name)]
+      if (row.domains && row.domains.length > 0) {
+        elements.push(
+          h(
+            NPopover,
+            { trigger: 'hover', placement: 'right' },
+            {
+              trigger: () =>
+                h(
+                  'span',
+                  {
+                    class: 'cursor-pointer hover:opacity-60 inline-flex',
+                    onDblclick: () => {
+                      const protocol = row.ssl ? 'https' : 'http'
+                      window.open(`${protocol}://${row.domains[0]}`, '_blank')
+                    }
+                  },
+                  [h(TheIcon, { icon: 'mdi:link-variant', size: 16 })]
+                ),
+              default: () =>
+                h(
+                  NFlex,
+                  { vertical: true, size: 'small' },
+                  {
+                    default: () =>
+                      row.domains.map((domain: string) => {
+                        const protocol = row.ssl ? 'https' : 'http'
+                        const url = `${protocol}://${domain}`
+                        return h(
+                          NFlex,
+                          { align: 'center', size: 'small' },
+                          {
+                            default: () => [
+                              h(
+                                'a',
+                                {
+                                  href: url,
+                                  target: '_blank',
+                                  class: 'hover:underline'
+                                },
+                                url
+                              ),
+                              h(
+                                'span',
+                                {
+                                  class: 'cursor-pointer hover:opacity-60 ml-1 inline-flex',
+                                  onClick: () => {
+                                    copy2clipboard(url).then(() => {
+                                      window.$message.success($gettext('Copied'))
+                                    })
+                                  }
+                                },
+                                [h(TheIcon, { icon: 'mdi:content-copy', size: 14 })]
+                              )
+                            ]
+                          }
+                        )
+                      })
+                  }
+                )
+            }
+          )
+        )
+      }
+      return h(NFlex, { align: 'center', wrap: false }, { default: () => elements })
+    }
+  },
+  {
+    title: $gettext('Website Type'),
+    key: 'type',
+    width: 150,
+    resizable: true,
+    render(row: any) {
+      const typeMap: any = {
+        proxy: { label: $gettext('Reverse Proxy'), type: 'warning' },
+        php: { label: $gettext('PHP'), type: 'info' },
+        static: { label: $gettext('Pure Static'), type: 'success' }
+      }
+      const config = typeMap[row.type] || { label: row.type, type: 'default' }
+      return h(NTag, { type: config.type }, { default: () => config.label })
+    }
   },
   {
     title: $gettext('Running'),
@@ -60,13 +144,13 @@ const columns: any = [
   },
   {
     title: 'HTTPS',
-    key: 'https',
+    key: 'ssl',
     width: 150,
     render(row: any) {
       return h(NSwitch, {
         size: 'small',
         rubberBand: false,
-        value: row.https,
+        value: row.ssl,
         onClick: () => handleEdit(row)
       })
     }
@@ -301,7 +385,7 @@ onMounted(() => {
       striped
       remote
       :loading="loading"
-      :scroll-x="1400"
+      :scroll-x="1500"
       :columns="columns"
       :data="data"
       :row-key="(row: any) => row.id"

@@ -200,6 +200,7 @@ func (route *Http) Register(r *chi.Mux) {
 			r.Get("/update_info", route.home.UpdateInfo)
 			r.Post("/update", route.home.Update)
 			r.Post("/restart", route.home.Restart)
+			r.Post("/restart_server", route.home.RestartServer)
 		})
 
 		r.Route("/task", func(r chi.Router) {
@@ -288,10 +289,8 @@ func (route *Http) Register(r *chi.Mux) {
 				r.Get("/{id}", route.cert.Get)
 				r.Delete("/{id}", route.cert.Delete)
 				r.Post("/{id}/obtain_auto", route.cert.ObtainAuto)
-				r.Post("/{id}/obtain_manual", route.cert.ObtainManual)
 				r.Post("/{id}/obtain_self_signed", route.cert.ObtainSelfSigned)
 				r.Post("/{id}/renew", route.cert.Renew)
-				r.Post("/{id}/manual_dns", route.cert.ManualDNS)
 				r.Post("/{id}/deploy", route.cert.Deploy)
 			})
 			r.Route("/dns", func(r chi.Router) {
@@ -357,6 +356,9 @@ func (route *Http) Register(r *chi.Mux) {
 				r.Get("/{version}/modules", route.environmentPHP.ModuleList)
 				r.Post("/{version}/modules", route.environmentPHP.InstallModule)
 				r.Delete("/{version}/modules", route.environmentPHP.UninstallModule)
+				r.Get("/{version}/config_tune", route.environmentPHP.GetConfigTune)
+				r.Post("/{version}/config_tune", route.environmentPHP.UpdateConfigTune)
+				r.Post("/{version}/clean_session", route.environmentPHP.CleanSession)
 			})
 			r.Route("/python", func(r chi.Router) {
 				r.Post("/{slug}/set_cli", route.environmentPython.SetCli)
@@ -479,6 +481,7 @@ func (route *Http) Register(r *chi.Mux) {
 
 		r.Route("/log", func(r chi.Router) {
 			r.Get("/list", route.log.List)
+			r.Get("/dates", route.log.Dates)
 		})
 
 		r.Route("/monitor", func(r chi.Router) {
@@ -492,6 +495,7 @@ func (route *Http) Register(r *chi.Mux) {
 			r.Get("/", route.setting.Get)
 			r.Post("/", route.setting.Update)
 			r.Post("/cert", route.setting.UpdateCert)
+			r.Post("/obtain_cert", route.setting.ObtainCert)
 		})
 
 		r.Route("/systemctl", func(r chi.Router) {

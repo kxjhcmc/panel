@@ -387,7 +387,6 @@ func (s *dnsSolver) Present(ctx context.Context, challenge acme.Challenge) error
 	rec := libdns.TXT{
 		Name: libdns.RelativeName(dnsName+".", zone+"."),
 		Text: keyAuth,
-		TTL:  10 * time.Minute,
 	}
 
 	results, err := provider.SetRecords(ctx, zone+".", []libdns.Record{rec})
@@ -505,49 +504,4 @@ type DNSParam struct {
 type DNSProvider interface {
 	libdns.RecordSetter
 	libdns.RecordDeleter
-}
-
-type manualDNSSolver struct {
-	check       bool // 是否检查 DNS 解析，目前没写
-	controlChan chan struct{}
-	dnsChan     chan any
-	certChan    chan any
-	records     []DNSRecord
-}
-
-func (s *manualDNSSolver) Present(ctx context.Context, challenge acme.Challenge) error {
-	full := challenge.DNS01TXTRecordName()
-	keyAuth := challenge.DNS01KeyAuthorization()
-	domain, err := publicsuffix.EffectiveTLDPlusOne(full)
-	if err != nil {
-		return fmt.Errorf("failed to get the effective TLD+1 for %q: %w", full, err)
-	}
-
-	s.records = append(s.records, DNSRecord{
-		Name:   strings.TrimSuffix(full, "."+domain),
-		Domain: domain,
-		Value:  keyAuth,
-	})
-	s.dnsChan <- s.records
-
-	select {
-	case <-s.controlChan:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
-func (s *manualDNSSolver) CleanUp(_ context.Context, _ acme.Challenge) error {
-	defer func() { _ = recover() }()
-	close(s.controlChan)
-	close(s.dnsChan)
-	close(s.certChan)
-	return nil
-}
-
-type DNSRecord struct {
-	Name   string `json:"name"`
-	Domain string `json:"domain"`
-	Value  string `json:"value"`
 }

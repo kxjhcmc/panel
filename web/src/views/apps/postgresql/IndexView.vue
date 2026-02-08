@@ -9,9 +9,14 @@ import { useGettext } from 'vue3-gettext'
 
 import postgresql from '@/api/apps/postgresql'
 import ServiceStatus from '@/components/common/ServiceStatus.vue'
+import PostgresqlConfigTuneView from './PostgresqlConfigTuneView.vue'
 
 const { $gettext } = useGettext()
 const currentTab = ref('status')
+const setPostgresPasswordLoading = ref(false)
+const saveConfigLoading = ref(false)
+const saveUserConfigLoading = ref(false)
+const clearLogLoading = ref(false)
 
 const { data: postgresPassword } = useRequest(postgresql.postgresPassword, {
   initialData: ''
@@ -19,11 +24,19 @@ const { data: postgresPassword } = useRequest(postgresql.postgresPassword, {
 const { data: log } = useRequest(postgresql.log, {
   initialData: ''
 })
-const { data: config } = useRequest(postgresql.config, {
+const { data: config, send: refreshConfig } = useRequest(postgresql.config, {
   initialData: ''
 })
-const { data: userConfig } = useRequest(postgresql.userConfig, {
+const { data: userConfig, send: refreshUserConfig } = useRequest(postgresql.userConfig, {
   initialData: ''
+})
+
+watch(currentTab, (val) => {
+  if (val === 'config') {
+    refreshConfig()
+  } else if (val === 'user-config') {
+    refreshUserConfig()
+  }
 })
 const { data: load } = useRequest(postgresql.load, {
   initialData: []
@@ -45,25 +58,48 @@ const loadColumns: any = [
   }
 ]
 
-const handleSaveConfig = async () => {
-  await postgresql.saveConfig(config.value)
-  window.$message.success($gettext('Saved successfully'))
+const handleSaveConfig = () => {
+  saveConfigLoading.value = true
+  useRequest(postgresql.saveConfig(config.value))
+    .onSuccess(() => {
+      window.$message.success($gettext('Saved successfully'))
+    })
+    .onComplete(() => {
+      saveConfigLoading.value = false
+    })
 }
 
-const handleSaveUserConfig = async () => {
-  await postgresql.saveUserConfig(userConfig.value)
-  window.$message.success($gettext('Saved successfully'))
+const handleSaveUserConfig = () => {
+  saveUserConfigLoading.value = true
+  useRequest(postgresql.saveUserConfig(userConfig.value))
+    .onSuccess(() => {
+      window.$message.success($gettext('Saved successfully'))
+    })
+    .onComplete(() => {
+      saveUserConfigLoading.value = false
+    })
 }
 
-const handleClearLog = async () => {
-  await postgresql.clearLog()
-  window.$message.success($gettext('Cleared successfully'))
+const handleClearLog = () => {
+  clearLogLoading.value = true
+  useRequest(postgresql.clearLog())
+    .onSuccess(() => {
+      window.$message.success($gettext('Cleared successfully'))
+    })
+    .onComplete(() => {
+      clearLogLoading.value = false
+    })
 }
 
 const handleSetPostgresPassword = () => {
-  useRequest(postgresql.setPostgresPassword(postgresPassword.value)).onSuccess(() => {
-    window.$message.success($gettext('Modified successfully'))
-  })
+  setPostgresPasswordLoading.value = true
+  useRequest(postgresql.setPostgresPassword(postgresPassword.value))
+    .onSuccess(() => {
+      window.$message.success($gettext('Modified successfully'))
+    })
+    .onComplete(() => {
+      setPostgresPasswordLoading.value = false
+    })
 }
 
 const handleCopyPostgresPassword = () => {
@@ -99,7 +135,7 @@ const handleCopyPostgresPassword = () => {
                     {{ $gettext('Copy') }}
                   </n-button>
                 </n-input-group>
-                <n-button type="primary" @click="handleSetPostgresPassword">
+                <n-button type="primary" :loading="setPostgresPasswordLoading" :disabled="setPostgresPasswordLoading" @click="handleSetPostgresPassword">
                   {{ $gettext('Save') }}
                 </n-button>
               </n-flex>
@@ -118,11 +154,14 @@ const handleCopyPostgresPassword = () => {
           </n-alert>
           <common-editor v-model:value="config" height="60vh" />
           <n-flex>
-            <n-button type="primary" @click="handleSaveConfig">
+            <n-button type="primary" :loading="saveConfigLoading" :disabled="saveConfigLoading" @click="handleSaveConfig">
               {{ $gettext('Save') }}
             </n-button>
           </n-flex>
         </n-flex>
+      </n-tab-pane>
+      <n-tab-pane name="config-tune" :tab="$gettext('Parameter Tuning')">
+        <postgresql-config-tune-view />
       </n-tab-pane>
       <n-tab-pane name="user-config" :tab="$gettext('User Configuration')">
         <n-flex vertical>
@@ -135,7 +174,7 @@ const handleCopyPostgresPassword = () => {
           </n-alert>
           <common-editor v-model:value="userConfig" height="60vh" />
           <n-flex>
-            <n-button type="primary" @click="handleSaveUserConfig">
+            <n-button type="primary" :loading="saveUserConfigLoading" :disabled="saveUserConfigLoading" @click="handleSaveUserConfig">
               {{ $gettext('Save') }}
             </n-button>
           </n-flex>
@@ -154,7 +193,7 @@ const handleCopyPostgresPassword = () => {
       <n-tab-pane name="run-log" :tab="$gettext('Runtime Logs')">
         <n-flex vertical>
           <n-flex>
-            <n-button type="primary" @click="handleClearLog">
+            <n-button type="primary" :loading="clearLogLoading" :disabled="clearLogLoading" @click="handleClearLog">
               {{ $gettext('Clear Log') }}
             </n-button>
           </n-flex>

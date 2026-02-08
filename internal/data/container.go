@@ -100,15 +100,17 @@ func (r *containerRepo) Create(req *request.ContainerCreate) (string, error) {
 
 	ctx := context.Background()
 
-	// 拉取镜像
-	out, err := apiClient.ImagePull(ctx, req.Name, client.ImagePullOptions{})
+	// 获取镜像信息
+	image, err := apiClient.ImageInspect(ctx, req.Image)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("failed to inspect image: %v", err)
 	}
-	defer func(out client.ImagePullResponse) { _ = out.Close() }(out)
-
-	if err = out.Wait(ctx); err != nil {
-		return "", err
+	// 兼容一些没有指定命令和入口点的镜像
+	if len(req.Command) == 0 && len(image.Config.Cmd) > 0 {
+		req.Command = image.Config.Cmd
+	}
+	if len(req.Entrypoint) == 0 && len(image.Config.Entrypoint) > 0 {
+		req.Entrypoint = image.Config.Entrypoint
 	}
 
 	// 构建容器配置
@@ -147,10 +149,10 @@ func (r *containerRepo) Create(req *request.ContainerCreate) (string, error) {
 		portMap := make(network.PortMap)
 		for _, port := range req.Ports {
 			if port.ContainerStart-port.ContainerEnd != port.HostStart-port.HostEnd {
-				return "", fmt.Errorf("容器端口和主机端口数量不匹配（容器: %d 主机: %d）", port.ContainerStart-port.ContainerEnd, port.HostStart-port.HostEnd)
+				return "", fmt.Errorf("container port and host port count do not match (container: %d host: %d)", port.ContainerStart-port.ContainerEnd, port.HostStart-port.HostEnd)
 			}
 			if port.ContainerStart > port.ContainerEnd || port.HostStart > port.HostEnd || port.ContainerStart < 1 || port.HostStart < 1 {
-				return "", fmt.Errorf("端口范围不正确")
+				return "", fmt.Errorf("port range is invalid")
 			}
 
 			count := uint(0)

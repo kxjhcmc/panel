@@ -37,6 +37,7 @@ const updateAccountModel = ref<any>({
   ca: 'letsencrypt'
 })
 const updateAccountModal = ref(false)
+const updateAccountLoading = ref(false)
 const updateAccount = ref<any>()
 
 const columns: any = [
@@ -146,6 +147,7 @@ const { loading, data, page, total, pageSize, pageCount, refresh } = usePaginati
 )
 
 const handleUpdateAccount = () => {
+  updateAccountLoading.value = true
   messageReactive = window.$message.loading(
     $gettext('Registering account with CA, please wait patiently'),
     {
@@ -163,6 +165,7 @@ const handleUpdateAccount = () => {
     })
     .onComplete(() => {
       messageReactive?.destroy()
+      updateAccountLoading.value = false
     })
 }
 
@@ -213,13 +216,13 @@ onUnmounted(() => {
     <n-space vertical>
       <n-alert type="info">{{
         $gettext(
-          'Google and SSL.com require obtaining KID and HMAC from their official websites first'
+          'LiteSSL, Google and SSL.com require obtaining EAB (KID and HMAC) from their official websites first'
         )
       }}</n-alert>
       <n-alert type="warning">
         {{
           $gettext(
-            "Google is not accessible in mainland China, other CAs depend on network conditions, recommend using Let's Encrypt"
+            "Google is not accessible in mainland China, other CAs depend on network conditions, recommend using Let's Encrypt or LiteSSL"
           )
         }}
       </n-alert>
@@ -265,7 +268,7 @@ onUnmounted(() => {
           />
         </n-form-item>
       </n-form>
-      <n-button type="info" block @click="handleUpdateAccount">{{ $gettext('Submit') }}</n-button>
+      <n-button type="info" block :loading="updateAccountLoading" :disabled="updateAccountLoading" @click="handleUpdateAccount">{{ $gettext('Submit') }}</n-button>
     </n-space>
   </n-modal>
 </template>

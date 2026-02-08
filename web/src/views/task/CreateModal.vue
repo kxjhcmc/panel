@@ -19,8 +19,11 @@ const createModel = ref({
   keep: 1,
   backup_type: 'website',
   backup_storage: 0,
-  script: $gettext('# Enter your script content here'),
-  time: '* * * * *'
+  script:
+    `#!/bin/bash\nexport PATH=/bin:/sbin:/usr/bin:/usr/sbin:/usr/local/bin:/usr/local/sbin:$PATH\n\n` +
+    $gettext('# Enter your script content here') +
+    `\n`,
+  time: '*/30 * * * *'
 })
 
 const websites = ref<any>([])
@@ -49,11 +52,11 @@ const handleSubmit = async () => {
   loading.value = true
   useRequest(cron.create(createModel.value))
     .onSuccess(() => {
+      show.value = false
       window.$message.success($gettext('Created successfully'))
       window.$bus.emit('task:refresh-cron')
     })
     .onComplete(() => {
-      show.value = false
       loading.value = false
     })
 }
@@ -148,7 +151,7 @@ onMounted(() => {
       </n-form-item>
       <div v-if="createModel.type === 'shell'">
         <n-text>{{ $gettext('Script Content') }}</n-text>
-        <common-editor v-model:value="createModel.script" lang="sh" height="40vh" />
+        <common-editor v-model:value="createModel.script" lang="shell" height="40vh" />
       </div>
       <n-form-item v-if="createModel.type === 'backup'" :label="$gettext('Backup Type')">
         <n-radio-group v-model:value="createModel.backup_type">
@@ -191,7 +194,7 @@ onMounted(() => {
         <n-input-number v-model:value="createModel.keep" />
       </n-form-item>
     </n-form>
-    <n-button type="info" :loading="loading" @click="handleSubmit" mt-10 block>
+    <n-button type="info" :loading="loading" :disabled="loading" @click="handleSubmit" mt-10 block>
       {{ $gettext('Submit') }}
     </n-button>
   </n-modal>

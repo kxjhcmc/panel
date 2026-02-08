@@ -1,7 +1,7 @@
 <script lang="ts" setup>
 import user from '@/api/panel/user'
 import bgImg from '@/assets/images/login_bg.webp'
-import logoImg from '@/assets/images/logo.png'
+import logoImg from '@/assets/images/logo.svg'
 import { addDynamicRoutes } from '@/router'
 import { useThemeStore, useUserStore } from '@/store'
 import { getLocal, removeLocal, setLocal } from '@/utils'
@@ -39,7 +39,7 @@ if (localLoginInfo) {
 
 const userStore = useUserStore()
 const themeStore = useThemeStore()
-const logining = ref<boolean>(false)
+const logining = ref(false)
 const isRemember = useStorage('isRemember', false)
 const showTwoFA = ref(false)
 const captchaRequired = ref(false)
@@ -78,6 +78,7 @@ async function handleLogin() {
     )
     return
   }
+  logining.value = true
   useRequest(
     user.login(
       rsaEncrypt(username, String(unref(key))),
@@ -88,7 +89,6 @@ async function handleLogin() {
     )
   )
     .onSuccess(async () => {
-      logining.value = true
       window.$notification?.success({ title: $gettext('Login successful!'), duration: 2500 })
       if (isRemember.value) {
         setLocal('loginInfo', { username, password })
@@ -112,7 +112,9 @@ async function handleLogin() {
       // 登录失败后刷新验证码状态
       refreshCaptcha()
     })
-  logining.value = false
+    .onComplete(() => {
+      logining.value = false
+    })
 }
 
 const isTwoFA = () => {

@@ -30,6 +30,7 @@ import EditModal from '@/views/file/EditModal.vue'
 import PreviewModal from '@/views/file/PreviewModal.vue'
 import PropertyModal from '@/views/file/PropertyModal.vue'
 import type { FileInfo, Marked } from '@/views/file/types'
+import copy2clipboard from '@vavt/copy2clipboard'
 
 const { $gettext } = useGettext()
 const themeVars = useThemeVars()
@@ -183,7 +184,7 @@ const selectionBox = computed(() => {
 const hexToRgb = (hex: string) => {
   const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex)
   return result
-    ? `${parseInt(result[1], 16)}, ${parseInt(result[2], 16)}, ${parseInt(result[3], 16)}`
+    ? `${parseInt(result[1] ?? '0', 16)}, ${parseInt(result[2] ?? '0', 16)}, ${parseInt(result[3] ?? '0', 16)}`
     : '24, 160, 88'
 }
 
@@ -818,7 +819,7 @@ const deleteFiles = (items: any[]) => {
 
 // 复制路径到剪贴板
 const copyPath = (item: any) => {
-  navigator.clipboard.writeText(item.full).then(() => {
+  copy2clipboard(item.full).then(() => {
     window.$message.success($gettext('Path copied to clipboard'))
   })
 }
@@ -842,7 +843,8 @@ const handlePaste = () => {
     for (let i = 0; i < data.length; i++) {
       if (data[i]) {
         flag = true
-        paths[i].force = true
+        const pathItem = paths[i]
+        if (pathItem) pathItem.force = true
       }
     }
     if (flag) {

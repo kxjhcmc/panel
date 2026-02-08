@@ -94,7 +94,7 @@ const getNetworks = () => {
       value: item.id
     }))
     if (networks.value.length > 0) {
-      createModel.network = networks.value[0].value
+      createModel.network = networks.value[0]?.value ?? ''
     }
   })
 }
@@ -204,7 +204,7 @@ watch(show, (val) => {
               v-model:value="createModel.image"
               type="text"
               @keydown.enter.prevent
-              :placeholder="$gettext('e.g., nginx:latest, mysql:8.0')"
+              :placeholder="$gettext('e.g., nginx, mysql:8.4, your_username/your_image:tag')"
             />
           </n-form-item>
 

@@ -21,6 +21,7 @@ const props = defineProps({
 const { caProviders, algorithms } = toRefs(props)
 
 let messageReactive: MessageReactive | null = null
+const loading = ref(false)
 
 const model = ref<any>({
   hmac_encoded: '',
@@ -35,6 +36,7 @@ const showEAB = computed(() => {
 })
 
 const handleCreateAccount = () => {
+  loading.value = true
   messageReactive = window.$message.loading(
     $gettext('Registering account with CA, please wait patiently'),
     {
@@ -52,6 +54,7 @@ const handleCreateAccount = () => {
       window.$message.success($gettext('Created successfully'))
     })
     .onComplete(() => {
+      loading.value = false
       messageReactive?.destroy()
     })
 }
@@ -70,13 +73,13 @@ const handleCreateAccount = () => {
     <n-space vertical>
       <n-alert type="info">{{
         $gettext(
-          'Google and SSL.com require obtaining KID and HMAC from their official websites first'
+          'LiteSSL, Google and SSL.com require obtaining EAB (KID and HMAC) from their official websites first'
         )
       }}</n-alert>
       <n-alert type="warning">
         {{
           $gettext(
-            "Google is not accessible in mainland China, other CAs depend on network conditions, recommend using Let's Encrypt"
+            "Google is not accessible in mainland China, other CAs depend on network conditions, recommend using Let's Encrypt or LiteSSL"
           )
         }}
       </n-alert>
@@ -122,7 +125,7 @@ const handleCreateAccount = () => {
           />
         </n-form-item>
       </n-form>
-      <n-button type="info" block @click="handleCreateAccount">{{ $gettext('Submit') }}</n-button>
+      <n-button type="info" block :loading="loading" :disabled="loading" @click="handleCreateAccount">{{ $gettext('Submit') }}</n-button>
     </n-space>
   </n-modal>
 </template>

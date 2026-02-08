@@ -8,12 +8,20 @@ import { useGettext } from 'vue3-gettext'
 
 import redis from '@/api/apps/redis'
 import ServiceStatus from '@/components/common/ServiceStatus.vue'
+import RedisConfigTuneView from './RedisConfigTuneView.vue'
 
 const { $gettext } = useGettext()
 const currentTab = ref('status')
+const saveConfigLoading = ref(false)
 
-const { data: config } = useRequest(redis.config, {
+const { data: config, send: refreshConfig } = useRequest(redis.config, {
   initialData: ''
+})
+
+watch(currentTab, (val) => {
+  if (val === 'config') {
+    refreshConfig()
+  }
 })
 const { data: load } = useRequest(redis.load, {
   initialData: []
@@ -36,9 +44,14 @@ const loadColumns: any = [
 ]
 
 const handleSaveConfig = () => {
-  useRequest(redis.saveConfig(config.value)).onSuccess(() => {
-    window.$message.success($gettext('Saved successfully'))
-  })
+  saveConfigLoading.value = true
+  useRequest(redis.saveConfig(config.value))
+    .onSuccess(() => {
+      window.$message.success($gettext('Saved successfully'))
+    })
+    .onComplete(() => {
+      saveConfigLoading.value = false
+    })
 }
 </script>
 
@@ -59,11 +72,14 @@ const handleSaveConfig = () => {
           </n-alert>
           <common-editor v-model:value="config" height="60vh" />
           <n-flex>
-            <n-button type="primary" @click="handleSaveConfig">
+            <n-button type="primary" :loading="saveConfigLoading" :disabled="saveConfigLoading" @click="handleSaveConfig">
               {{ $gettext('Save') }}
             </n-button>
           </n-flex>
         </n-flex>
+      </n-tab-pane>
+      <n-tab-pane name="config-tune" :tab="$gettext('Parameter Tuning')">
+        <redis-config-tune-view />
       </n-tab-pane>
       <n-tab-pane name="load" :tab="$gettext('Load Status')">
         <n-data-table

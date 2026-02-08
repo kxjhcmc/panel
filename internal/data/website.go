@@ -176,17 +176,21 @@ func (r *websiteRepo) Get(id uint) (*types.WebsiteSetting, error) {
 		setting.SSLCiphers = sslConfig.Ciphers
 	}
 	// 证书
-	crt, _ := io.Read(filepath.Join(app.Root, "sites", website.Name, "config", "fullchain.pem"))
-	setting.SSLCert = crt
-	key, _ := io.Read(filepath.Join(app.Root, "sites", website.Name, "config", "private.key"))
-	setting.SSLKey = key
+	crt, _ := os.ReadFile(filepath.Join(app.Root, "sites", website.Name, "config", "fullchain.pem"))
+	setting.SSLCert = string(crt)
+	key, _ := os.ReadFile(filepath.Join(app.Root, "sites", website.Name, "config", "private.key"))
+	setting.SSLKey = string(key)
 	// 解析证书信息
 	if decode, err := cert.ParseCert(crt); err == nil {
 		setting.SSLNotBefore = decode.NotBefore.Format(time.DateTime)
 		setting.SSLNotAfter = decode.NotAfter.Format(time.DateTime)
 		setting.SSLIssuer = decode.Issuer.CommonName
 		setting.SSLOCSPServer = decode.OCSPServer
+		// 合并 DNSNames 和 IPAddresses
 		setting.SSLDNSNames = decode.DNSNames
+		for _, ip := range decode.IPAddresses {
+			setting.SSLDNSNames = append(setting.SSLDNSNames, ip.String())
+		}
 	}
 	// 访问日志
 	if setting.AccessLog = vhost.AccessLog(); setting.AccessLog == "" {
@@ -255,13 +259,19 @@ func (r *websiteRepo) List(typ string, page, limit uint) ([]*biz.Website, int64,
 
 	// 取证书剩余有效时间和PHP版本
 	for _, website := range websites {
-		crt, _ := io.Read(filepath.Join(app.Root, "sites", website.Name, "config", "fullchain.pem"))
+		crt, _ := os.ReadFile(filepath.Join(app.Root, "sites", website.Name, "config", "fullchain.pem"))
 		if decode, err := cert.ParseCert(crt); err == nil {
 			hours := time.Until(decode.NotAfter).Hours()
 			website.CertExpire = fmt.Sprintf("%.2f", hours/24)
 		}
 		if website.Type == biz.WebsiteTypePHP {
 			website.PHP = r.getPHPVersion(website.Name)
+		}
+		// 获取域名
+		if vhost, err := r.getVhost(website); err == nil {
+			if domains, err := punycode.DecodeDomains(vhost.ServerName()); err == nil {
+				website.Domains = domains
+			}
 		}
 	}
 
@@ -595,10 +605,10 @@ func (r *websiteRepo) Update(ctx context.Context, req *request.WebsiteUpdate) er
 	}
 	website.SSL = req.SSL
 	if req.SSL {
-		if _, err = cert.ParseCert(req.SSLCert); err != nil {
+		if _, err = cert.ParseCert([]byte(req.SSLCert)); err != nil {
 			return errors.New(r.t.Get("failed to parse certificate: %v", err))
 		}
-		if _, err = cert.ParseKey(req.SSLKey); err != nil {
+		if _, err = cert.ParseKey([]byte(req.SSLKey)); err != nil {
 			return errors.New(r.t.Get("failed to parse private key: %v", err))
 		}
 		quic := false
@@ -676,7 +686,19 @@ func (r *websiteRepo) Update(ctx context.Context, req *request.WebsiteUpdate) er
 		}
 	}
 
-	// 高级设置（限流限速、真实 IP、基本认证）
+	// 高级设置（日志路径、限流限速、真实 IP、基本认证）
+	// 日志路径
+	if req.AccessLog != "" {
+		if err = vhost.SetAccessLog(req.AccessLog); err != nil {
+			return err
+		}
+	}
+	if req.ErrorLog != "" {
+		if err = vhost.SetErrorLog(req.ErrorLog); err != nil {
+			return err
+		}
+	}
+	// 限流限速
 	if req.RateLimit != nil {
 		if err = vhost.SetRateLimit(req.RateLimit); err != nil {
 			return err
@@ -903,10 +925,10 @@ func (r *websiteRepo) UpdateCert(req *request.WebsiteUpdateCert) error {
 		return err
 	}
 
-	if _, err := cert.ParseCert(req.Cert); err != nil {
+	if _, err := cert.ParseCert([]byte(req.Cert)); err != nil {
 		return errors.New(r.t.Get("failed to parse certificate: %v", err))
 	}
-	if _, err := cert.ParseKey(req.Key); err != nil {
+	if _, err := cert.ParseKey([]byte(req.Key)); err != nil {
 		return errors.New(r.t.Get("failed to parse private key: %v", err))
 	}
 
@@ -1164,12 +1186,12 @@ func (r *websiteRepo) reloadWebServer() error {
 func (r *websiteRepo) readBasicAuthUsers(siteName string) map[string]string {
 	htpasswdPath := filepath.Join(app.Root, "sites", siteName, "htpasswd")
 	if !io.Exists(htpasswdPath) {
-		return nil
+		return make(map[string]string)
 	}
 
 	file, err := os.Open(htpasswdPath)
 	if err != nil {
-		return nil
+		return make(map[string]string)
 	}
 	defer func(file *os.File) { _ = file.Close() }(file)
 
@@ -1180,27 +1202,36 @@ func (r *websiteRepo) readBasicAuthUsers(siteName string) map[string]string {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
-		// htpasswd 格式: username:password
+		// htpasswd 格式: username:{PLAIN}password或直接username:password
 		parts := strings.SplitN(line, ":", 2)
 		if len(parts) == 2 {
-			users[parts[0]] = parts[1]
+			users[parts[0]] = strings.TrimPrefix(parts[1], "{PLAIN}")
 		}
 	}
 
-	if len(users) == 0 {
-		return nil
-	}
 	return users
 }
 
 // writeBasicAuthUsers 将用户凭证写入 htpasswd 文件
 func (r *websiteRepo) writeBasicAuthUsers(htpasswdPath string, users map[string]string) error {
+	webServer, err := r.setting.Get(biz.SettingKeyWebserver, "unknown")
+	if err != nil {
+		return err
+	}
+
 	var lines []string
 	for username, password := range users {
 		if username == "" || password == "" {
 			continue
 		}
-		lines = append(lines, fmt.Sprintf("%s:%s", username, password))
+		switch webServer {
+		case "nginx":
+			lines = append(lines, fmt.Sprintf("%s:%s", username, "{PLAIN}"+password))
+		case "apache":
+			lines = append(lines, fmt.Sprintf("%s:%s", username, password))
+		default:
+			return errors.New(r.t.Get("unsupported web server: %s", webServer))
+		}
 	}
 
 	content := strings.Join(lines, "\n")

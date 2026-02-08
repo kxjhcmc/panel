@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import ServiceStatus from '@/components/common/ServiceStatus.vue'
+import PhpConfigTuneView from '@/views/environment/PhpConfigTuneView.vue'
 import { NButton, NDataTable, NPopconfirm } from 'naive-ui'
 import { useGettext } from 'vue3-gettext'
 
@@ -17,11 +18,19 @@ const showPHPInfoModal = ref(false)
 const phpinfoContent = ref('')
 const phpinfoLoading = ref(false)
 
-const { data: config } = useRequest(php.config(slug), {
+const { data: config, send: refreshConfig } = useRequest(php.config(slug), {
   initialData: ''
 })
-const { data: fpmConfig } = useRequest(php.fpmConfig(slug), {
+const { data: fpmConfig, send: refreshFpmConfig } = useRequest(php.fpmConfig(slug), {
   initialData: ''
+})
+
+watch(currentTab, (val) => {
+  if (val === 'config') {
+    refreshConfig()
+  } else if (val === 'fpm-config') {
+    refreshFpmConfig()
+  }
 })
 const { data: log } = useRequest(php.log(slug), {
   initialData: ''
@@ -221,6 +230,9 @@ const handleUninstallModule = async (module: string) => {
             :row-key="(row: any) => row.slug"
           />
         </n-flex>
+      </n-tab-pane>
+      <n-tab-pane name="config-tune" :tab="$gettext('Parameter Tuning')">
+        <php-config-tune-view :slug="slug" />
       </n-tab-pane>
       <n-tab-pane name="config" :tab="$gettext('Main Configuration')">
         <n-flex vertical>

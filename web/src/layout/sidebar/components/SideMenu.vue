@@ -3,7 +3,8 @@ import { translateTitle } from '@/locales/menu'
 import { usePermissionStore, useTabStore, useThemeStore } from '@/store'
 import { isUrl, renderIcon } from '@/utils'
 
-import { MenuInst, MenuOption, useThemeVars } from 'naive-ui'
+import type { MenuInst, MenuOption } from 'naive-ui'
+import { useThemeVars } from 'naive-ui'
 import type { VNodeChild } from 'vue'
 import { RouterLink } from 'vue-router'
 import type { Meta, RouteType } from '~/types/router'
@@ -110,9 +111,16 @@ function handleMenuSelect(key: string, item: MenuOption) {
     window.open(menuItem.path)
     return
   }
-  if (menuItem.path === currentRoute.path && !currentRoute.meta?.keepAlive)
-    tabStore.reloadTab(currentRoute.path)
-  else router.push(menuItem.path)
+  if (menuItem.path === currentRoute.path) {
+    // 检查 tab 的 keepAlive 状态，而不是路由元数据
+    // 这样用户固定的标签页不会被意外刷新
+    const tab = tabStore.tabs.find((t) => t.path === menuItem.path)
+    if (!tab?.keepAlive) {
+      tabStore.reloadTab(currentRoute.path)
+    }
+  } else {
+    router.push(menuItem.path)
+  }
 
   // 手机端自动收起菜单
   themeStore.isMobile && themeStore.setCollapsed(true)

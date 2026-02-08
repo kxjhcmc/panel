@@ -73,6 +73,8 @@ const getSelectOptions = (env: TemplateEnvironment) => {
 const formRules = computed<FormRules>(() => {
   const rules: FormRules = {}
   props.template?.environments?.forEach((env) => {
+    const isRequired = env.default == null || env.default === ''
+
     if (env.type === 'url') {
       rules[`envs.${env.name}`] = {
         trigger: ['input', 'blur'],
@@ -85,6 +87,18 @@ const formRules = computed<FormRules>(() => {
           } catch {
             return new Error($gettext('Please enter a valid URL'))
           }
+        }
+      }
+    } else if (isRequired) {
+      // 为必填字段添加校验规则
+      rules[`envs.${env.name}`] = {
+        required: true,
+        trigger: ['input', 'blur'],
+        validator(_rule: FormItemRule, value: any) {
+          if (value === null || value === undefined || value === '') {
+            return new Error($gettext('This field is required'))
+          }
+          return true
         }
       }
     }
@@ -115,7 +129,15 @@ const loadComposeDetailAndFillEnvs = (name: string) => {
     const oldEnvs = data.envs || []
     oldEnvs.forEach((env: { key: string; value: string }) => {
       if (env.key in deployModel.envs) {
-        deployModel.envs[env.key] = env.value
+        // 根据模板中定义的类型进行转换
+        const envDef = props.template?.environments?.find((e) => e.name === env.key)
+        if (envDef && (envDef.type === 'number' || envDef.type === 'port')) {
+          // 数字类型需要转换为 number
+          const numValue = Number(env.value)
+          deployModel.envs[env.key] = isNaN(numValue) ? null : numValue
+        } else {
+          deployModel.envs[env.key] = env.value
+        }
       }
     })
   })

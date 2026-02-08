@@ -15,7 +15,7 @@
     "build": "run-s gen-auto-import type-check build-only copy",
     "preview": "vite preview",
     "build-only": "vite build",
-    "type-check": "vue-tsc --noEmit",
+    "type-check": "vue-tsc --noEmit -p tsconfig.app.json",
     "lint": "run-s gen-auto-import lint-only",
     "lint-only": "eslint . --fix",
     "format": "prettier --write src/",
@@ -55,7 +55,7 @@
     "remove": "^0.1.5",
     "vue": "^3.5.22",
     "vue-echarts": "^8.0.1",
-    "vue-router": "^4.6.3",
+    "vue-router": "^5.0.0",
     "vue3-gettext": "4.0.0-beta.1",
     "vuedraggable": "^4.1.0"
   },
@@ -75,7 +75,7 @@
     "@vue/tsconfig": "^0.8.1",
     "colord": "^2.9.3",
     "cpx2": "^8.0.0",
-    "eslint": "^9.38.0",
+    "eslint": "^10.0.0",
     "eslint-plugin-vue": "^10.5.1",
     "md-editor-v3": "^6.1.0",
     "naive-ui": "^2.43.1",
@@ -95,5 +95,5 @@
     "vite-plugin-vue-devtools": "^8.0.3",
     "vue-tsc": "^3.1.1"
   },
-  "packageManager": "pnpm@10.28.1+sha512.7d7dbbca9e99447b7c3bf7a73286afaaf6be99251eb9498baefa7d406892f67b879adb3a1d7e687fc4ccc1a388c7175fbaae567a26ab44d1067b54fcb0d6a316"
+  "packageManager": "pnpm@10.29.1+sha512.48dae233635a645768a3028d19545cacc1688639eeb1f3734e42d6d6b971afbf22aa1ac9af52a173d9c3a20c15857cfa400f19994d79a2f626fcc73fccda9bbc"
 }

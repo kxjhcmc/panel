@@ -31,7 +31,6 @@ type certRepo struct {
 	db          *gorm.DB
 	log         *slog.Logger
 	settingRepo biz.SettingRepo
-	client      *acme.Client
 }
 
 func NewCertRepo(t *gotext.Locale, db *gorm.DB, log *slog.Logger, settingRepo biz.SettingRepo) biz.CertRepo {
@@ -66,12 +65,16 @@ func (r *certRepo) List(page, limit uint) ([]*types.CertList, int64, error) {
 			CreatedAt:   cert.CreatedAt,
 			UpdatedAt:   cert.UpdatedAt,
 		}
-		if decode, err := pkgcert.ParseCert(cert.Cert); err == nil {
+		if decode, err := pkgcert.ParseCert([]byte(cert.Cert)); err == nil {
 			item.NotBefore = decode.NotBefore
 			item.NotAfter = decode.NotAfter
 			item.Issuer = decode.Issuer.CommonName
 			item.OCSPServer = decode.OCSPServer
+			// 合并 DNSNames 和 IPAddresses
 			item.DNSNames = decode.DNSNames
+			for _, ip := range decode.IPAddresses {
+				item.DNSNames = append(item.DNSNames, ip.String())
+			}
 		}
 		list = append(list, item)
 	}
@@ -92,17 +95,23 @@ func (r *certRepo) GetByWebsite(WebsiteID uint) (*biz.Cert, error) {
 }
 
 func (r *certRepo) Upload(ctx context.Context, req *request.CertUpload) (*biz.Cert, error) {
-	info, err := pkgcert.ParseCert(req.Cert)
+	info, err := pkgcert.ParseCert([]byte(req.Cert))
 	if err != nil {
 		return nil, errors.New(r.t.Get("failed to parse certificate: %v", err))
 	}
-	if _, err = pkgcert.ParseKey(req.Key); err != nil {
+	if _, err = pkgcert.ParseKey([]byte(req.Key)); err != nil {
 		return nil, errors.New(r.t.Get("failed to parse private key: %v", err))
+	}
+
+	// 合并 DNSNames 和 IPAddresses
+	domains := info.DNSNames
+	for _, ip := range info.IPAddresses {
+		domains = append(domains, ip.String())
 	}
 
 	cert := &biz.Cert{
 		Type:    "upload",
-		Domains: info.DNSNames,
+		Domains: domains,
 		Cert:    req.Cert,
 		Key:     req.Key,
 	}
@@ -136,9 +145,13 @@ func (r *certRepo) Create(ctx context.Context, req *request.CertCreate) (*biz.Ce
 }
 
 func (r *certRepo) Update(ctx context.Context, req *request.CertUpdate) error {
-	info, err := pkgcert.ParseCert(req.Cert)
+	info, err := pkgcert.ParseCert([]byte(req.Cert))
 	if err == nil && req.Type == "upload" {
+		// 合并 DNSNames 和 IPAddresses
 		req.Domains = info.DNSNames
+		for _, ip := range info.IPAddresses {
+			req.Domains = append(req.Domains, ip.String())
+		}
 	}
 	if req.Type == "upload" && req.AutoRenewal {
 		return errors.New(r.t.Get("upload certificate cannot be set to auto renewal"))
@@ -205,43 +218,9 @@ func (r *certRepo) ObtainAuto(id uint) (*acme.Certificate, error) {
 		}
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	ssl, err := client.ObtainCertificate(ctx, cert.Domains, acme.KeyType(cert.Type))
-	if err != nil {
-		return nil, err
-	}
-
-	cert.RenewalInfo = *ssl.RenewalInfo
-	cert.CertURL = ssl.URL
-	cert.Cert = string(ssl.ChainPEM)
-	cert.Key = string(ssl.PrivateKey)
-	if err = r.db.Save(cert).Error; err != nil {
-		return nil, err
-	}
-
-	if cert.Website != nil {
-		return &ssl, r.Deploy(cert.ID, cert.WebsiteID)
-	}
-
-	if err = r.runScript(cert); err != nil {
-		return nil, err
-	}
-
-	return &ssl, nil
-}
-
-func (r *certRepo) ObtainManual(id uint) (*acme.Certificate, error) {
-	cert, err := r.Get(id)
-	if err != nil {
-		return nil, err
-	}
-
-	if r.client == nil {
-		return nil, errors.New(r.t.Get("please retry the manual obtain operation"))
-	}
-
-	ssl, err := r.client.ObtainCertificateManual()
 	if err != nil {
 		return nil, err
 	}
@@ -385,7 +364,7 @@ func (r *certRepo) RefreshRenewalInfo(id uint) (mholtacme.RenewalInfo, error) {
 		return mholtacme.RenewalInfo{}, err
 	}
 
-	crt, err := pkgcert.ParseCert(cert.Cert)
+	crt, err := pkgcert.ParseCert([]byte(cert.Cert))
 	if err != nil {
 		return mholtacme.RenewalInfo{}, err
 	}
@@ -403,34 +382,6 @@ func (r *certRepo) RefreshRenewalInfo(id uint) (mholtacme.RenewalInfo, error) {
 	}
 
 	return renewInfo, nil
-}
-
-func (r *certRepo) ManualDNS(id uint) ([]acme.DNSRecord, error) {
-	cert, err := r.Get(id)
-	if err != nil {
-		return nil, err
-	}
-
-	client, err := r.getClient(cert)
-	if err != nil {
-		return nil, err
-	}
-
-	client.UseManualDns()
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Minute)
-	defer cancel()
-	records, err := client.GetDNSRecords(ctx, cert.Domains, acme.KeyType(cert.Type))
-	if err != nil {
-		return nil, err
-	}
-
-	// 15 分钟后清理客户端
-	r.client = client
-	time.AfterFunc(15*time.Minute, func() {
-		r.client = nil
-	})
-
-	return records, nil
 }
 
 func (r *certRepo) Deploy(ID, WebsiteID uint) error {
@@ -487,12 +438,9 @@ func (r *certRepo) runScript(cert *biz.Cert) error {
 	if _, err = f.WriteString(cert.Script); err != nil {
 		return err
 	}
-	if err = f.Chmod(0755); err != nil {
-		return err
-	}
-	if err = f.Close(); err != nil {
-		return err
-	}
+
+	_ = f.Chmod(0755)
+	_ = f.Close()
 	defer func(name string) { _ = os.Remove(name) }(f.Name())
 
 	_, err = shell.Execf("bash " + f.Name())

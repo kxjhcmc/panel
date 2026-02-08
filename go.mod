@@ -4,15 +4,15 @@ go 1.25.6
 
 require (
 	github.com/DeRuina/timberjack v1.3.9
-	github.com/bddjr/hlfhr v1.4.0
+	github.com/bddjr/hlfhr v1.4.2
 	github.com/beevik/ntp v1.5.0
 	github.com/coder/websocket v1.8.14
 	github.com/containerd/errdefs v1.0.0
-	github.com/coreos/go-systemd/v22 v22.6.0
+	github.com/coreos/go-systemd/v22 v22.7.0
 	github.com/creack/pty v1.1.24
 	github.com/dchest/captcha v1.1.0
 	github.com/expr-lang/expr v1.17.7
-	github.com/go-chi/chi/v5 v5.2.4
+	github.com/go-chi/chi/v5 v5.2.5
 	github.com/go-chi/httplog/v3 v3.3.0
 	github.com/go-gormigrate/gormigrate/v2 v2.1.5
 	github.com/go-resty/resty/v2 v2.17.1
@@ -24,8 +24,8 @@ require (
 	github.com/hashicorp/go-version v1.8.0
 	github.com/klauspost/compress v1.18.3
 	github.com/leonelquinteros/gotext v1.7.2
-	github.com/lib/pq v1.10.9
-	github.com/libdns/alidns v1.0.6-beta.3
+	github.com/lib/pq v1.11.1
+	github.com/libdns/alidns v1.0.6-beta.3.0.20260121104221-597b1e580e21
 	github.com/libdns/cloudflare v0.2.2
 	github.com/libdns/cloudns v1.1.0
 	github.com/libdns/gcore v0.0.0-20250427050847-9964da923833
@@ -40,8 +40,8 @@ require (
 	github.com/libtnb/sessions v1.2.2
 	github.com/libtnb/utils v1.2.1
 	github.com/mholt/acmez/v3 v3.1.4
-	github.com/moby/moby/api v1.53.0-rc.2
-	github.com/moby/moby/client v0.2.1
+	github.com/moby/moby/api v1.53.0
+	github.com/moby/moby/client v0.2.2
 	github.com/ncruces/go-sqlite3 v0.30.5
 	github.com/ncruces/go-sqlite3/gormlite v0.30.2
 	github.com/orandin/slog-gorm v1.4.0
@@ -51,7 +51,7 @@ require (
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/samber/lo v1.52.0
 	github.com/sethvargo/go-limiter v1.1.0
-	github.com/shirou/gopsutil/v4 v4.25.12
+	github.com/shirou/gopsutil/v4 v4.26.1
 	github.com/spf13/cast v1.10.0
 	github.com/stretchr/testify v1.11.1
 	github.com/studio-b12/gowebdav v0.12.0
@@ -106,8 +106,10 @@ require (
 )
 
 replace (
+	// TODO: remove this after https://github.com/gookit/validate/pull/329 is merged
+	github.com/gookit/validate => github.com/devhaozi/validate v0.0.0-20260206130245-26dfc60977ce
 	github.com/mholt/acmez/v3 => github.com/libtnb/acmez/v3 v3.0.0-20260103184942-a835890fc93e
-	github.com/moby/moby/client => github.com/libtnb/moby/client v0.0.0-20260119133723-7d7dd88cf643
+	github.com/moby/moby/client => github.com/libtnb/moby/client v0.0.0-20260127104057-d4b7902a560b
 	github.com/rhnvrm/simples3 => github.com/devhaozi/simples3 v0.0.0-20260124160558-447c94ecedff
 	github.com/stretchr/testify => github.com/libtnb/testify v0.0.0-20260103194301-c7a63ea79696
 )

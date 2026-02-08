@@ -152,11 +152,16 @@ const onCreateEnv = () => {
 
 // 保存
 const handleSave = async () => {
-  useRequest(project.update(model.value.id, model.value)).onSuccess(() => {
-    window.$bus.emit('project:refresh')
-    window.$message.success($gettext('Saved successfully'))
-    show.value = false
-  })
+  loading.value = true
+  useRequest(project.update(model.value.id, model.value))
+    .onSuccess(() => {
+      window.$bus.emit('project:refresh')
+      window.$message.success($gettext('Saved successfully'))
+      show.value = false
+    })
+    .onComplete(() => {
+      loading.value = false
+    })
 }
 </script>
 
@@ -237,7 +242,9 @@ const handleSave = async () => {
                   { label: 'root', value: 'root' },
                   { label: 'nobody', value: 'nobody' }
                 ]"
-                :placeholder="$gettext('Select User')"
+                :placeholder="$gettext('Select or enter user')"
+                filterable
+                tag
                 @keydown.enter.prevent
               />
             </n-form-item>
@@ -402,7 +409,7 @@ const handleSave = async () => {
             <n-alert type="info" style="margin-bottom: 16px">
               {{
                 $gettext(
-                  'Configure service dependencies to control startup order. Common services: network.target, mysql.service, redis.service'
+                  'Configure service dependencies to control startup order. Common services: network.target, mysqld.service, postgresql.service, redis.service'
                 )
               }}
             </n-alert>
@@ -571,7 +578,7 @@ const handleSave = async () => {
         <n-button @click="show = false">
           {{ $gettext('Cancel') }}
         </n-button>
-        <n-button type="primary" @click="handleSave" :loading="loading">
+        <n-button type="primary" @click="handleSave" :loading="loading" :disabled="loading">
           {{ $gettext('Save') }}
         </n-button>
       </n-flex>

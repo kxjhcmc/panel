@@ -10,43 +10,109 @@ const type = defineModel<string>('type', { type: String, required: true })
 const { $gettext } = useGettext()
 
 const bulkCreate = ref('')
+const loading = ref(false)
+
+// 内部选择的类型（当外部 type 为 'all' 时使用）
+const selectedType = ref('proxy')
+
+// 实际使用的网站类型
+const effectiveType = computed(() => {
+  if (type.value === 'all') {
+    return selectedType.value
+  }
+  return type.value
+})
+
+// 批量创建网站请求模型
+interface BulkCreateModel {
+  type: string
+  name: string
+  listens: Array<string>
+  domains: Array<string>
+  path: string
+  proxy: string
+  remark: string
+}
+
+// 类型选项
+const typeOptions = computed(() => [
+  { label: $gettext('Reverse Proxy'), value: 'proxy' },
+  { label: $gettext('PHP'), value: 'php' },
+  { label: $gettext('Pure Static'), value: 'static' }
+])
+
+// 获取模态框标题
+const modalTitle = computed(() => {
+  switch (effectiveType.value) {
+    case 'proxy':
+      return $gettext('Bulk Create Reverse Proxy Website')
+    case 'php':
+      return $gettext('Bulk Create PHP Website')
+    case 'static':
+      return $gettext('Bulk Create Pure Static Website')
+    default:
+      return $gettext('Bulk Create Website')
+  }
+})
+
+// 获取占位符文本（根据类型不同显示不同格式）
+const placeholderText = computed(() => {
+  if (effectiveType.value === 'proxy') {
+    return $gettext('name|domain|port|proxy_target|remark')
+  }
+  return $gettext('name|domain|port|path|remark')
+})
+
+// 获取第四列的说明文本
+const fourthColumnHelp = computed(() => {
+  if (effectiveType.value === 'proxy') {
+    return $gettext(
+      'Proxy Target: The target address for reverse proxy (e.g., http://127.0.0.1:3000).'
+    )
+  }
+  return $gettext('Path: The path of the website, can be empty to use the default path.')
+})
 
 const handleCreate = async () => {
   // 按行分割
   const lines = bulkCreate.value.split('\n')
   // 去除空行
   const filteredLines = lines.filter((line) => line.trim() !== '')
+  if (filteredLines.length === 0) return
+  loading.value = true
+  let remaining = filteredLines.length
   // 解析每一行
   for (const line of filteredLines) {
     const parts = line.split('|')
     if (parts.length < 4) {
       window.$message.error($gettext('The format is incorrect, please check'))
+      loading.value = false
       return
     }
     // 去除空格
-    const name = parts[0].trim()
-    const domains = parts[1]
+    const name = (parts[0] ?? '').trim()
+    const domains = (parts[1] ?? '')
       .trim()
       .split(',')
       .map((item) => item.trim())
-    const listens = parts[2]
+    const listens = (parts[2] ?? '')
       .trim()
       .split(',')
       .map((item) => item.trim())
-    const path = parts[3].trim()
+    const fourthColumn = (parts[3] ?? '').trim()
     const remark = parts[4] ? parts[4].trim() : ''
-    let model = {
-      name: '',
-      listens: [] as Array<string>,
-      domains: [] as Array<string>,
-      path: '',
-      remark: ''
+
+    // 构建请求模型
+    const model: BulkCreateModel = {
+      type: effectiveType.value,
+      name: name,
+      listens: listens,
+      domains: domains,
+      path: effectiveType.value === 'proxy' ? '' : fourthColumn,
+      proxy: effectiveType.value === 'proxy' ? fourthColumn : '',
+      remark: remark
     }
-    model.name = name
-    model.domains = domains
-    model.listens = listens
-    model.path = path
-    model.remark = remark
+
     // 去除空的域名和端口
     model.domains = model.domains.filter((item) => item !== '')
     model.listens = model.listens.filter((item) => item !== '')
@@ -56,19 +122,17 @@ const handleCreate = async () => {
     }
     // 端口中去掉 443 端口，nginx 不允许在未配置证书下监听 443 端口
     model.listens = model.listens.filter((item) => item !== '443')
-    useRequest(website.create(model)).onSuccess(() => {
-      window.$message.success(
-        $gettext('Website %{ name } created successfully', { name: model.name })
-      )
-      model = {
-        name: '',
-        domains: [] as Array<string>,
-        listens: [] as Array<string>,
-        path: '',
-        remark: ''
-      }
-      window.$bus.emit('website:refresh')
-    })
+    useRequest(website.create(model))
+      .onSuccess(() => {
+        window.$message.success(
+          $gettext('Website %{ name } created successfully', { name: model.name })
+        )
+        window.$bus.emit('website:refresh')
+      })
+      .onComplete(() => {
+        remaining--
+        if (remaining <= 0) loading.value = false
+      })
   }
 }
 </script>
@@ -76,7 +140,7 @@ const handleCreate = async () => {
 <template>
   <n-modal
     v-model:show="show"
-    :title="$gettext('Bulk Create Website')"
+    :title="modalTitle"
     preset="card"
     style="width: 60vw"
     size="huge"
@@ -85,6 +149,13 @@ const handleCreate = async () => {
     @close="show = false"
   >
     <n-flex vertical>
+      <n-form-item v-if="type === 'all'" :label="$gettext('Website Type')">
+        <n-select
+          v-model:value="selectedType"
+          :options="typeOptions"
+          :placeholder="$gettext('Select Website Type')"
+        />
+      </n-form-item>
       <n-alert type="info">
         {{
           $gettext(
@@ -95,7 +166,7 @@ const handleCreate = async () => {
       <n-input
         type="textarea"
         :autosize="{ minRows: 10, maxRows: 15 }"
-        :placeholder="$gettext('name|domain|port|path|remark')"
+        :placeholder="placeholderText"
         v-model:value="bulkCreate"
       />
       <n-text>
@@ -120,12 +191,12 @@ const handleCreate = async () => {
         }}
       </n-text>
       <n-text>
-        {{ $gettext('Path: The path of the website, can be empty to use the default path.') }}
+        {{ fourthColumnHelp }}
       </n-text>
       <n-text>
         {{ $gettext('Remark: The remark of the website, can be empty.') }}
       </n-text>
-      <n-button type="info" block @click="handleCreate">
+      <n-button type="info" block :loading="loading" :disabled="loading" @click="handleCreate">
         {{ $gettext('Create') }}
       </n-button>
     </n-flex>

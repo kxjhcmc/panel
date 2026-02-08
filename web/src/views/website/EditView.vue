@@ -11,11 +11,15 @@ import draggable from 'vuedraggable'
 import cert from '@/api/panel/cert'
 import home from '@/api/panel/home'
 import website from '@/api/panel/website'
+import KeyValueEditor from '@/components/common/KeyValueEditor.vue'
 
 const { $gettext } = useGettext()
 let messageReactive: MessageReactive | null = null
 
 const current = ref('listen')
+const saveLoading = ref(false)
+const resetLoading = ref(false)
+const clearLogLoading = ref(false)
 const route = useRoute()
 const { id } = route.params
 const { data: setting, send: fetchSetting } = useRequest(website.config(Number(id)), {
@@ -123,17 +127,27 @@ const handleSave = () => {
     })
   }
 
-  useRequest(website.saveConfig(Number(id), setting.value)).onSuccess(() => {
-    fetchSetting()
-    window.$message.success($gettext('Saved successfully'))
-  })
+  saveLoading.value = true
+  useRequest(website.saveConfig(Number(id), setting.value))
+    .onSuccess(() => {
+      fetchSetting()
+      window.$message.success($gettext('Saved successfully'))
+    })
+    .onComplete(() => {
+      saveLoading.value = false
+    })
 }
 
 const handleReset = () => {
-  useRequest(website.resetConfig(Number(id))).onSuccess(() => {
-    fetchSetting()
-    window.$message.success($gettext('Reset successfully'))
-  })
+  resetLoading.value = true
+  useRequest(website.resetConfig(Number(id)))
+    .onSuccess(() => {
+      fetchSetting()
+      window.$message.success($gettext('Reset successfully'))
+    })
+    .onComplete(() => {
+      resetLoading.value = false
+    })
 }
 
 const handleRewrite = (value: string) => {
@@ -160,18 +174,23 @@ const handleObtainCert = () => {
 const handleSelectCert = (value: number) => {
   const cert = certs.value.find((item: any) => item.id === value)
   if (cert && cert.cert !== '' && cert.key !== '') {
-    setting.value.ssl_certificate = cert.cert
-    setting.value.ssl_certificate_key = cert.key
+    setting.value.ssl_cert = cert.cert
+    setting.value.ssl_key = cert.key
   } else {
     window.$message.error($gettext('The selected certificate is invalid'))
   }
 }
 
 const clearLog = async () => {
-  useRequest(website.clearLog(Number(id))).onSuccess(() => {
-    fetchSetting()
-    window.$message.success($gettext('Cleared successfully'))
-  })
+  clearLogLoading.value = true
+  useRequest(website.clearLog(Number(id)))
+    .onSuccess(() => {
+      fetchSetting()
+      window.$message.success($gettext('Cleared successfully'))
+    })
+    .onComplete(() => {
+      clearLogLoading.value = false
+    })
 }
 
 const onCreateListen = () => {
@@ -194,6 +213,35 @@ const hasArg = (args: string[], arg: string) => {
   return args.includes(arg)
 }
 
+// ========== 唯一 ID 生成 ==========
+let idCounter = 0
+const generateId = () => `_${Date.now()}_${++idCounter}`
+
+// 确保列表项有唯一 ID
+const ensureItemIds = () => {
+  setting.value.upstreams?.forEach((item: any) => {
+    if (!item._id) item._id = generateId()
+  })
+  setting.value.proxies?.forEach((item: any) => {
+    if (!item._id) item._id = generateId()
+  })
+  setting.value.redirects?.forEach((item: any) => {
+    if (!item._id) item._id = generateId()
+  })
+  setting.value.custom_configs?.forEach((item: any) => {
+    if (!item._id) item._id = generateId()
+  })
+}
+
+// 监听 setting 变化，确保所有项都有 ID
+watch(
+  () => setting.value,
+  () => {
+    ensureItemIds()
+  },
+  { immediate: true, deep: false }
+)
+
 // ========== Upstreams 相关 ==========
 // 添加新的上游
 const addUpstream = () => {
@@ -202,6 +250,7 @@ const addUpstream = () => {
     setting.value.upstreams = []
   }
   setting.value.upstreams.push({
+    _id: generateId(),
     name,
     servers: {},
     algo: '',
@@ -216,15 +265,6 @@ const removeUpstream = (index: number) => {
   if (setting.value.upstreams) {
     setting.value.upstreams.splice(index, 1)
   }
-}
-
-// 为上游添加服务器
-const addServerToUpstream = (index: number) => {
-  const upstream = setting.value.upstreams[index]
-  if (!upstream.servers) {
-    upstream.servers = {}
-  }
-  upstream.servers[`127.0.0.1:${8080 + Object.keys(upstream.servers).length}`] = ''
 }
 
 // 更新上游超时时间值
@@ -295,16 +335,201 @@ const addProxy = () => {
     setting.value.proxies = []
   }
   setting.value.proxies.push({
+    _id: generateId(),
     location: '/',
     pass: 'http://127.0.0.1:8080',
     host: '$host',
     sni: '',
-    cache: false,
+    cache: null, // null 表示禁用缓存
     buffering: true,
     resolver: [],
     resolver_timeout: 5 * 1000000000, // 5秒，以纳秒为单位
-    replaces: {}
+    headers: {},
+    replaces: {},
+    http_version: '1.1',
+    timeout: null,
+    retry: null,
+    client_max_body_size: 0,
+    ssl_backend: null,
+    response_headers: null,
+    access_control: null
   })
+}
+
+// ========== 缓存配置相关 ==========
+// 创建默认缓存配置
+const createDefaultCacheConfig = () => ({
+  valid: { '200 302': '10m', '404': '10s' },
+  no_cache_conditions: [],
+  use_stale: [],
+  background_update: false,
+  lock: false,
+  min_uses: 0,
+  methods: [],
+  key: ''
+})
+
+// 切换缓存启用状态
+const toggleProxyCache = (proxy: any, enabled: boolean) => {
+  if (enabled) {
+    proxy.cache = createDefaultCacheConfig()
+  } else {
+    proxy.cache = null
+  }
+}
+
+// 判断缓存是否启用
+const isCacheEnabled = (proxy: any) => {
+  return proxy.cache !== null && proxy.cache !== undefined
+}
+
+// 从字节解析为 {value, unit} 格式
+const parseSize = (bytes: number): { value: number; unit: string } => {
+  if (!bytes || bytes <= 0) return { value: 0, unit: 'm' }
+
+  if (bytes >= 1024 * 1024 * 1024 && bytes % (1024 * 1024 * 1024) === 0) {
+    return { value: bytes / (1024 * 1024 * 1024), unit: 'g' }
+  }
+  if (bytes >= 1024 * 1024 && bytes % (1024 * 1024) === 0) {
+    return { value: bytes / (1024 * 1024), unit: 'm' }
+  }
+  if (bytes >= 1024 && bytes % 1024 === 0) {
+    return { value: bytes / 1024, unit: 'k' }
+  }
+  return { value: bytes, unit: '' }
+}
+
+// 将 {value, unit} 转换为字节
+const buildSize = (value: number, unit: string): number => {
+  if (!value || value <= 0) return 0
+  switch (unit) {
+    case 'g':
+      return value * 1024 * 1024 * 1024
+    case 'm':
+      return value * 1024 * 1024
+    case 'k':
+      return value * 1024
+    default:
+      return value
+  }
+}
+
+// 创建默认超时配置
+const createDefaultTimeoutConfig = () => ({
+  connect: 60 * SECOND,
+  read: 60 * SECOND,
+  send: 60 * SECOND
+})
+
+// 创建默认重试配置
+const createDefaultRetryConfig = () => ({
+  conditions: ['error', 'timeout'],
+  tries: 0,
+  timeout: 0
+})
+
+// 创建默认 SSL 后端配置
+const createDefaultSSLBackendConfig = () => ({
+  verify: false,
+  trusted_certificate: '',
+  verify_depth: 1
+})
+
+// 创建默认响应头配置
+const createDefaultResponseHeadersConfig = () => ({
+  hide: [],
+  add: {}
+})
+
+// 创建默认访问控制配置
+const createDefaultAccessControlConfig = () => ({
+  allow: [],
+  deny: []
+})
+
+// 切换超时配置启用状态
+const toggleProxyTimeout = (proxy: any, enabled: boolean) => {
+  if (enabled) {
+    proxy.timeout = createDefaultTimeoutConfig()
+  } else {
+    proxy.timeout = null
+  }
+}
+
+// 切换重试配置启用状态
+const toggleProxyRetry = (proxy: any, enabled: boolean) => {
+  if (enabled) {
+    proxy.retry = createDefaultRetryConfig()
+  } else {
+    proxy.retry = null
+  }
+}
+
+// 切换 SSL 后端验证启用状态
+const toggleProxySSLBackend = (proxy: any, enabled: boolean) => {
+  if (enabled) {
+    proxy.ssl_backend = createDefaultSSLBackendConfig()
+  } else {
+    proxy.ssl_backend = null
+  }
+}
+
+// 切换响应头配置启用状态
+const toggleProxyResponseHeaders = (proxy: any, enabled: boolean) => {
+  if (enabled) {
+    proxy.response_headers = createDefaultResponseHeadersConfig()
+  } else {
+    proxy.response_headers = null
+  }
+}
+
+// 切换访问控制启用状态
+const toggleProxyAccessControl = (proxy: any, enabled: boolean) => {
+  if (enabled) {
+    proxy.access_control = createDefaultAccessControlConfig()
+  } else {
+    proxy.access_control = null
+  }
+}
+
+// 更新超时时间值
+const updateProxyTimeoutValue = (proxy: any, field: string, value: number) => {
+  if (!proxy.timeout) return
+  const parsed = parseDuration(proxy.timeout[field])
+  proxy.timeout[field] = buildDuration(value, parsed.unit)
+}
+
+// 更新超时时间单位
+const updateProxyTimeoutUnit = (proxy: any, field: string, unit: string) => {
+  if (!proxy.timeout) return
+  const parsed = parseDuration(proxy.timeout[field])
+  proxy.timeout[field] = buildDuration(parsed.value, unit)
+}
+
+// 更新请求体大小值
+const updateClientMaxBodySizeValue = (proxy: any, value: number) => {
+  const parsed = parseSize(proxy.client_max_body_size)
+  proxy.client_max_body_size = buildSize(value, parsed.unit || 'm')
+}
+
+// 更新请求体大小单位
+const updateClientMaxBodySizeUnit = (proxy: any, unit: string) => {
+  const parsed = parseSize(proxy.client_max_body_size)
+  proxy.client_max_body_size = buildSize(parsed.value || 0, unit)
+}
+
+// 更新重试超时值
+const updateRetryTimeoutValue = (proxy: any, value: number) => {
+  if (!proxy.retry) return
+  const parsed = parseDuration(proxy.retry.timeout)
+  proxy.retry.timeout = buildDuration(value, parsed.unit)
+}
+
+// 更新重试超时单位
+const updateRetryTimeoutUnit = (proxy: any, unit: string) => {
+  if (!proxy.retry) return
+  const parsed = parseDuration(proxy.retry.timeout)
+  proxy.retry.timeout = buildDuration(parsed.value, unit)
 }
 
 // 删除代理
@@ -411,6 +636,7 @@ const addRedirect = () => {
     setting.value.redirects = []
   }
   setting.value.redirects.push({
+    _id: generateId(),
     type: 'url',
     from: '/',
     to: '/new',
@@ -432,7 +658,21 @@ const getRedirectTypeLabel = (type: string) => {
   return option ? option.label : type
 }
 
-// ========== 高级设置相关（限流限速、真实 IP、基本认证）==========
+// ========== 高级设置相关（日志设置、限流限速、真实 IP、基本认证）==========
+// 默认日志路径
+const defaultAccessLog = computed(() => `/opt/ace/sites/${setting.value.name}/log/access.log`)
+const defaultErrorLog = computed(() => `/opt/ace/sites/${setting.value.name}/log/error.log`)
+
+// 日志路径选项
+const accessLogOptions = computed(() => [
+  { label: $gettext('Disabled'), value: 'off' },
+  { label: $gettext('Default Path'), value: defaultAccessLog.value }
+])
+const errorLogOptions = computed(() => [
+  { label: $gettext('Disabled'), value: 'off' },
+  { label: $gettext('Default Path'), value: defaultErrorLog.value }
+])
+
 // 限流限速是否启用
 const rateLimitEnabled = computed({
   get: () => setting.value.rate_limit !== null,
@@ -465,39 +705,7 @@ const realIPEnabled = computed({
   }
 })
 
-// 真实 IP Header 选项
-const realIPHeaderOptions = [
-  { label: 'X-Real-IP', value: 'X-Real-IP' },
-  { label: 'X-Forwarded-For', value: 'X-Forwarded-For' },
-  { label: 'CF-Connecting-IP', value: 'CF-Connecting-IP' },
-  { label: 'True-Client-IP', value: 'True-Client-IP' },
-  { label: 'Ali-Cdn-Real-Ip', value: 'Ali-Cdn-Real-Ip' },
-  { label: 'EO-Connecting-IP', value: 'EO-Connecting-IP' }
-]
-
-// 添加基本认证用户
-const addBasicAuthUser = () => {
-  if (!setting.value.basic_auth) {
-    setting.value.basic_auth = {}
-  }
-  const index = Object.keys(setting.value.basic_auth).length + 1
-  setting.value.basic_auth[`user${index}`] = ''
-}
-
-// 删除基本认证用户
-const removeBasicAuthUser = (username: string) => {
-  if (setting.value.basic_auth) {
-    delete setting.value.basic_auth[username]
-  }
-}
-
 // ========== 自定义配置相关 ==========
-// 作用域选项
-const scopeOptions = [
-  { label: $gettext('This Website'), value: 'site' },
-  { label: $gettext('Global'), value: 'shared' }
-]
-
 // 添加自定义配置
 const addCustomConfig = () => {
   if (!setting.value.custom_configs) {
@@ -505,6 +713,7 @@ const addCustomConfig = () => {
   }
   const index = setting.value.custom_configs.length + 1
   setting.value.custom_configs.push({
+    _id: generateId(),
     name: `custom_${index}`,
     scope: 'site',
     content: ''
@@ -543,7 +752,7 @@ const removeCustomConfig = (index: number) => {
                   <n-input v-model:value="value.address" clearable />
                   <n-checkbox
                     :checked="hasArg(value.args, 'ssl')"
-                    @update:checked="(checked) => toggleArg(value.args, 'ssl', checked)"
+                    @update:checked="(checked: boolean) => toggleArg(value.args, 'ssl', checked)"
                     ml-20
                     mr-20
                     w-120
@@ -553,7 +762,7 @@ const removeCustomConfig = (index: number) => {
                   <n-checkbox
                     v-if="isNginx"
                     :checked="hasArg(value.args, 'quic')"
-                    @update:checked="(checked) => toggleArg(value.args, 'quic', checked)"
+                    @update:checked="(checked: boolean) => toggleArg(value.args, 'quic', checked)"
                     w-200
                   >
                     QUIC(HTTP3)
@@ -605,7 +814,7 @@ const removeCustomConfig = (index: number) => {
           <!-- 上游卡片列表 -->
           <draggable
             v-model="setting.upstreams"
-            item-key="name"
+            item-key="_id"
             handle=".drag-handle"
             :animation="200"
             ghost-class="ghost-card"
@@ -651,10 +860,12 @@ const removeCustomConfig = (index: number) => {
                     </n-form-item-gi>
                     <n-form-item-gi :span="12" :label="$gettext('Keepalive Connections')">
                       <n-input-number
-                        v-model:value="upstream.keepalive"
+                        :value="upstream.keepalive || null"
                         :min="0"
                         :max="1000"
                         w-full
+                        :placeholder="$gettext('Disabled')"
+                        @update:value="(v: number | null) => (upstream.keepalive = v ?? 0)"
                       />
                     </n-form-item-gi>
                     <n-form-item-gi v-if="isNginx" :span="12" :label="$gettext('DNS Resolver')">
@@ -688,47 +899,13 @@ const removeCustomConfig = (index: number) => {
                     </n-form-item-gi>
                   </n-grid>
                   <n-form-item :label="$gettext('Backend Servers')">
-                    <n-flex vertical :size="8" w-full>
-                      <n-flex
-                        v-for="(options, address) in upstream.servers"
-                        :key="String(address)"
-                        :size="8"
-                        align="center"
-                      >
-                        <n-input
-                          :default-value="String(address)"
-                          :placeholder="$gettext('Server address, e.g., 127.0.0.1:8080')"
-                          flex-1
-                          @change="
-                            (newAddr: string) => {
-                              const oldAddr = String(address)
-                              if (newAddr && newAddr !== oldAddr) {
-                                upstream.servers[newAddr] = upstream.servers[oldAddr]
-                                delete upstream.servers[oldAddr]
-                              }
-                            }
-                          "
-                        />
-                        <n-input
-                          :value="String(options)"
-                          :placeholder="$gettext('Options, e.g., weight=5 backup')"
-                          flex-1
-                          @update:value="(v: string) => (upstream.servers[String(address)] = v)"
-                        />
-                        <n-button
-                          type="error"
-                          secondary
-                          size="small"
-                          flex-shrink-0
-                          @click="delete upstream.servers[String(address)]"
-                        >
-                          {{ $gettext('Remove') }}
-                        </n-button>
-                      </n-flex>
-                      <n-button dashed size="small" @click="addServerToUpstream(index)">
-                        {{ $gettext('Add Server') }}
-                      </n-button>
-                    </n-flex>
+                    <key-value-editor
+                      v-model="upstream.servers"
+                      :key-placeholder="$gettext('Server address, e.g., 127.0.0.1:8080')"
+                      :value-placeholder="$gettext('Options, e.g., weight=5 backup')"
+                      :add-button-text="$gettext('Add Server')"
+                      default-key-prefix="127.0.0.1:8080"
+                    />
                   </n-form-item>
                 </n-form>
               </n-card>
@@ -751,7 +928,7 @@ const removeCustomConfig = (index: number) => {
           <!-- 代理卡片列表 -->
           <draggable
             v-model="setting.proxies"
-            item-key="location"
+            item-key="_id"
             handle=".drag-handle"
             :animation="200"
             ghost-class="ghost-card"
@@ -812,7 +989,10 @@ const removeCustomConfig = (index: number) => {
                       />
                     </n-form-item-gi>
                     <n-form-item-gi :span="6" :label="$gettext('Enable Cache')">
-                      <n-switch v-model:value="proxy.cache" />
+                      <n-switch
+                        :value="isCacheEnabled(proxy)"
+                        @update:value="(v: boolean) => toggleProxyCache(proxy, v)"
+                      />
                     </n-form-item-gi>
                     <n-form-item-gi :span="6" :label="$gettext('Enable Buffering')">
                       <n-switch v-model:value="proxy.buffering" />
@@ -845,59 +1025,433 @@ const removeCustomConfig = (index: number) => {
                       </n-input-group>
                     </n-form-item-gi>
                   </n-grid>
-                  <n-divider>{{ $gettext('Response Content Replacement') }}</n-divider>
-                  <n-flex vertical :size="8">
-                    <n-flex
-                      v-for="(toValue, fromValue) in proxy.replaces"
-                      :key="String(fromValue)"
-                      :size="8"
-                      align="center"
+                  <!-- 可折叠配置区域 -->
+                  <n-collapse :default-expanded-names="[]" mt-16>
+                    <!-- 缓存配置详情 -->
+                    <n-collapse-item
+                      v-if="isNginx && isCacheEnabled(proxy)"
+                      :title="$gettext('Cache Settings')"
+                      name="cache"
                     >
-                      <n-input
-                        :value="String(fromValue)"
-                        :placeholder="$gettext('Original content')"
-                        flex-1
-                        @blur="
-                          (e: FocusEvent) => {
-                            const newFrom = (e.target as HTMLInputElement).value
-                            const oldFrom = String(fromValue)
-                            if (newFrom && newFrom !== oldFrom) {
-                              proxy.replaces[newFrom] = proxy.replaces[oldFrom]
-                              delete proxy.replaces[oldFrom]
-                            }
-                          }
-                        "
+                      <n-grid :cols="24" :x-gap="16">
+                        <!-- 缓存有效期 -->
+                        <n-form-item-gi :span="24" :label="$gettext('Cache Valid')">
+                          <key-value-editor
+                            v-model="proxy.cache.valid"
+                            :key-placeholder="$gettext('Status codes, e.g., 200 302 or any')"
+                            :value-placeholder="$gettext('Duration, e.g., 10m, 1h, 1d')"
+                            :add-button-text="$gettext('Add Cache Valid Rule')"
+                            default-key-prefix="20"
+                            default-value="10m"
+                          />
+                        </n-form-item-gi>
+                        <!-- 不缓存条件 -->
+                        <n-form-item-gi :span="12" :label="$gettext('No Cache Conditions')">
+                          <n-select
+                            v-model:value="proxy.cache.no_cache_conditions"
+                            :options="[
+                              { label: '$cookie_nocache', value: '$cookie_nocache' },
+                              { label: '$arg_nocache', value: '$arg_nocache' },
+                              { label: '$http_pragma', value: '$http_pragma' },
+                              { label: '$http_authorization', value: '$http_authorization' },
+                              { label: '$http_cache_control', value: '$http_cache_control' }
+                            ]"
+                            multiple
+                            filterable
+                            tag
+                            :placeholder="$gettext('Select or enter conditions')"
+                          />
+                        </n-form-item-gi>
+                        <!-- 过期缓存使用策略 -->
+                        <n-form-item-gi :span="12" :label="$gettext('Use Stale')">
+                          <n-select
+                            v-model:value="proxy.cache.use_stale"
+                            :options="[
+                              { label: 'error', value: 'error' },
+                              { label: 'timeout', value: 'timeout' },
+                              { label: 'updating', value: 'updating' },
+                              { label: 'http_500', value: 'http_500' },
+                              { label: 'http_502', value: 'http_502' },
+                              { label: 'http_503', value: 'http_503' },
+                              { label: 'http_504', value: 'http_504' }
+                            ]"
+                            multiple
+                            :placeholder="$gettext('When to use stale cache')"
+                          />
+                        </n-form-item-gi>
+                        <!-- 后台更新 -->
+                        <n-form-item-gi :span="6" :label="$gettext('Background Update')">
+                          <n-switch v-model:value="proxy.cache.background_update" />
+                        </n-form-item-gi>
+                        <!-- 缓存锁 -->
+                        <n-form-item-gi :span="6" :label="$gettext('Cache Lock')">
+                          <n-switch v-model:value="proxy.cache.lock" />
+                        </n-form-item-gi>
+                        <!-- 最小请求次数 -->
+                        <n-form-item-gi :span="6" :label="$gettext('Min Uses')">
+                          <n-input-number
+                            :value="proxy.cache.min_uses || null"
+                            :min="0"
+                            :max="100"
+                            w-full
+                            :placeholder="$gettext('Default')"
+                            @update:value="(v: number | null) => (proxy.cache.min_uses = v ?? 0)"
+                          />
+                        </n-form-item-gi>
+                        <!-- 缓存方法 -->
+                        <n-form-item-gi :span="6" :label="$gettext('Cache Methods')">
+                          <n-select
+                            v-model:value="proxy.cache.methods"
+                            :options="[
+                              { label: 'GET', value: 'GET' },
+                              { label: 'HEAD', value: 'HEAD' },
+                              { label: 'POST', value: 'POST' }
+                            ]"
+                            multiple
+                            :placeholder="$gettext('Default: GET HEAD')"
+                          />
+                        </n-form-item-gi>
+                        <!-- 自定义缓存键 -->
+                        <n-form-item-gi :span="24" :label="$gettext('Cache Key')">
+                          <n-input
+                            v-model:value="proxy.cache.key"
+                            :placeholder="
+                              $gettext('Custom cache key, e.g., $scheme$host$request_uri')
+                            "
+                          />
+                        </n-form-item-gi>
+                      </n-grid>
+                    </n-collapse-item>
+
+                    <!-- 自定义请求头 -->
+                    <n-collapse-item :title="$gettext('Custom Request Headers')" name="headers">
+                      <key-value-editor
+                        v-model="proxy.headers"
+                        :key-placeholder="$gettext('Header name')"
+                        :value-placeholder="$gettext('Value or variable like $host, $remote_addr')"
+                        :add-button-text="$gettext('Add Request Header')"
+                        default-key-prefix="X-Custom-Header"
                       />
-                      <span flex-shrink-0>=></span>
-                      <n-input
-                        :value="String(toValue)"
-                        :placeholder="$gettext('Replacement content')"
-                        flex-1
-                        @update:value="(v: string) => (proxy.replaces[String(fromValue)] = v)"
-                      />
-                      <n-button
-                        type="error"
-                        secondary
-                        size="small"
-                        flex-shrink-0
-                        @click="delete proxy.replaces[String(fromValue)]"
-                      >
-                        {{ $gettext('Remove') }}
-                      </n-button>
-                    </n-flex>
-                    <n-button
-                      dashed
-                      size="small"
-                      @click="
-                        () => {
-                          if (!proxy.replaces) proxy.replaces = {}
-                          proxy.replaces[`/old_${Object.keys(proxy.replaces).length}`] = '/new'
-                        }
-                      "
+                    </n-collapse-item>
+
+                    <!-- 响应内容替换 -->
+                    <n-collapse-item
+                      :title="$gettext('Response Content Replacement')"
+                      name="replaces"
                     >
-                      {{ $gettext('Add Replacement Rule') }}
-                    </n-button>
-                  </n-flex>
+                      <key-value-editor
+                        v-model="proxy.replaces"
+                        :key-placeholder="$gettext('Original content')"
+                        :value-placeholder="$gettext('Replacement content')"
+                        :add-button-text="$gettext('Add Replacement Rule')"
+                        default-key-prefix="/old_"
+                        default-value="/new"
+                        separator="=>"
+                      />
+                    </n-collapse-item>
+
+                    <!-- 高级配置（仅 Nginx） -->
+                    <n-collapse-item
+                      v-if="isNginx"
+                      :title="$gettext('Advanced Settings')"
+                      name="advanced"
+                    >
+                      <n-grid :cols="24" :x-gap="16">
+                        <!-- HTTP 协议版本 -->
+                        <n-form-item-gi :span="8" :label="$gettext('HTTP Version')">
+                          <n-select
+                            v-model:value="proxy.http_version"
+                            :options="[
+                              { label: 'HTTP/1.0', value: '1.0' },
+                              { label: 'HTTP/1.1', value: '1.1' },
+                              { label: 'HTTP/2', value: '2' }
+                            ]"
+                            :placeholder="$gettext('Select HTTP version')"
+                          />
+                        </n-form-item-gi>
+
+                        <!-- 请求体大小限制 -->
+                        <n-form-item-gi :span="8" :label="$gettext('Max Body Size')">
+                          <n-input-group>
+                            <n-input-number
+                              :value="
+                                proxy.client_max_body_size
+                                  ? parseSize(proxy.client_max_body_size).value
+                                  : null
+                              "
+                              :min="0"
+                              flex-1
+                              :placeholder="$gettext('Use global')"
+                              @update:value="
+                                (v: number | null) => updateClientMaxBodySizeValue(proxy, v ?? 0)
+                              "
+                            />
+                            <n-select
+                              :value="
+                                parseSize(proxy.client_max_body_size || 1024 * 1024).unit || 'm'
+                              "
+                              :options="[
+                                { label: 'KB', value: 'k' },
+                                { label: 'MB', value: 'm' },
+                                { label: 'GB', value: 'g' }
+                              ]"
+                              style="width: 80px"
+                              @update:value="(v: string) => updateClientMaxBodySizeUnit(proxy, v)"
+                            />
+                          </n-input-group>
+                        </n-form-item-gi>
+
+                        <!-- 超时设置开关 -->
+                        <n-form-item-gi :span="8" :label="$gettext('Timeout Settings')">
+                          <n-switch
+                            :value="proxy.timeout !== null"
+                            @update:value="(v: boolean) => toggleProxyTimeout(proxy, v)"
+                          />
+                        </n-form-item-gi>
+                      </n-grid>
+
+                      <!-- 超时配置详情 -->
+                      <template v-if="proxy.timeout">
+                        <n-grid :cols="24" :x-gap="16">
+                          <n-form-item-gi :span="8" :label="$gettext('Connect Timeout')">
+                            <n-input-group>
+                              <n-input-number
+                                :value="parseDuration(proxy.timeout.connect).value"
+                                :min="1"
+                                flex-1
+                                @update:value="
+                                  (v: number | null) =>
+                                    updateProxyTimeoutValue(proxy, 'connect', v ?? 1)
+                                "
+                              />
+                              <n-select
+                                :value="parseDuration(proxy.timeout.connect).unit"
+                                :options="timeUnitOptions"
+                                style="width: 100px"
+                                @update:value="
+                                  (v: string) => updateProxyTimeoutUnit(proxy, 'connect', v)
+                                "
+                              />
+                            </n-input-group>
+                          </n-form-item-gi>
+                          <n-form-item-gi :span="8" :label="$gettext('Read Timeout')">
+                            <n-input-group>
+                              <n-input-number
+                                :value="parseDuration(proxy.timeout.read).value"
+                                :min="1"
+                                flex-1
+                                @update:value="
+                                  (v: number | null) =>
+                                    updateProxyTimeoutValue(proxy, 'read', v ?? 1)
+                                "
+                              />
+                              <n-select
+                                :value="parseDuration(proxy.timeout.read).unit"
+                                :options="timeUnitOptions"
+                                style="width: 100px"
+                                @update:value="
+                                  (v: string) => updateProxyTimeoutUnit(proxy, 'read', v)
+                                "
+                              />
+                            </n-input-group>
+                          </n-form-item-gi>
+                          <n-form-item-gi :span="8" :label="$gettext('Send Timeout')">
+                            <n-input-group>
+                              <n-input-number
+                                :value="parseDuration(proxy.timeout.send).value"
+                                :min="1"
+                                flex-1
+                                @update:value="
+                                  (v: number | null) =>
+                                    updateProxyTimeoutValue(proxy, 'send', v ?? 1)
+                                "
+                              />
+                              <n-select
+                                :value="parseDuration(proxy.timeout.send).unit"
+                                :options="timeUnitOptions"
+                                style="width: 100px"
+                                @update:value="
+                                  (v: string) => updateProxyTimeoutUnit(proxy, 'send', v)
+                                "
+                              />
+                            </n-input-group>
+                          </n-form-item-gi>
+                        </n-grid>
+                      </template>
+
+                      <n-grid :cols="24" :x-gap="16">
+                        <!-- 重试配置开关 -->
+                        <n-form-item-gi :span="8" :label="$gettext('Retry Settings')">
+                          <n-switch
+                            :value="proxy.retry !== null"
+                            @update:value="(v: boolean) => toggleProxyRetry(proxy, v)"
+                          />
+                        </n-form-item-gi>
+
+                        <!-- SSL 后端验证开关（仅 https） -->
+                        <n-form-item-gi
+                          v-if="proxy.pass?.startsWith('https')"
+                          :span="8"
+                          :label="$gettext('SSL Backend Verify')"
+                        >
+                          <n-switch
+                            :value="proxy.ssl_backend !== null"
+                            @update:value="(v: boolean) => toggleProxySSLBackend(proxy, v)"
+                          />
+                        </n-form-item-gi>
+
+                        <!-- 响应头修改开关 -->
+                        <n-form-item-gi :span="8" :label="$gettext('Response Headers')">
+                          <n-switch
+                            :value="proxy.response_headers !== null"
+                            @update:value="(v: boolean) => toggleProxyResponseHeaders(proxy, v)"
+                          />
+                        </n-form-item-gi>
+                      </n-grid>
+
+                      <!-- 重试配置详情 -->
+                      <template v-if="proxy.retry">
+                        <n-grid :cols="24" :x-gap="16">
+                          <n-form-item-gi :span="12" :label="$gettext('Retry Conditions')">
+                            <n-select
+                              v-model:value="proxy.retry.conditions"
+                              :options="[
+                                { label: 'error', value: 'error' },
+                                { label: 'timeout', value: 'timeout' },
+                                { label: 'invalid_header', value: 'invalid_header' },
+                                { label: 'http_500', value: 'http_500' },
+                                { label: 'http_502', value: 'http_502' },
+                                { label: 'http_503', value: 'http_503' },
+                                { label: 'http_504', value: 'http_504' },
+                                { label: 'http_429', value: 'http_429' },
+                                { label: 'non_idempotent', value: 'non_idempotent' },
+                                { label: 'off', value: 'off' }
+                              ]"
+                              multiple
+                              :placeholder="$gettext('Select retry conditions')"
+                            />
+                          </n-form-item-gi>
+                          <n-form-item-gi :span="6" :label="$gettext('Max Tries')">
+                            <n-input-number
+                              :value="proxy.retry.tries || null"
+                              :min="0"
+                              :placeholder="$gettext('Unlimited')"
+                              @update:value="(v: number | null) => (proxy.retry.tries = v ?? 0)"
+                            />
+                          </n-form-item-gi>
+                          <n-form-item-gi :span="6" :label="$gettext('Retry Timeout')">
+                            <n-input-group>
+                              <n-input-number
+                                :value="
+                                  proxy.retry.timeout
+                                    ? parseDuration(proxy.retry.timeout).value
+                                    : null
+                                "
+                                :min="0"
+                                flex-1
+                                :placeholder="$gettext('Unlimited')"
+                                @update:value="
+                                  (v: number | null) => updateRetryTimeoutValue(proxy, v ?? 0)
+                                "
+                              />
+                              <n-select
+                                :value="parseDuration(proxy.retry.timeout).unit"
+                                :options="timeUnitOptions"
+                                style="width: 100px"
+                                @update:value="(v: string) => updateRetryTimeoutUnit(proxy, v)"
+                              />
+                            </n-input-group>
+                          </n-form-item-gi>
+                        </n-grid>
+                      </template>
+
+                      <!-- SSL 后端验证详情 -->
+                      <template v-if="proxy.ssl_backend && proxy.pass?.startsWith('https')">
+                        <n-grid :cols="24" :x-gap="16">
+                          <n-form-item-gi :span="6" :label="$gettext('Enable Verify')">
+                            <n-switch v-model:value="proxy.ssl_backend.verify" />
+                          </n-form-item-gi>
+                          <n-form-item-gi :span="6" :label="$gettext('Verify Depth')">
+                            <n-input-number
+                              v-model:value="proxy.ssl_backend.verify_depth"
+                              :min="1"
+                              :max="10"
+                            />
+                          </n-form-item-gi>
+                          <n-form-item-gi :span="12" :label="$gettext('Trusted Certificate')">
+                            <n-input
+                              v-model:value="proxy.ssl_backend.trusted_certificate"
+                              :placeholder="
+                                $gettext(
+                                  'CA certificate path, e.g. /etc/ssl/certs/ca-certificates.crt'
+                                )
+                              "
+                            />
+                          </n-form-item-gi>
+                        </n-grid>
+                      </template>
+
+                      <!-- 响应头修改详情 -->
+                      <template v-if="proxy.response_headers">
+                        <n-grid :cols="24" :x-gap="16">
+                          <n-form-item-gi :span="12" :label="$gettext('Hide Headers')">
+                            <n-select
+                              v-model:value="proxy.response_headers.hide"
+                              :options="[
+                                { label: 'X-Powered-By', value: 'X-Powered-By' },
+                                { label: 'Server', value: 'Server' },
+                                { label: 'X-AspNet-Version', value: 'X-AspNet-Version' },
+                                { label: 'X-AspNetMvc-Version', value: 'X-AspNetMvc-Version' },
+                                { label: 'X-Runtime', value: 'X-Runtime' },
+                                { label: 'X-Version', value: 'X-Version' }
+                              ]"
+                              multiple
+                              filterable
+                              tag
+                              :placeholder="$gettext('Select or input headers to hide')"
+                            />
+                          </n-form-item-gi>
+                          <n-form-item-gi :span="12" :label="$gettext('Add Headers')">
+                            <key-value-editor
+                              v-model="proxy.response_headers.add"
+                              :key-placeholder="$gettext('Header name')"
+                              :value-placeholder="$gettext('Header value')"
+                              :add-button-text="$gettext('Add Response Header')"
+                              default-key-prefix="X-Custom-Header"
+                            />
+                          </n-form-item-gi>
+                        </n-grid>
+                      </template>
+
+                      <n-grid :cols="24" :x-gap="16">
+                        <!-- IP 访问控制开关 -->
+                        <n-form-item-gi :span="8" :label="$gettext('IP Access Control')">
+                          <n-switch
+                            :value="proxy.access_control !== null"
+                            @update:value="(v: boolean) => toggleProxyAccessControl(proxy, v)"
+                          />
+                        </n-form-item-gi>
+                      </n-grid>
+
+                      <!-- IP 访问控制详情 -->
+                      <template v-if="proxy.access_control">
+                        <n-grid :cols="24" :x-gap="16">
+                          <n-form-item-gi :span="12" :label="$gettext('Allow IPs')">
+                            <n-dynamic-tags
+                              v-model:value="proxy.access_control.allow"
+                              :placeholder="$gettext('IP or CIDR, e.g. 192.168.1.0/24')"
+                            />
+                          </n-form-item-gi>
+                          <n-form-item-gi :span="12" :label="$gettext('Deny IPs')">
+                            <n-dynamic-tags
+                              v-model:value="proxy.access_control.deny"
+                              :placeholder="$gettext('IP or CIDR, e.g. all')"
+                            />
+                          </n-form-item-gi>
+                        </n-grid>
+                      </template>
+                    </n-collapse-item>
+                  </n-collapse>
                 </n-form>
               </n-card>
             </template>
@@ -1036,7 +1590,7 @@ const removeCustomConfig = (index: number) => {
           <!-- 重定向卡片列表 -->
           <draggable
             v-model="setting.redirects"
-            item-key="from"
+            item-key="_id"
             handle=".drag-handle"
             :animation="200"
             ghost-class="ghost-card"
@@ -1123,6 +1677,30 @@ const removeCustomConfig = (index: number) => {
       </n-tab-pane>
       <n-tab-pane name="advanced" :tab="$gettext('Advanced Settings')">
         <n-flex vertical>
+          <!-- 日志设置 -->
+          <n-card :title="$gettext('Log Settings')" mb-16>
+            <n-form label-placement="left" label-width="140px">
+              <n-form-item :label="$gettext('Access Log')">
+                <n-select
+                  v-model:value="setting.access_log"
+                  :options="accessLogOptions"
+                  :placeholder="defaultAccessLog"
+                  filterable
+                  tag
+                />
+              </n-form-item>
+              <n-form-item :label="$gettext('Error Log')">
+                <n-select
+                  v-model:value="setting.error_log"
+                  :options="errorLogOptions"
+                  :placeholder="defaultErrorLog"
+                  filterable
+                  tag
+                />
+              </n-form-item>
+            </n-form>
+          </n-card>
+
           <!-- 限流限速设置 -->
           <n-card :title="$gettext('Rate Limiting')" mb-16>
             <n-form label-placement="left" label-width="140px">
@@ -1132,10 +1710,12 @@ const removeCustomConfig = (index: number) => {
               <template v-if="rateLimitEnabled && setting.rate_limit">
                 <n-form-item :label="$gettext('Concurrent Limit')">
                   <n-input-number
-                    v-model:value="setting.rate_limit.per_server"
+                    :value="setting.rate_limit.per_server || null"
                     :min="0"
                     :max="100000"
                     w-full
+                    :placeholder="$gettext('Unlimited')"
+                    @update:value="(v: number | null) => (setting.rate_limit.per_server = v ?? 0)"
                   />
                   <template #feedback>
                     {{ $gettext('Limit the maximum concurrent connections for this site') }}
@@ -1143,10 +1723,12 @@ const removeCustomConfig = (index: number) => {
                 </n-form-item>
                 <n-form-item :label="$gettext('Per IP Limit')">
                   <n-input-number
-                    v-model:value="setting.rate_limit.per_ip"
+                    :value="setting.rate_limit.per_ip || null"
                     :min="0"
                     :max="10000"
                     w-full
+                    :placeholder="$gettext('Unlimited')"
+                    @update:value="(v: number | null) => (setting.rate_limit.per_ip = v ?? 0)"
                   />
                   <template #feedback>
                     {{ $gettext('Limit the maximum concurrent connections per IP') }}
@@ -1154,10 +1736,12 @@ const removeCustomConfig = (index: number) => {
                 </n-form-item>
                 <n-form-item :label="$gettext('Rate Limit')">
                   <n-input-number
-                    v-model:value="setting.rate_limit.rate"
+                    :value="setting.rate_limit.rate || null"
                     :min="0"
                     :max="1000000"
                     w-full
+                    :placeholder="$gettext('Unlimited')"
+                    @update:value="(v: number | null) => (setting.rate_limit.rate = v ?? 0)"
                   />
                   <template #feedback>
                     {{ $gettext('Limit the rate of each request (unit: KB)') }}
@@ -1197,7 +1781,14 @@ const removeCustomConfig = (index: number) => {
                 <n-form-item :label="$gettext('IP Header')">
                   <n-select
                     v-model:value="setting.real_ip.header"
-                    :options="realIPHeaderOptions"
+                    :options="[
+                      { label: 'X-Real-IP', value: 'X-Real-IP' },
+                      { label: 'X-Forwarded-For', value: 'X-Forwarded-For' },
+                      { label: 'CF-Connecting-IP', value: 'CF-Connecting-IP' },
+                      { label: 'True-Client-IP', value: 'True-Client-IP' },
+                      { label: 'Ali-Cdn-Real-Ip', value: 'Ali-Cdn-Real-Ip' },
+                      { label: 'EO-Connecting-IP', value: 'EO-Connecting-IP' }
+                    ]"
                     filterable
                     tag
                   />
@@ -1216,53 +1807,15 @@ const removeCustomConfig = (index: number) => {
           <n-card :title="$gettext('Basic Authentication')" mb-16>
             <n-form label-placement="left" label-width="140px">
               <n-form-item :label="$gettext('User Credentials')">
-                <n-flex vertical :size="8" w-full>
-                  <n-flex
-                    v-for="(password, username) in setting.basic_auth"
-                    :key="String(username)"
-                    :size="8"
-                    align="center"
-                  >
-                    <n-input
-                      :default-value="String(username)"
-                      :placeholder="$gettext('Username')"
-                      flex-1
-                      @change="
-                        (newUsername: string) => {
-                          const oldUsername = String(username)
-                          if (newUsername && newUsername !== oldUsername) {
-                            // 检查新用户名是否已存在
-                            if (setting.basic_auth[newUsername] !== undefined) {
-                              return
-                            }
-                            setting.basic_auth[newUsername] = setting.basic_auth[oldUsername]
-                            delete setting.basic_auth[oldUsername]
-                          }
-                        }
-                      "
-                    />
-                    <n-input
-                      :value="String(password)"
-                      type="password"
-                      show-password-on="click"
-                      :placeholder="$gettext('Password')"
-                      flex-1
-                      @update:value="(v: string) => (setting.basic_auth[String(username)] = v)"
-                    />
-                    <n-button
-                      type="error"
-                      secondary
-                      size="small"
-                      flex-shrink-0
-                      @click="removeBasicAuthUser(String(username))"
-                    >
-                      {{ $gettext('Remove') }}
-                    </n-button>
-                  </n-flex>
-                  <n-button dashed size="small" @click="addBasicAuthUser">
-                    {{ $gettext('Add User') }}
-                  </n-button>
-                </n-flex>
+                <key-value-editor
+                  v-model="setting.basic_auth"
+                  :key-placeholder="$gettext('Username')"
+                  :value-placeholder="$gettext('Password')"
+                  :add-button-text="$gettext('Add User')"
+                  default-key-prefix="user"
+                  value-type="password"
+                  :show-password-toggle="true"
+                />
               </n-form-item>
             </n-form>
             <n-alert v-if="Object.keys(setting.basic_auth || {}).length > 0" type="info">
@@ -1280,7 +1833,7 @@ const removeCustomConfig = (index: number) => {
           <!-- 自定义配置列表 -->
           <draggable
             v-model="setting.custom_configs"
-            item-key="name"
+            item-key="_id"
             handle=".drag-handle"
             :animation="200"
             ghost-class="ghost-card"
@@ -1307,7 +1860,13 @@ const removeCustomConfig = (index: number) => {
                       />
                     </n-form-item-gi>
                     <n-form-item-gi :span="12" :label="$gettext('Scope')">
-                      <n-select v-model:value="config.scope" :options="scopeOptions" />
+                      <n-select
+                        v-model:value="config.scope"
+                        :options="[
+                          { label: $gettext('This Website'), value: 'site' },
+                          { label: $gettext('Global'), value: 'shared' }
+                        ]"
+                      />
                     </n-form-item-gi>
                   </n-grid>
                   <n-form-item :label="$gettext('Content')">
@@ -1333,7 +1892,11 @@ const removeCustomConfig = (index: number) => {
           </n-button>
         </n-flex>
       </n-tab-pane>
-      <n-tab-pane name="log" :tab="$gettext('Access Log')">
+      <n-tab-pane
+        v-if="setting.access_log && setting.access_log !== 'off'"
+        name="log"
+        :tab="$gettext('Access Log')"
+      >
         <n-flex vertical>
           <n-flex flex items-center>
             <n-alert type="warning" w-full>
@@ -1345,7 +1908,11 @@ const removeCustomConfig = (index: number) => {
           <realtime-log :path="setting.access_log" language="accesslog" pb-20 />
         </n-flex>
       </n-tab-pane>
-      <n-tab-pane name="error_log" :tab="$gettext('Error Log')">
+      <n-tab-pane
+        v-if="setting.error_log && setting.error_log !== 'off'"
+        name="error_log"
+        :tab="$gettext('Error Log')"
+      >
         <n-flex vertical>
           <n-flex flex items-center>
             <n-alert type="warning" w-full>
@@ -1361,13 +1928,15 @@ const removeCustomConfig = (index: number) => {
     <n-button
       v-if="current !== 'log' && current !== 'error_log'"
       type="primary"
+      :loading="saveLoading"
+      :disabled="saveLoading"
       @click="handleSave"
     >
       {{ $gettext('Save') }}
     </n-button>
     <n-popconfirm v-if="current == 'log'" @positive-click="clearLog">
       <template #trigger>
-        <n-button type="primary">
+        <n-button type="primary" :loading="clearLogLoading" :disabled="clearLogLoading">
           {{ $gettext('Clear Logs') }}
         </n-button>
       </template>
@@ -1385,7 +1954,7 @@ const removeCustomConfig = (index: number) => {
     </n-button>
     <n-popconfirm v-if="current === 'config'" @positive-click="handleReset">
       <template #trigger>
-        <n-button type="warning" ml-16>
+        <n-button type="warning" ml-16 :loading="resetLoading" :disabled="resetLoading">
           {{ $gettext('Reset Configuration') }}
         </n-button>
       </template>

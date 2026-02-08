@@ -42,6 +42,9 @@
 bash <(curl -sSLm 10 https://dl.acepanel.net/helper.sh)
 ```
 
+> [!NOTE]
+> 耗子面板 2.x -> AcePanel 3.0 迁移工具将在近期发布，敬请期待！
+
 ## UI 截图
 
 ![UI 截图](.github/assets/ui.png)
@@ -56,6 +59,9 @@ bash <(curl -sSLm 10 https://dl.acepanel.net/helper.sh)
   </a>
   <a href="https://www.dkdun.cn/aff/MQZZNVHQ">
     <img height="60" src=".github/assets/dk.png" alt="林枫云">
+  </a>
+  <a href="https://cloud.panguidc.com/aff/DMRRFVJX">
+    <img height="60" src=".github/assets/pangu.png" alt="盘古云">
   </a>
   <a href="https://waf.pro/">
     <img height="60" src=".github/assets/wafpro.png" alt="WAFPRO">
