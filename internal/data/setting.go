@@ -19,7 +19,6 @@ import (
 	"github.com/acepanel/panel/pkg/firewall"
 	"github.com/acepanel/panel/pkg/io"
 	"github.com/acepanel/panel/pkg/os"
-	"github.com/acepanel/panel/pkg/systemctl"
 )
 
 type settingRepo struct {
@@ -308,14 +307,15 @@ func (r *settingRepo) UpdatePanel(ctx context.Context, req *request.SettingPanel
 			return false, errors.New(r.t.Get("port is already in use"))
 		}
 		// 放行端口
-		if ok, _ := systemctl.IsEnabled("firewalld"); ok {
-			fw := firewall.NewFirewall()
+		fw := firewall.NewFirewall()
+		if ok, _ := fw.Status(); ok {
 			err = fw.Port(firewall.FireInfo{
 				Type:      firewall.TypeNormal,
 				PortStart: req.Port,
 				PortEnd:   req.Port,
-				Direction: firewall.DirectionIn,
+				Protocol:  firewall.ProtocolTCPUDP,
 				Strategy:  firewall.StrategyAccept,
+				Direction: firewall.DirectionIn,
 			}, firewall.OperationAdd)
 			if err != nil {
 				return false, err

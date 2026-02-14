@@ -220,6 +220,7 @@ func (s *HomeService) CountInfo(w http.ResponseWriter, r *http.Request) {
 func (s *HomeService) InstalledEnvironment(w http.ResponseWriter, r *http.Request) {
 	mysqlInstalled, _ := s.appRepo.IsInstalled("slug IN ?", []string{"mysql", "mariadb", "percona"})
 	postgresqlInstalled, _ := s.appRepo.IsInstalled("slug = ?", "postgresql")
+	rsyncInstalled, _ := s.appRepo.IsInstalled("slug = ?", "rsync")
 
 	// Go 版本
 	var goData []types.LV
@@ -256,6 +257,13 @@ func (s *HomeService) InstalledEnvironment(w http.ResponseWriter, r *http.Reques
 		pythonData = append(pythonData, types.LV{Value: slug, Label: fmt.Sprintf("Python %s", ver)})
 	}
 
+	// .NET 版本
+	var dotnetData []types.LV
+	for _, slug := range s.environmentRepo.InstalledSlugs("dotnet") {
+		ver := s.environmentRepo.InstalledVersion("dotnet", slug)
+		dotnetData = append(dotnetData, types.LV{Value: slug, Label: fmt.Sprintf(".NET %s", ver)})
+	}
+
 	// 数据库
 	var dbData []types.LV
 	dbData = append(dbData, types.LV{Value: "0", Label: s.t.Get("Not used")})
@@ -274,7 +282,9 @@ func (s *HomeService) InstalledEnvironment(w http.ResponseWriter, r *http.Reques
 		"nodejs":    nodejsData,
 		"php":       phpData,
 		"python":    pythonData,
+		"dotnet":    dotnetData,
 		"db":        dbData,
+		"rsync":     rsyncInstalled,
 	})
 }
 
@@ -409,4 +419,24 @@ func (s *HomeService) RestartServer(w http.ResponseWriter, r *http.Request) {
 
 	tools.RestartServer()
 	Success(w, nil)
+}
+
+func (s *HomeService) TopProcesses(w http.ResponseWriter, r *http.Request) {
+	req, err := Bind[request.HomeTopProcesses](r)
+	if err != nil {
+		Error(w, http.StatusUnprocessableEntity, "%v", err)
+		return
+	}
+
+	tp := tools.CollectTopProcesses()
+	switch req.Type {
+	case "cpu":
+		Success(w, tp.CPU)
+	case "memory":
+		Success(w, tp.Memory)
+	case "disk_io":
+		Success(w, tp.DiskIO)
+	default:
+		Error(w, http.StatusUnprocessableEntity, s.t.Get("invalid type"))
+	}
 }

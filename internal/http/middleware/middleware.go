@@ -1,18 +1,15 @@
 package middleware
 
 import (
-	"io"
 	"log/slog"
 	"net/http"
 	"path/filepath"
 
 	"github.com/DeRuina/timberjack"
 	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/chi/v5/middleware"
+	chimiddleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/httplog/v3"
 	"github.com/google/wire"
-	"github.com/klauspost/compress/gzip"
-	"github.com/klauspost/compress/zstd"
 	"github.com/leonelquinteros/gotext"
 	"github.com/libtnb/sessions"
 	sessionmiddleware "github.com/libtnb/sessions/middleware"
@@ -54,18 +51,10 @@ func NewMiddlewares(conf *config.Config, session *sessions.Manager, appRepo biz.
 
 // Globals is a collection of global middleware that will be applied to every request.
 func (r *Middlewares) Globals(t *gotext.Locale, mux *chi.Mux) []func(http.Handler) http.Handler {
-	compressor := middleware.NewCompressor(6)
-	compressor.SetEncoder("gzip", func(w io.Writer, level int) io.Writer {
-		writer, _ := gzip.NewWriterLevel(w, level)
-		return writer
-	})
-	compressor.SetEncoder("zstd", func(w io.Writer, level int) io.Writer {
-		writer, _ := zstd.NewWriter(w, zstd.WithEncoderLevel(zstd.SpeedBetterCompression))
-		return writer
-	})
+	compressor := chimiddleware.NewCompressor(6)
 
 	return []func(http.Handler) http.Handler{
-		middleware.Recoverer,
+		Recoverer,
 		httplog.RequestLogger(r.log, &httplog.Options{
 			Level:             slog.LevelInfo,
 			LogRequestHeaders: []string{"User-Agent"},

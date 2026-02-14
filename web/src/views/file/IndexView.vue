@@ -10,13 +10,11 @@ import PathInput from '@/views/file/PathInput.vue'
 import PermissionModal from '@/views/file/PermissionModal.vue'
 import ToolBar from '@/views/file/ToolBar.vue'
 import UploadModal from '@/views/file/UploadModal.vue'
-import type { FileInfo, Marked } from '@/views/file/types'
+import type { FileInfo } from '@/views/file/types'
 
 const fileStore = useFileStore()
 
 const selected = ref<string[]>([])
-const marked = ref<Marked[]>([])
-const markedType = ref<string>('copy')
 // 权限编辑时的文件信息列表
 const permissionFileInfoList = ref<FileInfo[]>([])
 
@@ -28,21 +26,44 @@ const upload = ref(false)
 const droppedFiles = ref<File[]>([])
 const isDragging = ref(false)
 
-// 处理拖拽进入
+// 切换标签页时清空选中
+watch(
+  () => fileStore.activeTabId,
+  () => {
+    selected.value = []
+  }
+)
+
+// n-tabs 事件
+const handleTabSwitch = (tabId: string | number) => {
+  fileStore.switchTab(tabId as string)
+}
+const handleTabClose = (tabId: string | number) => {
+  fileStore.closeTab(tabId as string)
+}
+const handleTabAdd = () => {
+  fileStore.createTab()
+}
+
+// 中键关闭标签页
+const handleTabMiddleClick = (tabId: string) => {
+  if (fileStore.tabs.length > 1) {
+    fileStore.closeTab(tabId)
+  }
+}
+
+// ==================== 文件拖拽上传 ====================
 const handleDragEnter = (e: DragEvent) => {
   e.preventDefault()
   e.stopPropagation()
-  // 检查是否有文件
   if (e.dataTransfer?.types.includes('Files')) {
     isDragging.value = true
   }
 }
 
-// 处理拖拽离开
 const handleDragLeave = (e: DragEvent) => {
   e.preventDefault()
   e.stopPropagation()
-  // 只有当离开整个容器时才隐藏
   const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
   if (
     e.clientX <= rect.left ||
@@ -54,7 +75,6 @@ const handleDragLeave = (e: DragEvent) => {
   }
 }
 
-// 处理拖拽悬停
 const handleDragOver = (e: DragEvent) => {
   e.preventDefault()
   e.stopPropagation()
@@ -75,7 +95,6 @@ const readDirectoryRecursively = async (
   }
 
   let entries: FileSystemEntry[] = []
-  // readEntries 可能需要多次调用才能获取所有条目
   let batch: FileSystemEntry[]
   do {
     batch = await readEntries()
@@ -88,7 +107,6 @@ const readDirectoryRecursively = async (
       const fileEntry = childEntry as FileSystemFileEntry
       const file = await new Promise<File>((resolve, reject) => {
         fileEntry.file((f) => {
-          // 创建带有相对路径的新 File 对象
           const newFile = new File([f], childPath, { type: f.type, lastModified: f.lastModified })
           resolve(newFile)
         }, reject)
@@ -106,7 +124,6 @@ const readDirectoryRecursively = async (
   return files
 }
 
-// 处理拖拽放下
 const handleDrop = async (e: DragEvent) => {
   e.preventDefault()
   e.stopPropagation()
@@ -117,7 +134,6 @@ const handleDrop = async (e: DragEvent) => {
 
   const files: File[] = []
 
-  // 使用 webkitGetAsEntry 来支持文件夹
   for (let i = 0; i < items.length; i++) {
     const item = items[i]
     if (item?.kind === 'file') {
@@ -161,34 +177,54 @@ watch(upload, (val) => {
     @drop="handleDrop"
   >
     <n-flex vertical :size="20" class="flex-1 min-h-0">
-      <path-input
-        v-model:path="fileStore.path"
-        v-model:keyword="fileStore.keyword"
-        v-model:sub="fileStore.sub"
-      />
-      <tool-bar
-        v-model:path="fileStore.path"
-        v-model:selected="selected"
-        v-model:marked="marked"
-        v-model:markedType="markedType"
-        v-model:compress="compress"
-        v-model:permission="permission"
-        v-model:upload="upload"
-      />
-      <list-view
-        v-model:path="fileStore.path"
-        v-model:keyword="fileStore.keyword"
-        v-model:sub="fileStore.sub"
-        v-model:selected="selected"
-        v-model:marked="marked"
-        v-model:markedType="markedType"
-        v-model:compress="compress"
-        v-model:permission="permission"
-        v-model:permission-file-info-list="permissionFileInfoList"
-      />
+      <!-- 标签页栏 -->
+      <n-tabs
+        type="card"
+        size="small"
+        :value="fileStore.activeTabId"
+        :closable="fileStore.tabs.length > 1"
+        addable
+        class="file-tabs"
+        @update:value="handleTabSwitch"
+        @close="handleTabClose"
+        @add="handleTabAdd"
+      >
+        <n-tab-pane v-for="tab in fileStore.tabs" :key="tab.id" :name="tab.id">
+          <template #tab>
+            <span
+              :title="tab.path"
+              @mousedown.middle.prevent="handleTabMiddleClick(tab.id)"
+            >
+              {{ tab.label }}
+            </span>
+          </template>
+        </n-tab-pane>
+      </n-tabs>
+
+      <!-- 每个标签页内容（v-if 只渲染活跃的） -->
+      <template v-for="tab in fileStore.tabs" :key="tab.id">
+        <template v-if="tab.id === fileStore.activeTabId">
+          <path-input :tab-id="tab.id" />
+          <tool-bar
+            :tab-id="tab.id"
+            v-model:selected="selected"
+            v-model:compress="compress"
+            v-model:permission="permission"
+            v-model:upload="upload"
+          />
+          <list-view
+            :tab-id="tab.id"
+            v-model:selected="selected"
+            v-model:compress="compress"
+            v-model:permission="permission"
+            v-model:permission-file-info-list="permissionFileInfoList"
+          />
+        </template>
+      </template>
+
       <compress-modal
         v-model:show="compress"
-        v-model:path="fileStore.path"
+        v-model:path="fileStore.activeTab!.path"
         v-model:selected="selected"
       />
       <permission-modal
@@ -209,7 +245,7 @@ watch(upload, (val) => {
     <!-- 上传弹窗 -->
     <upload-modal
       v-model:show="upload"
-      v-model:path="fileStore.path"
+      v-model:path="fileStore.activeTab!.path"
       :initial-files="droppedFiles"
     />
   </common-page>
@@ -234,5 +270,19 @@ watch(upload, (val) => {
   gap: 16px;
   color: white;
   font-size: 18px;
+}
+
+// n-tabs 只用作导航栏，隐藏空的 pane 区域
+.file-tabs {
+  flex-shrink: 0;
+  margin-bottom: -8px;
+
+  :deep(.n-tabs-pane-wrapper) {
+    display: none;
+  }
+
+  :deep(.n-tabs-tab) {
+    padding: 4px 12px !important;
+  }
 }
 </style>

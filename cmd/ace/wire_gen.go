@@ -103,6 +103,7 @@ func initAce() (*app.Ace, error) {
 	environmentNodejsService := service.NewEnvironmentNodejsService(locale, environmentRepo)
 	environmentPHPService := service.NewEnvironmentPHPService(locale, config, environmentRepo, taskRepo)
 	environmentPythonService := service.NewEnvironmentPythonService(locale, environmentRepo)
+	environmentDotnetService := service.NewEnvironmentDotnetService(locale, environmentRepo)
 	cronService := service.NewCronService(cronRepo)
 	processService := service.NewProcessService()
 	safeRepo := data.NewSafeRepo(logger)
@@ -122,16 +123,18 @@ func initAce() (*app.Ace, error) {
 	containerVolumeService := service.NewContainerVolumeService(containerVolumeRepo)
 	fileService := service.NewFileService(locale, taskRepo)
 	logRepo := data.NewLogRepo(db)
-	logService := service.NewLogService(logRepo)
+	logService := service.NewLogService(locale, logRepo)
 	monitorRepo := data.NewMonitorRepo(db, settingRepo)
 	monitorService := service.NewMonitorService(settingRepo, monitorRepo)
 	settingService := service.NewSettingService(locale, db, settingRepo, certRepo, certAccountRepo)
 	systemctlService := service.NewSystemctlService(locale)
+	toolboxNetworkService := service.NewToolboxNetworkService()
 	toolboxSystemService := service.NewToolboxSystemService(locale)
 	toolboxBenchmarkService := service.NewToolboxBenchmarkService(locale)
 	toolboxSSHService := service.NewToolboxSSHService(locale)
 	toolboxDiskService := service.NewToolboxDiskService(locale)
 	toolboxLogService := service.NewToolboxLogService(locale, db, containerImageRepo, settingRepo)
+	toolboxMigrationService := service.NewToolboxMigrationService(locale, config, logger, settingRepo, websiteRepo, databaseRepo, databaseServerRepo, databaseUserRepo, projectRepo, appRepo, environmentRepo)
 	webHookRepo := data.NewWebHookRepo(locale, db, logger)
 	webHookService := service.NewWebHookService(webHookRepo)
 	templateRepo := data.NewTemplateRepo(locale, cacheRepo)
@@ -158,14 +161,18 @@ func initAce() (*app.Ace, error) {
 	s3fsApp := s3fs.NewApp(locale)
 	supervisorApp := supervisor.NewApp(locale)
 	loader := bootstrap.NewLoader(apacheApp, codeserverApp, dockerApp, fail2banApp, frpApp, giteaApp, mariadbApp, memcachedApp, minioApp, mysqlApp, nginxApp, openrestyApp, perconaApp, phpmyadminApp, podmanApp, postgresqlApp, pureftpdApp, redisApp, rsyncApp, s3fsApp, supervisorApp)
-	http := route.NewHttp(config, userService, userTokenService, homeService, taskService, websiteService, projectService, databaseService, databaseServerService, databaseUserService, backupService, backupStorageService, certService, certDNSService, certAccountService, appService, environmentService, environmentGoService, environmentJavaService, environmentNodejsService, environmentPHPService, environmentPythonService, cronService, processService, safeService, firewallService, sshService, containerService, containerComposeService, containerNetworkService, containerImageService, containerVolumeService, fileService, logService, monitorService, settingService, systemctlService, toolboxSystemService, toolboxBenchmarkService, toolboxSSHService, toolboxDiskService, toolboxLogService, webHookService, templateService, loader)
+	http := route.NewHttp(config, userService, userTokenService, homeService, taskService, websiteService, projectService, databaseService, databaseServerService, databaseUserService, backupService, backupStorageService, certService, certDNSService, certAccountService, appService, environmentService, environmentGoService, environmentJavaService, environmentNodejsService, environmentPHPService, environmentPythonService, environmentDotnetService, cronService, processService, safeService, firewallService, sshService, containerService, containerComposeService, containerNetworkService, containerImageService, containerVolumeService, fileService, logService, monitorService, settingService, systemctlService, toolboxNetworkService, toolboxSystemService, toolboxBenchmarkService, toolboxSSHService, toolboxDiskService, toolboxLogService, toolboxMigrationService, webHookService, templateService, loader)
 	wsService := service.NewWsService(locale, config, logger, sshRepo)
-	ws := route.NewWs(wsService)
+	ws := route.NewWs(wsService, toolboxMigrationService)
 	mux, err := bootstrap.NewRouter(locale, middlewares, http, ws)
 	if err != nil {
 		return nil, err
 	}
-	server, err := bootstrap.NewHttp(config, mux)
+	reloader, err := bootstrap.NewTLSReloader(config)
+	if err != nil {
+		return nil, err
+	}
+	server, err := bootstrap.NewHttp(config, mux, reloader)
 	if err != nil {
 		return nil, err
 	}
@@ -176,6 +183,6 @@ func initAce() (*app.Ace, error) {
 		return nil, err
 	}
 	validation := bootstrap.NewValidator(config, db)
-	ace := app.NewAce(config, mux, server, gormigrate, cron, queue, validation)
+	ace := app.NewAce(config, mux, server, reloader, gormigrate, cron, queue, validation)
 	return ace, nil
 }

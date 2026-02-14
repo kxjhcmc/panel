@@ -1,11 +1,16 @@
 package route
 
 import (
+	"bytes"
+	"io"
 	"io/fs"
+	"mime"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/andybalholm/brotli"
 	"github.com/go-chi/chi/v5"
 
 	"github.com/acepanel/panel/internal/http/middleware"
@@ -38,6 +43,7 @@ type Http struct {
 	environmentNodejs *service.EnvironmentNodejsService
 	environmentPHP    *service.EnvironmentPHPService
 	environmentPython *service.EnvironmentPythonService
+	environmentDotnet *service.EnvironmentDotnetService
 	cron              *service.CronService
 	process           *service.ProcessService
 	safe              *service.SafeService
@@ -53,11 +59,13 @@ type Http struct {
 	monitor           *service.MonitorService
 	setting           *service.SettingService
 	systemctl         *service.SystemctlService
+	toolboxNetwork    *service.ToolboxNetworkService
 	toolboxSystem     *service.ToolboxSystemService
 	toolboxBenchmark  *service.ToolboxBenchmarkService
 	toolboxSSH        *service.ToolboxSSHService
 	toolboxDisk       *service.ToolboxDiskService
 	toolboxLog        *service.ToolboxLogService
+	toolboxMigration  *service.ToolboxMigrationService
 	webhook           *service.WebHookService
 	template          *service.TemplateService
 	apps              *apploader.Loader
@@ -86,6 +94,7 @@ func NewHttp(
 	environmentNodejs *service.EnvironmentNodejsService,
 	environmentPHP *service.EnvironmentPHPService,
 	environmentPython *service.EnvironmentPythonService,
+	environmentDotnet *service.EnvironmentDotnetService,
 	cron *service.CronService,
 	process *service.ProcessService,
 	safe *service.SafeService,
@@ -101,11 +110,13 @@ func NewHttp(
 	monitor *service.MonitorService,
 	setting *service.SettingService,
 	systemctl *service.SystemctlService,
+	toolboxNetwork *service.ToolboxNetworkService,
 	toolboxSystem *service.ToolboxSystemService,
 	toolboxBenchmark *service.ToolboxBenchmarkService,
 	toolboxSSH *service.ToolboxSSHService,
 	toolboxDisk *service.ToolboxDiskService,
 	toolboxLog *service.ToolboxLogService,
+	toolboxMigration *service.ToolboxMigrationService,
 	webhook *service.WebHookService,
 	template *service.TemplateService,
 	apps *apploader.Loader,
@@ -133,6 +144,7 @@ func NewHttp(
 		environmentNodejs: environmentNodejs,
 		environmentPHP:    environmentPHP,
 		environmentPython: environmentPython,
+		environmentDotnet: environmentDotnet,
 		cron:              cron,
 		process:           process,
 		safe:              safe,
@@ -148,11 +160,13 @@ func NewHttp(
 		monitor:           monitor,
 		setting:           setting,
 		systemctl:         systemctl,
+		toolboxNetwork:    toolboxNetwork,
 		toolboxSystem:     toolboxSystem,
 		toolboxBenchmark:  toolboxBenchmark,
 		toolboxSSH:        toolboxSSH,
 		toolboxDisk:       toolboxDisk,
 		toolboxLog:        toolboxLog,
+		toolboxMigration:  toolboxMigration,
 		webhook:           webhook,
 		template:          template,
 		apps:              apps,
@@ -200,6 +214,7 @@ func (route *Http) Register(r *chi.Mux) {
 			r.Get("/update_info", route.home.UpdateInfo)
 			r.Post("/update", route.home.Update)
 			r.Post("/restart", route.home.Restart)
+			r.Get("/top_processes", route.home.TopProcesses)
 			r.Post("/restart_server", route.home.RestartServer)
 		})
 
@@ -365,6 +380,9 @@ func (route *Http) Register(r *chi.Mux) {
 				r.Get("/{slug}/mirror", route.environmentPython.GetMirror)
 				r.Post("/{slug}/mirror", route.environmentPython.SetMirror)
 			})
+			r.Route("/dotnet", func(r chi.Router) {
+				r.Post("/{slug}/set_cli", route.environmentDotnet.SetCli)
+			})
 		})
 
 		r.Route("/cron", func(r chi.Router) {
@@ -482,6 +500,7 @@ func (route *Http) Register(r *chi.Mux) {
 		r.Route("/log", func(r chi.Router) {
 			r.Get("/list", route.log.List)
 			r.Get("/dates", route.log.Dates)
+			r.Get("/ssh", route.log.SSH)
 		})
 
 		r.Route("/monitor", func(r chi.Router) {
@@ -496,6 +515,8 @@ func (route *Http) Register(r *chi.Mux) {
 			r.Post("/", route.setting.Update)
 			r.Post("/cert", route.setting.UpdateCert)
 			r.Post("/obtain_cert", route.setting.ObtainCert)
+			r.Get("/memo", route.setting.GetMemo)
+			r.Post("/memo", route.setting.UpdateMemo)
 		})
 
 		r.Route("/systemctl", func(r chi.Router) {
@@ -507,6 +528,10 @@ func (route *Http) Register(r *chi.Mux) {
 			r.Post("/reload", route.systemctl.Reload)
 			r.Post("/start", route.systemctl.Start)
 			r.Post("/stop", route.systemctl.Stop)
+		})
+
+		r.Route("/toolbox_network", func(r chi.Router) {
+			r.Get("/list", route.toolboxNetwork.List)
 		})
 
 		r.Route("/toolbox_system", func(r chi.Router) {
@@ -565,6 +590,17 @@ func (route *Http) Register(r *chi.Mux) {
 			r.Post("/clean", route.toolboxLog.Clean)
 		})
 
+		r.Route("/toolbox_migration", func(r chi.Router) {
+			r.Get("/status", route.toolboxMigration.GetStatus)
+			r.Post("/precheck", route.toolboxMigration.PreCheck)
+			r.Get("/items", route.toolboxMigration.GetItems)
+			r.Post("/start", route.toolboxMigration.Start)
+			r.Post("/reset", route.toolboxMigration.Reset)
+			r.Get("/results", route.toolboxMigration.GetResults)
+			r.Get("/log", route.toolboxMigration.DownloadLog)
+			r.Post("/exec", route.toolboxMigration.Exec)
+		})
+
 		r.Route("/webhook", func(r chi.Router) {
 			r.Get("/", route.webhook.List)
 			r.Post("/", route.webhook.Create)
@@ -597,36 +633,67 @@ func (route *Http) Register(r *chi.Mux) {
 		}
 		// 其他返回前端页面
 		frontend, _ := fs.Sub(embed.PublicFS, "frontend")
-		spaHandler := func(fs http.FileSystem) http.HandlerFunc {
-			fileServer := http.FileServer(fs)
-			return func(w http.ResponseWriter, r *http.Request) {
-				path := r.URL.Path
-				f, err := fs.Open(path)
-				if err != nil {
-					indexFile, err := fs.Open("index.html")
-					if err != nil {
-						http.NotFound(w, r)
-						return
-					}
-					defer func(indexFile http.File) {
-						_ = indexFile.Close()
-					}(indexFile)
-
-					fi, err := indexFile.Stat()
-					if err != nil {
-						http.NotFound(w, r)
-						return
-					}
-
-					http.ServeContent(w, r, "index.html", fi.ModTime(), indexFile)
-					return
-				}
-				defer func(f http.File) {
-					_ = f.Close()
-				}(f)
-				fileServer.ServeHTTP(w, r)
-			}
-		}
-		spaHandler(http.FS(frontend)).ServeHTTP(writer, request)
+		spaHandler := newPrecompressedSPAHandler(http.FS(frontend))
+		spaHandler.ServeHTTP(writer, request)
 	})
+}
+
+func newPrecompressedSPAHandler(fsys http.FileSystem) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+		acceptBr := strings.Contains(r.Header.Get("Accept-Encoding"), "br")
+
+		if served := serveFileWithBr(w, r, fsys, path, acceptBr); served {
+			return
+		}
+
+		// 文件不存在，SPA fallback 到 index.html
+		serveFileWithBr(w, r, fsys, "/index.html", acceptBr)
+	}
+}
+
+func serveFileWithBr(w http.ResponseWriter, r *http.Request, fsys http.FileSystem, path string, acceptBr bool) bool {
+	name := filepath.Base(path)
+	// 尝试打开 .br 版本
+	if f, err := fsys.Open(path + ".br"); err == nil {
+		defer func(f http.File) { _ = f.Close() }(f)
+		fi, err := f.Stat()
+		if err != nil || fi.IsDir() {
+			return false
+		}
+
+		ct := mime.TypeByExtension(filepath.Ext(path))
+		if ct == "" {
+			ct = "application/octet-stream"
+		}
+		w.Header().Set("Content-Type", ct)
+		w.Header().Set("Vary", "Accept-Encoding")
+
+		if acceptBr {
+			// 客户端支持 br，直接透传
+			w.Header().Set("Content-Encoding", "br")
+			http.ServeContent(w, r, name, fi.ModTime(), f)
+		} else {
+			// 客户端不支持 br，解压后返回（由中间件处理 gzip）
+			decoded, err := io.ReadAll(brotli.NewReader(f))
+			if err != nil {
+				return false
+			}
+			http.ServeContent(w, r, name, fi.ModTime(), bytes.NewReader(decoded))
+		}
+		return true
+	}
+
+	// 回退到原始文件（字体、图片等未压缩的资源）
+	f, err := fsys.Open(path)
+	if err != nil {
+		return false
+	}
+	defer func(f http.File) { _ = f.Close() }(f)
+	fi, err := f.Stat()
+	if err != nil || fi.IsDir() {
+		return false
+	}
+	http.ServeContent(w, r, name, fi.ModTime(), f)
+	return true
 }

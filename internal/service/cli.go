@@ -534,14 +534,15 @@ func (s *CliService) Port(ctx context.Context, cmd *cli.Command) error {
 	conf.HTTP.Port = port
 
 	// 放行端口
-	if ok, _ := systemctl.IsEnabled("firewalld"); ok {
-		fw := firewall.NewFirewall()
+	fw := firewall.NewFirewall()
+	if ok, _ := fw.Status(); ok {
 		err = fw.Port(firewall.FireInfo{
 			Type:      firewall.TypeNormal,
 			PortStart: port,
 			PortEnd:   port,
-			Direction: firewall.DirectionIn,
+			Protocol:  firewall.ProtocolTCPUDP,
 			Strategy:  firewall.StrategyAccept,
+			Direction: firewall.DirectionIn,
 		}, firewall.OperationAdd)
 		if err != nil {
 			return err
@@ -996,8 +997,9 @@ checkPort:
 		Type:      firewall.TypeNormal,
 		PortStart: port,
 		PortEnd:   port,
-		Direction: firewall.DirectionIn,
+		Protocol:  firewall.ProtocolTCPUDP,
 		Strategy:  firewall.StrategyAccept,
+		Direction: firewall.DirectionIn,
 	}, firewall.OperationAdd)
 
 	if err = config.Save(conf); err != nil {

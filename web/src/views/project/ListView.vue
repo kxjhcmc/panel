@@ -26,7 +26,8 @@ const typeMap: Record<string, string> = {
   java: 'Java',
   go: 'Go',
   python: 'Python',
-  nodejs: 'Node.js'
+  nodejs: 'Node.js',
+  dotnet: '.NET'
 }
 
 const columns: any = [
@@ -103,7 +104,7 @@ const columns: any = [
           class: 'cursor-pointer hover:opacity-60',
           type: 'info',
           onClick: () => {
-            fileStore.path = row.root_dir
+            fileStore.activeTab && fileStore.updateTabPath(fileStore.activeTabId, row.root_dir)
             router.push({ name: 'file-index' })
           }
         },

@@ -26,25 +26,36 @@ import {
   isCompress,
   isImage
 } from '@/utils/file'
+import { usePaste } from '@/views/file/composables/usePaste'
 import EditModal from '@/views/file/EditModal.vue'
 import PreviewModal from '@/views/file/PreviewModal.vue'
 import PropertyModal from '@/views/file/PropertyModal.vue'
-import type { FileInfo, Marked } from '@/views/file/types'
+import type { FileInfo } from '@/views/file/types'
 import copy2clipboard from '@vavt/copy2clipboard'
 
 const { $gettext } = useGettext()
 const themeVars = useThemeVars()
 const fileStore = useFileStore()
+const { handlePaste: doPaste } = usePaste()
+
+const props = defineProps<{
+  tabId: string
+}>()
 
 // 排序状态
 const sort = computed(() => fileStore.sort)
 
-const path = defineModel<string>('path', { type: String, required: true })
-const keyword = defineModel<string>('keyword', { type: String, default: '' })
-const sub = defineModel<boolean>('sub', { type: Boolean, default: false })
+const tab = computed(() => fileStore.tabs.find((t) => t.id === props.tabId)!)
+const path = computed({
+  get: () => tab.value.path,
+  set: (v: string) => fileStore.updateTabPath(props.tabId, v)
+})
+const keyword = computed(() => tab.value.keyword)
+const sub = computed(() => tab.value.sub)
+const marked = computed(() => fileStore.clipboard.marked)
+const markedType = computed(() => fileStore.clipboard.markedType)
+
 const selected = defineModel<any[]>('selected', { type: Array, default: () => [] })
-const marked = defineModel<Marked[]>('marked', { type: Array, default: () => [] })
-const markedType = defineModel<string>('markedType', { type: String, required: true })
 const compress = defineModel<boolean>('compress', { type: Boolean, required: true })
 const permission = defineModel<boolean>('permission', { type: Boolean, required: true })
 const permissionFileInfoList = defineModel<FileInfo[]>('permissionFileInfoList', {
@@ -169,16 +180,17 @@ const sizeCache = ref<Map<string, string>>(new Map())
 // 框选相关状态
 const gridContainerRef = ref<HTMLElement | null>(null)
 const isSelecting = ref(false)
-const selectionStart = ref({ x: 0, y: 0 })
-const selectionEnd = ref({ x: 0, y: 0 })
-const selectionBox = computed(() => {
-  if (!isSelecting.value) return null
-  const left = Math.min(selectionStart.value.x, selectionEnd.value.x)
-  const top = Math.min(selectionStart.value.y, selectionEnd.value.y)
-  const width = Math.abs(selectionEnd.value.x - selectionStart.value.x)
-  const height = Math.abs(selectionEnd.value.y - selectionStart.value.y)
-  return { left, top, width, height }
-})
+const selectionBoxEl = ref<HTMLElement | null>(null)
+
+// 非响应式坐标 — 避免每次 mousemove 触发 Vue 重渲染
+let selStartX = 0
+let selStartY = 0
+let selEndX = 0
+let selEndY = 0
+
+// 缓存 item 位置，框选期间不再每帧 querySelectorAll + getBoundingClientRect
+let cachedItemRects: { path: string; left: number; top: number; right: number; bottom: number }[] = []
+let cachedContainerRect: DOMRect | null = null
 
 // 将 hex 颜色转换为 RGB
 const hexToRgb = (hex: string) => {
@@ -187,20 +199,6 @@ const hexToRgb = (hex: string) => {
     ? `${parseInt(result[1] ?? '0', 16)}, ${parseInt(result[2] ?? '0', 16)}, ${parseInt(result[3] ?? '0', 16)}`
     : '24, 160, 88'
 }
-
-// 框选框样式
-const selectionBoxStyle = computed(() => {
-  if (!selectionBox.value) return {}
-  const rgb = hexToRgb(themeVars.value.primaryColor)
-  return {
-    left: selectionBox.value.left + 'px',
-    top: selectionBox.value.top + 'px',
-    width: selectionBox.value.width + 'px',
-    height: selectionBox.value.height + 'px',
-    borderColor: `rgba(${rgb}, 0.5)`,
-    backgroundColor: `rgba(${rgb}, 0.05)`
-  }
-})
 
 // 主题 CSS 变量
 const themeStyles = computed(() => {
@@ -211,6 +209,8 @@ const themeStyles = computed(() => {
     '--primary-color-hover-deep': `rgba(${primaryRgb}, 0.16)`,
     '--primary-color-border': `rgba(${primaryRgb}, 0.3)`,
     '--primary-color-border-deep': `rgba(${primaryRgb}, 0.4)`,
+    '--selection-border': `rgba(${primaryRgb}, 0.5)`,
+    '--selection-bg': `rgba(${primaryRgb}, 0.05)`,
     '--warning-color': themeVars.value.warningColor,
     '--hover-bg': themeVars.value.hoverColor,
     '--hover-border': themeVars.value.borderColor,
@@ -345,12 +345,6 @@ const options = computed<DropdownOption[]>(() => {
       label: selectedRow.value.dir ? $gettext('Compress') : $gettext('Download'),
       key: selectedRow.value.dir ? 'compress' : 'download'
     },
-    {
-      label: $gettext('Uncompress'),
-      key: 'uncompress',
-      show: isCompress(selectedRow.value.full),
-      disabled: !isCompress(selectedRow.value.full)
-    },
     { label: $gettext('Rename'), key: 'rename' },
     {
       label: $gettext('Terminal'),
@@ -424,13 +418,19 @@ const getIconColor = (item: any) => {
 }
 
 // 检查项目是否被选中
+// 使用 Set 做 O(1) 查找
+const selectedSet = computed(() => new Set(selected.value))
+
 const isSelected = (item: any) => {
-  return selected.value.includes(item.full)
+  return selectedSet.value.has(item.full)
 }
+
+// 使用 Set 做 O(1) 查找剪切状态
+const markedSet = computed(() => new Set(marked.value.map((m) => m.source)))
 
 // 检查项目是否被标记为剪切（移动）
 const isCut = (item: any) => {
-  return markedType.value === 'move' && marked.value.some((m) => m.source === item.full)
+  return markedType.value === 'move' && markedSet.value.has(item.full)
 }
 
 // 切换选择
@@ -498,7 +498,7 @@ const handleContextMenu = (item: any, event: MouseEvent) => {
   showDropdown.value = false
 
   // 如果右键点击的项目不在已选中列表中，则只选中该项目
-  if (!selected.value.includes(item.full)) {
+  if (!selectedSet.value.has(item.full)) {
     selected.value = [item.full]
   }
 
@@ -534,6 +534,20 @@ const handleEmptyContextMenu = (event: MouseEvent) => {
   })
 }
 
+// 直接操作 DOM 更新选择框位置，避免 Vue 响应式开销
+const updateSelectionBoxDOM = () => {
+  const el = selectionBoxEl.value
+  if (!el) return
+  const left = Math.min(selStartX, selEndX)
+  const top = Math.min(selStartY, selEndY)
+  const width = Math.abs(selEndX - selStartX)
+  const height = Math.abs(selEndY - selStartY)
+  el.style.left = left + 'px'
+  el.style.top = top + 'px'
+  el.style.width = width + 'px'
+  el.style.height = height + 'px'
+}
+
 // 框选开始
 const onSelectionStart = (event: MouseEvent) => {
   // 只响应左键，且不在项目上
@@ -543,16 +557,37 @@ const onSelectionStart = (event: MouseEvent) => {
   // 列表视图表头不触发框选
   if (target.closest('.list-header')) return
 
-  isSelecting.value = true
   const container = gridContainerRef.value
   if (!container) return
 
+  isSelecting.value = true
   const rect = container.getBoundingClientRect()
-  selectionStart.value = {
-    x: event.clientX - rect.left + container.scrollLeft,
-    y: event.clientY - rect.top + container.scrollTop
-  }
-  selectionEnd.value = { ...selectionStart.value }
+  cachedContainerRect = rect
+  selStartX = event.clientX - rect.left + container.scrollLeft
+  selStartY = event.clientY - rect.top + container.scrollTop
+  selEndX = selStartX
+  selEndY = selStartY
+
+  // 缓存所有 item 的位置，框选期间不再重复查询 DOM
+  const items = container.querySelectorAll('.file-item')
+  const scrollLeft = container.scrollLeft
+  const scrollTop = container.scrollTop
+  cachedItemRects = []
+  items.forEach((item) => {
+    const fullPath = item.getAttribute('data-path')
+    if (fullPath) {
+      const itemRect = item.getBoundingClientRect()
+      cachedItemRects.push({
+        path: fullPath,
+        left: itemRect.left - rect.left + scrollLeft,
+        top: itemRect.top - rect.top + scrollTop,
+        right: itemRect.right - rect.left + scrollLeft,
+        bottom: itemRect.bottom - rect.top + scrollTop
+      })
+    }
+  })
+
+  updateSelectionBoxDOM()
 
   // 如果没有按住 Ctrl/Cmd，清除已选
   if (!event.ctrlKey && !event.metaKey) {
@@ -561,87 +596,91 @@ const onSelectionStart = (event: MouseEvent) => {
 }
 
 // 框选移动
+let selectionRafId: number | null = null
 const onSelectionMove = (event: MouseEvent) => {
   if (!isSelecting.value) return
 
   const container = gridContainerRef.value
-  if (!container) return
+  if (!container || !cachedContainerRect) return
 
-  const rect = container.getBoundingClientRect()
-  selectionEnd.value = {
-    x: event.clientX - rect.left + container.scrollLeft,
-    y: event.clientY - rect.top + container.scrollTop
+  selEndX = event.clientX - cachedContainerRect.left + container.scrollLeft
+  selEndY = event.clientY - cachedContainerRect.top + container.scrollTop
+
+  // 直接 DOM 更新选择框
+  updateSelectionBoxDOM()
+
+  // rAF 节流碰撞检测
+  if (selectionRafId === null) {
+    selectionRafId = requestAnimationFrame(() => {
+      updateSelectionFromBox()
+      selectionRafId = null
+    })
   }
-
-  // 更新选中的项目
-  updateSelectionFromBox()
 }
 
 // 框选结束
 const onSelectionEnd = () => {
+  if (!isSelecting.value) return
+  // 最后一次碰撞检测确保结果准确
+  updateSelectionFromBox()
   isSelecting.value = false
+  cachedItemRects = []
+  cachedContainerRect = null
+  if (selectionRafId !== null) {
+    cancelAnimationFrame(selectionRafId)
+    selectionRafId = null
+  }
 }
 
 // 根据选择框更新选中的项目
 const updateSelectionFromBox = () => {
-  if (!selectionBox.value || !gridContainerRef.value) return
+  if (cachedItemRects.length === 0) return
 
-  const container = gridContainerRef.value
-  const items = container.querySelectorAll('.file-item')
+  const left = Math.min(selStartX, selEndX)
+  const top = Math.min(selStartY, selEndY)
+  const right = Math.max(selStartX, selEndX)
+  const bottom = Math.max(selStartY, selEndY)
+
   const newSelected: string[] = []
-
-  items.forEach((item) => {
-    const rect = item.getBoundingClientRect()
-    const containerRect = container.getBoundingClientRect()
-
-    const itemBox = {
-      left: rect.left - containerRect.left + container.scrollLeft,
-      top: rect.top - containerRect.top + container.scrollTop,
-      right: rect.right - containerRect.left + container.scrollLeft,
-      bottom: rect.bottom - containerRect.top + container.scrollTop
-    }
-
-    const selectBox = {
-      left: selectionBox.value!.left,
-      top: selectionBox.value!.top,
-      right: selectionBox.value!.left + selectionBox.value!.width,
-      bottom: selectionBox.value!.top + selectionBox.value!.height
-    }
-
-    // 检查是否相交
+  for (const item of cachedItemRects) {
     if (
-      !(
-        itemBox.right < selectBox.left ||
-        itemBox.left > selectBox.right ||
-        itemBox.bottom < selectBox.top ||
-        itemBox.top > selectBox.bottom
-      )
+      item.right >= left &&
+      item.left <= right &&
+      item.bottom >= top &&
+      item.top <= bottom
     ) {
-      const fullPath = item.getAttribute('data-path')
-      if (fullPath) {
-        newSelected.push(fullPath)
-      }
+      newSelected.push(item.path)
     }
-  })
+  }
 
-  selected.value = newSelected
+  // 只在选中集合真正变化时才更新
+  const currentSet = selectedSet.value
+  if (
+    newSelected.length !== currentSet.size ||
+    newSelected.some((v) => !currentSet.has(v))
+  ) {
+    selected.value = newSelected
+  }
 }
 
 // ==================== 公共操作函数 ====================
 
 // 获取选中的文件列表
 const getSelectedItems = () => {
-  return data.value.filter((item: any) => selected.value.includes(item.full))
+  const set = selectedSet.value
+  return data.value.filter((item: any) => set.has(item.full))
 }
 
 // 标记文件（复制/移动）
 const markFiles = (items: any[], type: 'copy' | 'move') => {
-  marked.value = items.map((item: any) => ({
-    name: item.name,
-    source: item.full,
-    force: false
-  }))
-  markedType.value = type
+  fileStore.setClipboard(
+    items.map((item: any) => ({
+      name: item.name,
+      source: item.full,
+      force: false
+    })),
+    type
+  )
   window.$message.success(
     $gettext('Marked successfully, please navigate to the destination path to paste')
   )
@@ -826,77 +865,7 @@ const copyPath = (item: any) => {
 
 // ==================== 处理粘贴 ====================
 const handlePaste = () => {
-  if (!marked.value.length) {
-    window.$message.error($gettext('Please mark the files/folders to copy or move first'))
-    return
-  }
-
-  let flag = false
-  const paths = marked.value.map((item) => ({
-    name: item.name,
-    source: item.source,
-    target: path.value + '/' + item.name,
-    force: false
-  }))
-  const sources = paths.map((item: any) => item.target)
-  useRequest(file.exist(sources)).onSuccess(({ data }) => {
-    for (let i = 0; i < data.length; i++) {
-      if (data[i]) {
-        flag = true
-        const pathItem = paths[i]
-        if (pathItem) pathItem.force = true
-      }
-    }
-    if (flag) {
-      window.$dialog.warning({
-        title: $gettext('Warning'),
-        content: $gettext(
-          'There are items with the same name %{ items } Do you want to overwrite?',
-          {
-            items: `${paths
-              .filter((item) => item.force)
-              .map((item) => item.name)
-              .join(', ')}`
-          }
-        ),
-        positiveText: $gettext('Overwrite'),
-        negativeText: $gettext('Cancel'),
-        onPositiveClick: () => {
-          if (markedType.value == 'copy') {
-            useRequest(file.copy(paths)).onSuccess(() => {
-              marked.value = []
-              window.$bus.emit('file:refresh')
-              window.$message.success($gettext('Copied successfully'))
-            })
-          } else {
-            useRequest(file.move(paths)).onSuccess(() => {
-              marked.value = []
-              window.$bus.emit('file:refresh')
-              window.$message.success($gettext('Moved successfully'))
-            })
-          }
-        },
-        onNegativeClick: () => {
-          marked.value = []
-          window.$message.info($gettext('Canceled'))
-        }
-      })
-    } else {
-      if (markedType.value == 'copy') {
-        useRequest(file.copy(paths)).onSuccess(() => {
-          marked.value = []
-          window.$bus.emit('file:refresh')
-          window.$message.success($gettext('Copied successfully'))
-        })
-      } else {
-        useRequest(file.move(paths)).onSuccess(() => {
-          marked.value = []
-          window.$bus.emit('file:refresh')
-          window.$message.success($gettext('Moved successfully'))
-        })
-      }
-    }
-  })
+  doPaste(path.value)
 }
 
 const handleSelect = (key: string) => {
@@ -1058,7 +1027,7 @@ const navigateToIndex = (index: number, addToSelection = false) => {
   if (index < 0 || index >= data.value.length) return
   const item = data.value[index]
   if (addToSelection) {
-    if (!selected.value.includes(item.full)) {
+    if (!selectedSet.value.has(item.full)) {
       selected.value.push(item.full)
     }
   } else {
@@ -1134,6 +1103,16 @@ const handleKeyDown = (event: KeyboardEvent) => {
           event.preventDefault()
           handlePaste()
         }
+        break
+      case 't':
+        // Ctrl/Cmd + T: 新建标签页
+        event.preventDefault()
+        fileStore.createTab()
+        break
+      case 'w':
+        // Ctrl/Cmd + W: 关闭当前标签页
+        event.preventDefault()
+        fileStore.closeTab(props.tabId)
         break
     }
   } else {
@@ -1277,7 +1256,7 @@ const handleFileSearch = () => {
   nextTick(() => {
     refresh()
   })
-  window.$bus.emit('file:push-history', path.value)
+  fileStore.pushHistory(props.tabId, path.value)
 }
 
 onMounted(() => {
@@ -1285,14 +1264,11 @@ onMounted(() => {
     path,
     () => {
       selected.value = []
-      keyword.value = ''
-      sub.value = false
       sizeCache.value.clear()
       sizeLoading.value.clear()
       nextTick(() => {
         refresh()
       })
-      window.$bus.emit('file:push-history', path.value)
     },
     { immediate: true }
   )
@@ -1351,7 +1327,7 @@ onUnmounted(() => {
         @contextmenu="handleEmptyContextMenu"
       >
         <!-- 框选框 -->
-        <div v-if="selectionBox" class="selection-box" :style="selectionBoxStyle" />
+        <div v-show="isSelecting" ref="selectionBoxEl" class="selection-box" />
 
         <!-- 列表视图表头 -->
         <div v-if="fileStore.viewType === 'list'" class="list-header">
@@ -1678,7 +1654,7 @@ onUnmounted(() => {
   <pty-terminal-modal
     v-model:show="terminalModal"
     :title="$gettext('Terminal - %{ path }', { path: terminalPath })"
-    :command="`cd '${terminalPath}' && exec bash`"
+    :command="`cd '${terminalPath}' && exec bash -l`"
   />
 </template>
 
@@ -1818,7 +1794,8 @@ onUnmounted(() => {
 }
 .selection-box {
   position: absolute;
-  border: 1px solid;
+  border: 1px solid var(--selection-border);
+  background: var(--selection-bg);
   pointer-events: none;
   z-index: 100;
 }

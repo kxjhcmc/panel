@@ -112,8 +112,8 @@ useRequest(postgresql.configTune()).onSuccess(({ data }: any) => {
   const ecs = parseSizeValue(data.effective_cache_size ?? '')
   effectiveCacheSizeNum.value = ecs.num
   effectiveCacheSizeUnit.value = ecs.unit
-  hugePages.value = data.huge_pages ?? ''
-  walLevel.value = data.wal_level ?? ''
+  hugePages.value = data.huge_pages || null
+  walLevel.value = data.wal_level || null
   const wb = parseSizeValue(data.wal_buffers ?? '')
   walBuffersNum.value = wb.num
   walBuffersUnit.value = wb.unit
@@ -127,10 +127,10 @@ useRequest(postgresql.configTune()).onSuccess(({ data }: any) => {
   defaultStatisticsTarget.value = Number(data.default_statistics_target) || null
   randomPageCost.value = data.random_page_cost ?? ''
   effectiveIoConcurrency.value = Number(data.effective_io_concurrency) || null
-  logDestination.value = data.log_destination ?? ''
+  logDestination.value = data.log_destination || null
   logMinDurationStatement.value = Number(data.log_min_duration_statement) ?? null
   logTimezone.value = data.log_timezone ?? ''
-  ioMethod.value = data.io_method ?? ''
+  ioMethod.value = data.io_method || null
 })
 
 const getConfigData = () => ({
@@ -142,8 +142,8 @@ const getConfigData = () => ({
   work_mem: composeSizeValue(workMemNum.value, workMemUnit.value),
   maintenance_work_mem: composeSizeValue(maintenanceWorkMemNum.value, maintenanceWorkMemUnit.value),
   effective_cache_size: composeSizeValue(effectiveCacheSizeNum.value, effectiveCacheSizeUnit.value),
-  huge_pages: hugePages.value,
-  wal_level: walLevel.value,
+  huge_pages: hugePages.value ?? '',
+  wal_level: walLevel.value ?? '',
   wal_buffers: composeSizeValue(walBuffersNum.value, walBuffersUnit.value),
   max_wal_size: composeSizeValue(maxWalSizeNum.value, maxWalSizeUnit.value),
   min_wal_size: composeSizeValue(minWalSizeNum.value, minWalSizeUnit.value),
@@ -151,10 +151,10 @@ const getConfigData = () => ({
   default_statistics_target: String(defaultStatisticsTarget.value ?? ''),
   random_page_cost: randomPageCost.value,
   effective_io_concurrency: String(effectiveIoConcurrency.value ?? ''),
-  log_destination: logDestination.value,
+  log_destination: logDestination.value ?? '',
   log_min_duration_statement: String(logMinDurationStatement.value ?? ''),
   log_timezone: logTimezone.value,
-  io_method: ioMethod.value
+  io_method: ioMethod.value ?? ''
 })
 
 const handleSave = () => {
@@ -177,13 +177,13 @@ const handleSave = () => {
           {{ $gettext('PostgreSQL connection and authentication settings.') }}
         </n-alert>
         <n-form>
-          <n-form-item label="Listen Addresses (listen_addresses)">
+          <n-form-item :label="$gettext('Listen Addresses (listen_addresses)')">
             <n-input
               v-model:value="listenAddresses"
               :placeholder="$gettext('e.g. localhost or *')"
             />
           </n-form-item>
-          <n-form-item label="Port (port)">
+          <n-form-item :label="$gettext('Port (port)')">
             <n-input-number
               class="w-full"
               v-model:value="port"
@@ -192,7 +192,7 @@ const handleSave = () => {
               :max="65535"
             />
           </n-form-item>
-          <n-form-item label="Max Connections (max_connections)">
+          <n-form-item :label="$gettext('Max Connections (max_connections)')">
             <n-input-number
               class="w-full"
               v-model:value="maxConnections"
@@ -200,7 +200,7 @@ const handleSave = () => {
               :min="1"
             />
           </n-form-item>
-          <n-form-item label="Superuser Reserved Connections (superuser_reserved_connections)">
+          <n-form-item :label="$gettext('Superuser Reserved Connections (superuser_reserved_connections)')">
             <n-input-number
               class="w-full"
               v-model:value="superuserReservedConnections"
@@ -227,7 +227,7 @@ const handleSave = () => {
           {{ $gettext('PostgreSQL memory allocation settings.') }}
         </n-alert>
         <n-form>
-          <n-form-item label="Shared Buffers (shared_buffers)">
+          <n-form-item :label="$gettext('Shared Buffers (shared_buffers)')">
             <n-input-group>
               <n-input-number
                 class="w-full"
@@ -243,7 +243,7 @@ const handleSave = () => {
               />
             </n-input-group>
           </n-form-item>
-          <n-form-item label="Work Mem (work_mem)">
+          <n-form-item :label="$gettext('Work Mem (work_mem)')">
             <n-input-group>
               <n-input-number
                 class="w-full"
@@ -259,7 +259,7 @@ const handleSave = () => {
               />
             </n-input-group>
           </n-form-item>
-          <n-form-item label="Maintenance Work Mem (maintenance_work_mem)">
+          <n-form-item :label="$gettext('Maintenance Work Mem (maintenance_work_mem)')">
             <n-input-group>
               <n-input-number
                 class="w-full"
@@ -275,7 +275,7 @@ const handleSave = () => {
               />
             </n-input-group>
           </n-form-item>
-          <n-form-item label="Effective Cache Size (effective_cache_size)">
+          <n-form-item :label="$gettext('Effective Cache Size (effective_cache_size)')">
             <n-input-group>
               <n-input-number
                 class="w-full"
@@ -291,8 +291,8 @@ const handleSave = () => {
               />
             </n-input-group>
           </n-form-item>
-          <n-form-item label="Huge Pages (huge_pages)">
-            <n-select v-model:value="hugePages" :options="hugePagesOptions" />
+          <n-form-item :label="$gettext('Huge Pages (huge_pages)')">
+            <n-select v-model:value="hugePages" :options="hugePagesOptions" clearable />
           </n-form-item>
         </n-form>
         <n-flex>
@@ -313,10 +313,10 @@ const handleSave = () => {
           {{ $gettext('Write-Ahead Logging (WAL) settings.') }}
         </n-alert>
         <n-form>
-          <n-form-item label="WAL Level (wal_level)">
-            <n-select v-model:value="walLevel" :options="walLevelOptions" />
+          <n-form-item :label="$gettext('WAL Level (wal_level)')">
+            <n-select v-model:value="walLevel" :options="walLevelOptions" clearable />
           </n-form-item>
-          <n-form-item label="WAL Buffers (wal_buffers)">
+          <n-form-item :label="$gettext('WAL Buffers (wal_buffers)')">
             <n-input-group>
               <n-input-number
                 class="w-full"
@@ -332,7 +332,7 @@ const handleSave = () => {
               />
             </n-input-group>
           </n-form-item>
-          <n-form-item label="Max WAL Size (max_wal_size)">
+          <n-form-item :label="$gettext('Max WAL Size (max_wal_size)')">
             <n-input-group>
               <n-input-number
                 class="w-full"
@@ -348,7 +348,7 @@ const handleSave = () => {
               />
             </n-input-group>
           </n-form-item>
-          <n-form-item label="Min WAL Size (min_wal_size)">
+          <n-form-item :label="$gettext('Min WAL Size (min_wal_size)')">
             <n-input-group>
               <n-input-number
                 class="w-full"
@@ -364,7 +364,7 @@ const handleSave = () => {
               />
             </n-input-group>
           </n-form-item>
-          <n-form-item label="Checkpoint Completion Target (checkpoint_completion_target)">
+          <n-form-item :label="$gettext('Checkpoint Completion Target (checkpoint_completion_target)')">
             <n-input
               v-model:value="checkpointCompletionTarget"
               :placeholder="$gettext('e.g. 0.9')"
@@ -389,7 +389,7 @@ const handleSave = () => {
           {{ $gettext('Query planner and optimization settings.') }}
         </n-alert>
         <n-form>
-          <n-form-item label="Default Statistics Target (default_statistics_target)">
+          <n-form-item :label="$gettext('Default Statistics Target (default_statistics_target)')">
             <n-input-number
               class="w-full"
               v-model:value="defaultStatisticsTarget"
@@ -397,10 +397,10 @@ const handleSave = () => {
               :min="1"
             />
           </n-form-item>
-          <n-form-item label="Random Page Cost (random_page_cost)">
+          <n-form-item :label="$gettext('Random Page Cost (random_page_cost)')">
             <n-input v-model:value="randomPageCost" :placeholder="$gettext('e.g. 1.1')" />
           </n-form-item>
-          <n-form-item label="Effective IO Concurrency (effective_io_concurrency)">
+          <n-form-item :label="$gettext('Effective IO Concurrency (effective_io_concurrency)')">
             <n-input-number
               class="w-full"
               v-model:value="effectiveIoConcurrency"
@@ -427,10 +427,10 @@ const handleSave = () => {
           {{ $gettext('PostgreSQL logging settings.') }}
         </n-alert>
         <n-form>
-          <n-form-item label="Log Destination (log_destination)">
+          <n-form-item :label="$gettext('Log Destination (log_destination)')">
             <n-input v-model:value="logDestination" :placeholder="$gettext('e.g. stderr')" />
           </n-form-item>
-          <n-form-item label="Log Min Duration Statement (log_min_duration_statement)">
+          <n-form-item :label="$gettext('Log Min Duration Statement (log_min_duration_statement)')">
             <n-input-number
               class="w-full"
               v-model:value="logMinDurationStatement"
@@ -438,7 +438,7 @@ const handleSave = () => {
               :min="-1"
             />
           </n-form-item>
-          <n-form-item label="Log Timezone (log_timezone)">
+          <n-form-item :label="$gettext('Log Timezone (log_timezone)')">
             <n-input v-model:value="logTimezone" :placeholder="$gettext('e.g. Asia/Shanghai')" />
           </n-form-item>
         </n-form>
@@ -460,8 +460,8 @@ const handleSave = () => {
           {{ $gettext('IO method settings. Requires PostgreSQL restart to take effect.') }}
         </n-alert>
         <n-form>
-          <n-form-item label="IO Method (io_method)">
-            <n-select v-model:value="ioMethod" :options="ioMethodOptions" />
+          <n-form-item :label="$gettext('IO Method (io_method)')">
+            <n-select v-model:value="ioMethod" :options="ioMethodOptions" clearable />
           </n-form-item>
         </n-form>
         <n-flex>

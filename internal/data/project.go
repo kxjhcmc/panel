@@ -99,13 +99,18 @@ func (r *projectRepo) Create(ctx context.Context, req *request.ProjectCreate) (*
 	project := &biz.Project{
 		Name: req.Name,
 		Type: req.Type,
-		Path: req.RootDir,
+		Path: lo.If(!strings.HasPrefix(req.RootDir, "/"), filepath.Join("/", req.RootDir)).Else(req.RootDir),
 	}
 
 	err := r.db.Transaction(func(tx *gorm.DB) error {
 		// 创建数据库记录
 		if err := tx.Create(project).Error; err != nil {
 			return err
+		}
+
+		// 创建项目目录
+		if err := os.MkdirAll(project.Path, 0755); err != nil {
+			return fmt.Errorf("%s: %w", r.t.Get("failed to create project directory"), err)
 		}
 
 		// 生成 systemd unit 文件
@@ -141,7 +146,7 @@ func (r *projectRepo) Update(ctx context.Context, req *request.ProjectUpdate) er
 		project.Name = req.Name
 	}
 
-	project.Path = req.RootDir
+	project.Path = lo.If(!strings.HasPrefix(req.RootDir, "/"), filepath.Join("/", req.RootDir)).Else(req.RootDir)
 	if err := r.db.Save(project).Error; err != nil {
 		return err
 	}
