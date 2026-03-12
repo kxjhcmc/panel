@@ -7,19 +7,19 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/acepanel/panel/pkg/types"
 	"github.com/go-chi/chi/v5"
 	"github.com/leonelquinteros/gotext"
 	"github.com/spf13/cast"
 
-	"github.com/acepanel/panel/internal/app"
-	"github.com/acepanel/panel/internal/biz"
-	"github.com/acepanel/panel/internal/service"
-	"github.com/acepanel/panel/pkg/db"
-	"github.com/acepanel/panel/pkg/io"
-	"github.com/acepanel/panel/pkg/shell"
-	"github.com/acepanel/panel/pkg/systemctl"
-	"github.com/acepanel/panel/pkg/tools"
+	"github.com/acepanel/panel/v3/internal/app"
+	"github.com/acepanel/panel/v3/internal/biz"
+	"github.com/acepanel/panel/v3/internal/service"
+	"github.com/acepanel/panel/v3/pkg/db"
+	"github.com/acepanel/panel/v3/pkg/io"
+	"github.com/acepanel/panel/v3/pkg/shell"
+	"github.com/acepanel/panel/v3/pkg/systemctl"
+	"github.com/acepanel/panel/v3/pkg/tools"
+	"github.com/acepanel/panel/v3/pkg/types"
 )
 
 type App struct {
@@ -388,8 +388,8 @@ func (s *App) UpdateConfigTune(w http.ResponseWriter, r *http.Request) {
 
 // getINIValue 从 INI 格式内容中获取指定键的值
 func (s *App) getINIValue(content string, key string) string {
-	lines := strings.Split(content, "\n")
-	for _, line := range lines {
+	lines := strings.SplitSeq(content, "\n")
+	for line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" || strings.HasPrefix(trimmed, ";") || strings.HasPrefix(trimmed, "#") {
 			continue

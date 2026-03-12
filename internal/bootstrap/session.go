@@ -5,7 +5,7 @@ import (
 	"github.com/libtnb/sessions"
 	"gorm.io/gorm"
 
-	"github.com/acepanel/panel/pkg/config"
+	"github.com/acepanel/panel/v3/pkg/config"
 )
 
 func NewSession(conf *config.Config, db *gorm.DB) (*sessions.Manager, error) {

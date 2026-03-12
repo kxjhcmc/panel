@@ -1,27 +1,29 @@
-module github.com/acepanel/panel
+module github.com/acepanel/panel/v3
 
-go 1.26.0
+go 1.26
 
 require (
-	github.com/DeRuina/timberjack v1.3.9
+	github.com/DeRuina/timberjack v1.4.0
 	github.com/andybalholm/brotli v1.2.0
-	github.com/bddjr/hlfhr v1.4.2
+	github.com/bddjr/hlfhr v1.5.0
 	github.com/beevik/ntp v1.5.0
+	github.com/cilium/ebpf v0.21.0
 	github.com/coder/websocket v1.8.14
 	github.com/containerd/errdefs v1.0.0
 	github.com/coreos/go-systemd/v22 v22.7.0
 	github.com/creack/pty v1.1.24
 	github.com/dchest/captcha v1.1.0
-	github.com/expr-lang/expr v1.17.7
+	github.com/expr-lang/expr v1.17.8
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/go-chi/chi/v5 v5.2.5
 	github.com/go-chi/httplog/v3 v3.3.0
 	github.com/go-gormigrate/gormigrate/v2 v2.1.5
 	github.com/go-sql-driver/mysql v1.9.3
+	github.com/go-webauthn/webauthn v0.16.0
 	github.com/gomodule/redigo v1.9.3
 	github.com/google/wire v0.7.0
 	github.com/gookit/color v1.6.0
-	github.com/gookit/validate v1.5.7-0.20260207022141-dc32dc1276cd
+	github.com/gookit/validate v1.5.7-0.20260302030259-166fa4925314
 	github.com/hashicorp/go-version v1.8.0
 	github.com/leonelquinteros/gotext v1.7.2
 	github.com/lib/pq v1.11.2
@@ -35,48 +37,57 @@ require (
 	github.com/libdns/porkbun v1.1.0
 	github.com/libdns/tencentcloud v1.4.3
 	github.com/libdns/westcn v1.0.2
+	github.com/libtnb/cache v1.2.0
 	github.com/libtnb/chix v1.3.2
-	github.com/libtnb/gormstore v1.1.1
-	github.com/libtnb/sessions v1.2.2
-	github.com/libtnb/sqlite v0.1.0
+	github.com/libtnb/gormstore v1.2.0
+	github.com/libtnb/sessions v1.4.0
+	github.com/libtnb/sqlite v1.0.0
 	github.com/libtnb/utils v1.2.1
-	github.com/mholt/acmez/v3 v3.1.4
-	github.com/moby/moby/api v1.53.0
-	github.com/moby/moby/client v0.2.2
+	github.com/medama-io/go-useragent v1.2.3
+	github.com/mholt/acmez/v3 v3.1.6
+	github.com/moby/moby/api v1.54.0
+	github.com/moby/moby/client v0.3.0
 	github.com/orandin/slog-gorm v1.4.0
 	github.com/pkg/sftp v1.13.10
 	github.com/pquerna/otp v1.5.0
 	github.com/rhnvrm/simples3 v0.11.1
 	github.com/robfig/cron/v3 v3.0.1
-	github.com/samber/lo v1.52.0
+	github.com/samber/lo v1.53.0
 	github.com/sethvargo/go-limiter v1.1.0
-	github.com/shirou/gopsutil/v4 v4.26.1
+	github.com/shirou/gopsutil/v4 v4.26.2
 	github.com/spf13/cast v1.10.0
 	github.com/stretchr/testify v1.11.1
 	github.com/studio-b12/gowebdav v0.12.0
-	github.com/tufanbarisyildirim/gonginx v0.0.0-20250620092546-c3e307e36701
-	github.com/urfave/cli/v3 v3.6.2
+	github.com/tufanbarisyildirim/gonginx v0.0.0-20260220081509-8e17ce617db3
+	github.com/urfave/cli/v3 v3.7.0
+	github.com/valyala/fastjson v1.6.10
 	go.yaml.in/yaml/v4 v4.0.0-rc.4
-	golang.org/x/crypto v0.48.0
-	golang.org/x/net v0.50.0
+	golang.org/x/crypto v0.49.0
+	golang.org/x/net v0.52.0
 	gorm.io/gorm v1.31.1
 	resty.dev/v3 v3.0.0-beta.6
 )
 
 require (
-	filippo.io/edwards25519 v1.1.0 // indirect
+	filippo.io/edwards25519 v1.1.1 // indirect
 	github.com/G-Core/gcore-dns-sdk-go v0.3.3 // indirect
 	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/boombuler/barcode v1.1.0 // indirect
+	github.com/boyter/go-string v1.0.5 // indirect
 	github.com/containerd/errdefs/pkg v0.3.0 // indirect
 	github.com/distribution/reference v0.6.0 // indirect
 	github.com/docker/go-connections v0.6.0 // indirect
 	github.com/docker/go-units v0.5.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
-	github.com/ebitengine/purego v0.9.1 // indirect
+	github.com/ebitengine/purego v0.10.0 // indirect
+	github.com/fxamacker/cbor/v2 v2.9.0 // indirect
 	github.com/gabriel-vasile/mimetype v1.4.12 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect
+	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
+	github.com/go-webauthn/x v0.2.1 // indirect
 	github.com/gofiber/schema v1.6.0 // indirect
+	github.com/golang-jwt/jwt/v5 v5.3.1 // indirect
+	github.com/google/go-tpm v0.9.8 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gookit/filter v1.2.3 // indirect
 	github.com/gookit/goutil v0.7.3 // indirect
@@ -101,16 +112,17 @@ require (
 	github.com/timtadh/lexmachine v0.2.3 // indirect
 	github.com/tklauser/go-sysconf v0.3.16 // indirect
 	github.com/tklauser/numcpus v0.11.0 // indirect
+	github.com/x448/float16 v0.8.4 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
 	golang.org/x/exp v0.0.0-20260112195511-716be5621a96 // indirect
-	golang.org/x/sync v0.19.0 // indirect
-	golang.org/x/sys v0.41.0 // indirect
-	golang.org/x/text v0.34.0 // indirect
+	golang.org/x/sync v0.20.0 // indirect
+	golang.org/x/sys v0.42.0 // indirect
+	golang.org/x/text v0.35.0 // indirect
 	modernc.org/libc v1.67.6 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
-	modernc.org/sqlite v1.45.0 // indirect
+	modernc.org/sqlite v1.46.1 // indirect
 )
 
 replace (

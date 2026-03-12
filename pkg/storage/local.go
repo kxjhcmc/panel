@@ -11,7 +11,7 @@ import (
 
 	"github.com/shirou/gopsutil/v4/disk"
 
-	pkgio "github.com/acepanel/panel/pkg/io"
+	pkgio "github.com/acepanel/panel/v3/pkg/io"
 )
 
 type Local struct {

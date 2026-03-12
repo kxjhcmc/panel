@@ -6,6 +6,7 @@ import { useGettext } from 'vue3-gettext'
 const { $gettext } = useGettext()
 const show = defineModel<boolean>('show', { type: Boolean, required: true })
 const id = defineModel<number>('id', { type: Number, required: true })
+const serverType = ref('')
 const updateModel = ref({
   name: '',
   host: '127.0.0.1',
@@ -35,6 +36,7 @@ watch(
   (value) => {
     if (value && id.value) {
       useRequest(database.serverGet(id.value)).onSuccess(({ data }: { data: any }) => {
+        serverType.value = data.type
         updateModel.value.name = data.name
         updateModel.value.host = data.host
         updateModel.value.port = data.port
@@ -90,7 +92,7 @@ watch(
           </n-form-item>
         </n-col>
       </n-row>
-      <n-form-item path="username" :label="$gettext('Username')">
+      <n-form-item v-if="serverType !== 'redis'" path="username" :label="$gettext('Username')">
         <n-input
           v-model:value="updateModel.username"
           type="text"

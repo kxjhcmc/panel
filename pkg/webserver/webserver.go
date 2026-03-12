@@ -3,9 +3,9 @@ package webserver
 import (
 	"fmt"
 
-	"github.com/acepanel/panel/pkg/webserver/apache"
-	"github.com/acepanel/panel/pkg/webserver/nginx"
-	"github.com/acepanel/panel/pkg/webserver/types"
+	"github.com/acepanel/panel/v3/pkg/webserver/apache"
+	"github.com/acepanel/panel/v3/pkg/webserver/nginx"
+	"github.com/acepanel/panel/v3/pkg/webserver/types"
 )
 
 func NewStaticVhost(serverType Type, configDir string) (types.StaticVhost, error) {

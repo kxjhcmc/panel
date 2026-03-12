@@ -3,7 +3,7 @@
 package biz
 
 import (
-	biz "github.com/acepanel/panel/internal/biz"
+	biz "github.com/acepanel/panel/v3/internal/biz"
 	mock "github.com/stretchr/testify/mock"
 )
 
@@ -18,51 +18,6 @@ type TaskRepo_Expecter struct {
 
 func (_m *TaskRepo) EXPECT() *TaskRepo_Expecter {
 	return &TaskRepo_Expecter{mock: &_m.Mock}
-}
-
-// ClearZombieTasks provides a mock function with no fields
-func (_m *TaskRepo) ClearZombieTasks() error {
-	ret := _m.Called()
-
-	if len(ret) == 0 {
-		panic("no return value specified for ClearZombieTasks")
-	}
-
-	var r0 error
-	if rf, ok := ret.Get(0).(func() error); ok {
-		r0 = rf()
-	} else {
-		r0 = ret.Error(0)
-	}
-
-	return r0
-}
-
-// TaskRepo_ClearZombieTasks_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'ClearZombieTasks'
-type TaskRepo_ClearZombieTasks_Call struct {
-	*mock.Call
-}
-
-// ClearZombieTasks is a helper method to define mock.On call
-func (_e *TaskRepo_Expecter) ClearZombieTasks() *TaskRepo_ClearZombieTasks_Call {
-	return &TaskRepo_ClearZombieTasks_Call{Call: _e.mock.On("ClearZombieTasks")}
-}
-
-func (_c *TaskRepo_ClearZombieTasks_Call) Run(run func()) *TaskRepo_ClearZombieTasks_Call {
-	_c.Call.Run(func(args mock.Arguments) {
-		run()
-	})
-	return _c
-}
-
-func (_c *TaskRepo_ClearZombieTasks_Call) Return(_a0 error) *TaskRepo_ClearZombieTasks_Call {
-	_c.Call.Return(_a0)
-	return _c
-}
-
-func (_c *TaskRepo_ClearZombieTasks_Call) RunAndReturn(run func() error) *TaskRepo_ClearZombieTasks_Call {
-	_c.Call.Return(run)
-	return _c
 }
 
 // Delete provides a mock function with given fields: id
@@ -322,6 +277,53 @@ func (_c *TaskRepo_Push_Call) Return(_a0 error) *TaskRepo_Push_Call {
 }
 
 func (_c *TaskRepo_Push_Call) RunAndReturn(run func(*biz.Task) error) *TaskRepo_Push_Call {
+	_c.Call.Return(run)
+	return _c
+}
+
+// UpdateLog provides a mock function with given fields: id, log
+func (_m *TaskRepo) UpdateLog(id uint, log string) error {
+	ret := _m.Called(id, log)
+
+	if len(ret) == 0 {
+		panic("no return value specified for UpdateLog")
+	}
+
+	var r0 error
+	if rf, ok := ret.Get(0).(func(uint, string) error); ok {
+		r0 = rf(id, log)
+	} else {
+		r0 = ret.Error(0)
+	}
+
+	return r0
+}
+
+// TaskRepo_UpdateLog_Call is a *mock.Call that shadows Run/Return methods with type explicit version for method 'UpdateLog'
+type TaskRepo_UpdateLog_Call struct {
+	*mock.Call
+}
+
+// UpdateLog is a helper method to define mock.On call
+//   - id uint
+//   - log string
+func (_e *TaskRepo_Expecter) UpdateLog(id interface{}, log interface{}) *TaskRepo_UpdateLog_Call {
+	return &TaskRepo_UpdateLog_Call{Call: _e.mock.On("UpdateLog", id, log)}
+}
+
+func (_c *TaskRepo_UpdateLog_Call) Run(run func(id uint, log string)) *TaskRepo_UpdateLog_Call {
+	_c.Call.Run(func(args mock.Arguments) {
+		run(args[0].(uint), args[1].(string))
+	})
+	return _c
+}
+
+func (_c *TaskRepo_UpdateLog_Call) Return(_a0 error) *TaskRepo_UpdateLog_Call {
+	_c.Call.Return(_a0)
+	return _c
+}
+
+func (_c *TaskRepo_UpdateLog_Call) RunAndReturn(run func(uint, string) error) *TaskRepo_UpdateLog_Call {
 	_c.Call.Return(run)
 	return _c
 }

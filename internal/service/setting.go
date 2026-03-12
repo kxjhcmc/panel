@@ -8,9 +8,9 @@ import (
 	"github.com/libtnb/chix"
 	"gorm.io/gorm"
 
-	"github.com/acepanel/panel/internal/biz"
-	"github.com/acepanel/panel/internal/http/request"
-	"github.com/acepanel/panel/pkg/tools"
+	"github.com/acepanel/panel/v3/internal/biz"
+	"github.com/acepanel/panel/v3/internal/http/request"
+	"github.com/acepanel/panel/v3/pkg/tools"
 )
 
 type SettingService struct {

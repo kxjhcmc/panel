@@ -31,7 +31,7 @@ jobs:
           pnpm run gettext:compile
           pnpm build
       - name: Upload frontend
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: frontend
           path: web/dist/
@@ -55,7 +55,7 @@ jobs:
       - name: Install dependencies
         run: go mod tidy
       - name: Download frontend
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: frontend
           path: pkg/embed/frontend
@@ -75,17 +75,17 @@ jobs:
           GOARCH: ${{ matrix.goarch }}
         run: |
           LDFLAGS="-s -w --extldflags '-static'"
-          LDFLAGS="${LDFLAGS} -X 'github.com/acepanel/panel/internal/app.Version=${VERSION}'"
-          LDFLAGS="${LDFLAGS} -X 'github.com/acepanel/panel/internal/app.BuildTime=${BUILD_TIME}'"
-          LDFLAGS="${LDFLAGS} -X 'github.com/acepanel/panel/internal/app.CommitHash=${COMMIT_HASH}'"
-          LDFLAGS="${LDFLAGS} -X 'github.com/acepanel/panel/internal/app.GoVersion=${GO_VERSION}'"
-          LDFLAGS="${LDFLAGS} -X 'github.com/acepanel/panel/internal/app.BuildID=${BUILD_ID}'"
-          LDFLAGS="${LDFLAGS} -X 'github.com/acepanel/panel/internal/app.BuildUser=${BUILD_USER}'"
-          LDFLAGS="${LDFLAGS} -X 'github.com/acepanel/panel/internal/app.BuildHost=${BUILD_HOST}'"
+          LDFLAGS="${LDFLAGS} -X 'github.com/acepanel/panel/v3/internal/app.Version=${VERSION}'"
+          LDFLAGS="${LDFLAGS} -X 'github.com/acepanel/panel/v3/internal/app.BuildTime=${BUILD_TIME}'"
+          LDFLAGS="${LDFLAGS} -X 'github.com/acepanel/panel/v3/internal/app.CommitHash=${COMMIT_HASH}'"
+          LDFLAGS="${LDFLAGS} -X 'github.com/acepanel/panel/v3/internal/app.GoVersion=${GO_VERSION}'"
+          LDFLAGS="${LDFLAGS} -X 'github.com/acepanel/panel/v3/internal/app.BuildID=${BUILD_ID}'"
+          LDFLAGS="${LDFLAGS} -X 'github.com/acepanel/panel/v3/internal/app.BuildUser=${BUILD_USER}'"
+          LDFLAGS="${LDFLAGS} -X 'github.com/acepanel/panel/v3/internal/app.BuildHost=${BUILD_HOST}'"
           go build -trimpath -buildvcs=false -ldflags "${LDFLAGS}" -o ace-${{ matrix.goarch }} ./cmd/ace
           go build -trimpath -buildvcs=false -ldflags "${LDFLAGS}" -o cli-${{ matrix.goarch }} ./cmd/cli
       - name: Upload artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: backend-${{ matrix.goarch }}
           path: |

@@ -4,8 +4,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/leonelquinteros/gotext"
 
-	"github.com/acepanel/panel/internal/apps/mysql"
-	"github.com/acepanel/panel/internal/biz"
+	"github.com/acepanel/panel/v3/internal/apps/mysql"
+	"github.com/acepanel/panel/v3/internal/biz"
 )
 
 type App struct {

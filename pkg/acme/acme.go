@@ -14,7 +14,7 @@ import (
 	"github.com/mholt/acmez/v3"
 	"github.com/mholt/acmez/v3/acme"
 
-	"github.com/acepanel/panel/pkg/cert"
+	"github.com/acepanel/panel/v3/pkg/cert"
 )
 
 const (

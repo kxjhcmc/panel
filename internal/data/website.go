@@ -18,19 +18,19 @@ import (
 	"github.com/spf13/cast"
 	"gorm.io/gorm"
 
-	"github.com/acepanel/panel/internal/app"
-	"github.com/acepanel/panel/internal/biz"
-	"github.com/acepanel/panel/internal/http/request"
-	"github.com/acepanel/panel/pkg/acme"
-	"github.com/acepanel/panel/pkg/cert"
-	"github.com/acepanel/panel/pkg/embed"
-	"github.com/acepanel/panel/pkg/io"
-	"github.com/acepanel/panel/pkg/punycode"
-	"github.com/acepanel/panel/pkg/shell"
-	"github.com/acepanel/panel/pkg/systemctl"
-	"github.com/acepanel/panel/pkg/types"
-	"github.com/acepanel/panel/pkg/webserver"
-	webservertypes "github.com/acepanel/panel/pkg/webserver/types"
+	"github.com/acepanel/panel/v3/internal/app"
+	"github.com/acepanel/panel/v3/internal/biz"
+	"github.com/acepanel/panel/v3/internal/http/request"
+	"github.com/acepanel/panel/v3/pkg/acme"
+	"github.com/acepanel/panel/v3/pkg/cert"
+	"github.com/acepanel/panel/v3/pkg/embed"
+	"github.com/acepanel/panel/v3/pkg/io"
+	"github.com/acepanel/panel/v3/pkg/punycode"
+	"github.com/acepanel/panel/v3/pkg/shell"
+	"github.com/acepanel/panel/v3/pkg/systemctl"
+	"github.com/acepanel/panel/v3/pkg/types"
+	"github.com/acepanel/panel/v3/pkg/webserver"
+	webservertypes "github.com/acepanel/panel/v3/pkg/webserver/types"
 )
 
 type websiteRepo struct {
@@ -114,9 +114,6 @@ func (r *websiteRepo) UpdateDefaultConfig(req *request.WebsiteDefaultConfig) err
 	if err = r.setting.SetSlice(biz.SettingKeyWebsiteTLSVersions, req.TLSVersions); err != nil {
 		return err
 	}
-	if err = r.setting.Set(biz.SettingKeyWebsiteCipherSuites, req.CipherSuites); err != nil {
-		return err
-	}
 
 	return r.reloadWebServer()
 }
@@ -173,7 +170,6 @@ func (r *websiteRepo) Get(id uint) (*types.WebsiteSetting, error) {
 		setting.HSTS = sslConfig.HSTS
 		setting.OCSP = sslConfig.OCSP
 		setting.SSLProtocols = sslConfig.Protocols
-		setting.SSLCiphers = sslConfig.Ciphers
 	}
 	// 证书
 	crt, _ := os.ReadFile(filepath.Join(app.Root, "sites", website.Name, "config", "fullchain.pem"))
@@ -228,6 +224,9 @@ func (r *websiteRepo) Get(id uint) (*types.WebsiteSetting, error) {
 	// 自定义配置
 	configDir := filepath.Join(app.Root, "sites", website.Name, "config")
 	setting.CustomConfigs = r.getCustomConfigs(configDir)
+
+	// 访问统计
+	setting.StatEnabled = vhost.Config("021-stats-log.conf", "site") != ""
 
 	return setting, err
 }
@@ -369,7 +368,7 @@ func (r *websiteRepo) Create(ctx context.Context, req *request.WebsiteCreate) (*
 		if err = phpVhost.SetIndex([]string{"index.php", "index.html"}); err != nil {
 			return nil, err
 		}
-		if err = phpVhost.SetConfig("010-rewrite.conf", "site", ""); err != nil {
+		if err = phpVhost.SetConfig("010-rewrite.conf", "site", "", true); err != nil {
 			return nil, err
 		}
 		var cacheConfig string
@@ -476,6 +475,14 @@ location ~ ^/(\.user.ini|\.htaccess|\.git|\.svn|\.env) {
 	if err = vhost.SetConfig("001-acme.conf", "site", ""); err != nil {
 		return nil, err
 	}
+
+	// 访问统计（nginx 默认启用）
+	if webServer == "nginx" {
+		if err = r.enableStat(vhost, req.Name); err != nil {
+			return nil, err
+		}
+	}
+
 	if err = vhost.Save(); err != nil {
 		return nil, err
 	}
@@ -613,7 +620,7 @@ func (r *websiteRepo) Update(ctx context.Context, req *request.WebsiteUpdate) er
 		}
 		// 检查证书是否已存在于面板的证书管理中，如果不存在则作为本地证书上传
 		var certCount int64
-		r.db.Model(&biz.Cert{}).Where("cert = ?", strings.TrimSpace(req.SSLCert)).Count(&certCount)
+		r.db.Model(&biz.Cert{}).Where("TRIM(cert, char(9) || char(10) || char(13) || ' ') = ?", strings.TrimSpace(req.SSLCert)).Count(&certCount)
 		if certCount == 0 {
 			certInfo, _ := cert.ParseCert([]byte(req.SSLCert))
 			sans := certInfo.DNSNames
@@ -623,8 +630,8 @@ func (r *websiteRepo) Update(ctx context.Context, req *request.WebsiteUpdate) er
 			r.db.Create(&biz.Cert{
 				Type:    "upload",
 				Domains: sans,
-				Cert:    req.SSLCert,
-				Key:     req.SSLKey,
+				Cert:    strings.TrimSpace(req.SSLCert),
+				Key:     strings.TrimSpace(req.SSLKey),
 			})
 		}
 		quic := false
@@ -635,12 +642,10 @@ func (r *websiteRepo) Update(ctx context.Context, req *request.WebsiteUpdate) er
 			}
 		}
 		defaultTLSVersions, _ := r.setting.GetSlice(biz.SettingKeyWebsiteTLSVersions)
-		defaultCipherSuites, _ := r.setting.Get(biz.SettingKeyWebsiteCipherSuites)
 		if err = vhost.SetSSLConfig(&webservertypes.SSLConfig{
 			Cert:         certPath,
 			Key:          keyPath,
 			Protocols:    lo.If(len(req.SSLProtocols) > 0, req.SSLProtocols).Else(defaultTLSVersions),
-			Ciphers:      lo.If(req.SSLCiphers != "", req.SSLCiphers).Else(defaultCipherSuites),
 			HSTS:         req.HSTS,
 			OCSP:         req.OCSP,
 			HTTPRedirect: req.HTTPRedirect,
@@ -660,7 +665,7 @@ func (r *websiteRepo) Update(ctx context.Context, req *request.WebsiteUpdate) er
 			return err
 		}
 		// 伪静态
-		if err = phpVhost.SetConfig("010-rewrite.conf", "site", req.Rewrite); err != nil {
+		if err = phpVhost.SetConfig("010-rewrite.conf", "site", req.Rewrite, true); err != nil {
 			return err
 		}
 		// 防跨站
@@ -749,6 +754,19 @@ func (r *websiteRepo) Update(ctx context.Context, req *request.WebsiteUpdate) er
 		_ = io.Remove(htpasswdPath)
 		if err = vhost.ClearBasicAuth(); err != nil {
 			return err
+		}
+	}
+
+	// 访问统计
+	webServer, _ := r.setting.Get(biz.SettingKeyWebserver)
+	if webServer == "nginx" {
+		if req.StatEnabled {
+			if err = r.enableStat(vhost, website.Name); err != nil {
+				return err
+			}
+		} else {
+			_ = vhost.RemoveConfig("010-stat-format.conf", "shared")
+			_ = vhost.RemoveConfig("021-stats-log.conf", "site")
 		}
 	}
 
@@ -964,13 +982,18 @@ func (r *websiteRepo) UpdateCert(req *request.WebsiteUpdateCert) error {
 	return nil
 }
 
-func (r *websiteRepo) ObtainCert(ctx context.Context, id uint) error {
+func (r *websiteRepo) ObtainCert(ctx context.Context, id uint, dnsID uint) error {
 	website, err := r.Get(id)
 	if err != nil {
 		return err
 	}
-	if slices.Contains(website.Domains, "*") {
-		return errors.New(r.t.Get("not support one-key obtain wildcard certificate, please use Cert menu to obtain it with DNS method"))
+
+	// 泛域名必须使用 DNS 验证
+	hasWildcard := slices.ContainsFunc(website.Domains, func(d string) bool {
+		return strings.Contains(d, "*")
+	})
+	if hasWildcard && dnsID == 0 {
+		return errors.New(r.t.Get("wildcard domains require DNS verification, please select a DNS provider"))
 	}
 
 	account, err := r.certAccount.GetDefault(cast.ToUint(ctx.Value("user_id")))
@@ -986,6 +1009,7 @@ func (r *websiteRepo) ObtainCert(ctx context.Context, id uint) error {
 				Domains:     website.Domains,
 				AutoRenewal: true,
 				AccountID:   account.ID,
+				DNSID:       dnsID,
 				WebsiteID:   website.ID,
 			})
 			if err != nil {
@@ -996,6 +1020,7 @@ func (r *websiteRepo) ObtainCert(ctx context.Context, id uint) error {
 		}
 	}
 	newCert.Domains = website.Domains
+	newCert.DNSID = dnsID
 	if err = r.db.Save(newCert).Error; err != nil {
 		return err
 	}
@@ -1005,7 +1030,7 @@ func (r *websiteRepo) ObtainCert(ctx context.Context, id uint) error {
 		return err
 	}
 
-	return r.cert.Deploy(newCert.ID, website.ID)
+	return r.cert.Deploy(newCert.ID, website.ID, false)
 }
 
 // customConfigStartNum 自定义配置起始序号
@@ -1255,4 +1280,35 @@ func (r *websiteRepo) writeBasicAuthUsers(htpasswdPath string, users map[string]
 		content += "\n"
 	}
 	return io.Write(htpasswdPath, content, 0644) // 必须 0644，Nginx 在运行中以 www 用户读取
+}
+
+// enableStat 写入 nginx 访问统计配置（log_format + syslog access_log）
+func (r *websiteRepo) enableStat(vhost webservertypes.Vhost, name string) error {
+	// nginx syslog tag 和 log_format 名只允许字母数字和下划线
+	safeName := strings.ReplaceAll(name, "-", "_")
+	formatConf := fmt.Sprintf(`log_format ace_stat_%s escape=json
+  '{"site":"%s",'
+  '"uri":"$request_uri",'
+  '"status":$status,'
+  '"bytes":$body_bytes_sent,'
+  '"ua":"$http_user_agent",'
+  '"ip":"$remote_addr",'
+  '"host":"$host",'
+  '"method":"$request_method",'
+  '"referer":"$http_referer",'
+  '"xff":"$http_x_forwarded_for",'
+  '"rt":$request_time,'
+  '"proto":"$server_protocol",'
+  '"port":"$remote_port",'
+  '"body":"$request_body",'
+  '"content_type":"$sent_http_content_type",'
+  '"req_length":$request_length,'
+  '"https":"$https",'
+  '"upstream_time":"$upstream_response_time",'
+  '"upstream_status":"$upstream_status"}';`, safeName, name)
+	if err := vhost.SetConfig("010-stat-format.conf", "shared", formatConf); err != nil {
+		return err
+	}
+	logConf := fmt.Sprintf("client_body_in_single_buffer on;\naccess_log syslog:server=unix:/tmp/ace_stats.sock,nohostname,tag=%s ace_stat_%s;", safeName, safeName)
+	return vhost.SetConfig("021-stats-log.conf", "site", logConf)
 }

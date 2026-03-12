@@ -12,13 +12,13 @@ import (
 	"github.com/spf13/cast"
 	"resty.dev/v3"
 
-	"github.com/acepanel/panel/internal/app"
-	"github.com/acepanel/panel/internal/biz"
-	"github.com/acepanel/panel/internal/http/request"
-	"github.com/acepanel/panel/pkg/config"
-	"github.com/acepanel/panel/pkg/io"
-	"github.com/acepanel/panel/pkg/shell"
-	"github.com/acepanel/panel/pkg/types"
+	"github.com/acepanel/panel/v3/internal/app"
+	"github.com/acepanel/panel/v3/internal/biz"
+	"github.com/acepanel/panel/v3/internal/http/request"
+	"github.com/acepanel/panel/v3/pkg/config"
+	"github.com/acepanel/panel/v3/pkg/io"
+	"github.com/acepanel/panel/v3/pkg/shell"
+	"github.com/acepanel/panel/v3/pkg/types"
 )
 
 type EnvironmentPHPService struct {
@@ -48,7 +48,8 @@ func (s *EnvironmentPHPService) SetCli(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if _, err := shell.Execf("ln -sf %s/server/php/%d/bin/php /usr/local/bin/php", app.Root, req.Version); err != nil {
+	binPath := fmt.Sprintf("%s/server/php/%d/bin", app.Root, req.Version)
+	if err = io.LinkCLIBinaries(binPath, []string{"php"}); err != nil {
 		Error(w, http.StatusInternalServerError, "%v", err)
 		return
 	}
@@ -309,8 +310,8 @@ func (s *EnvironmentPHPService) ModuleList(w http.ResponseWriter, r *http.Reques
 		moduleMap[modules[i].Slug] = &modules[i]
 	}
 
-	rawModuleList := strings.Split(raw, "\n")
-	for _, item := range rawModuleList {
+	rawModuleList := strings.SplitSeq(raw, "\n")
+	for item := range rawModuleList {
 		if ext, exists := moduleMap[item]; exists && !strings.Contains(item, "[") && item != "" {
 			ext.Installed = true
 		}
@@ -335,17 +336,16 @@ func (s *EnvironmentPHPService) InstallModule(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	cmd := fmt.Sprintf(`curl -sSLm 10 --retry 3 'https://%s/php_exts/%s.sh' | bash -s -- 'install' '%d' >> '/tmp/%s.log' 2>&1`, s.conf.App.DownloadEndpoint, url.PathEscape(req.Slug), req.Version, req.Slug)
+	cmd := fmt.Sprintf(`curl -sSLm 10 --retry 3 'https://%s/php_exts/%s.sh' | bash -s -- 'install' '%d'`, s.conf.App.DownloadEndpoint, url.PathEscape(req.Slug), req.Version)
 	officials := []string{"fileinfo", "exif", "imap", "pgsql", "pdo_pgsql", "zip", "bz2", "readline", "snmp", "ldap", "enchant", "pspell", "calendar", "gmp", "sysvmsg", "sysvsem", "sysvshm", "xsl", "intl", "gettext"}
 	if slices.Contains(officials, req.Slug) {
-		cmd = fmt.Sprintf(`curl -sSLm 10 --retry 3 'https://%s/php_exts/official.sh' | bash -s -- 'install' '%d' '%s' >> '/tmp/%s.log' 2>&1`, s.conf.App.DownloadEndpoint, req.Version, req.Slug, req.Slug)
+		cmd = fmt.Sprintf(`curl -sSLm 10 --retry 3 'https://%s/php_exts/official.sh' | bash -s -- 'install' '%d' '%s'`, s.conf.App.DownloadEndpoint, req.Version, req.Slug)
 	}
 
 	task := new(biz.Task)
 	task.Name = s.t.Get("Install PHP-%d %s module", req.Version, req.Slug)
 	task.Status = biz.TaskStatusWaiting
 	task.Shell = cmd
-	task.Log = "/tmp/" + req.Slug + ".log"
 	if err = s.taskRepo.Push(task); err != nil {
 		Error(w, http.StatusInternalServerError, "%v", err)
 		return
@@ -370,17 +370,16 @@ func (s *EnvironmentPHPService) UninstallModule(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	cmd := fmt.Sprintf(`curl -sSLm 10 --retry 3 'https://%s/php_exts/%s.sh' | bash -s -- 'uninstall' '%d' >> '/tmp/%s.log' 2>&1`, s.conf.App.DownloadEndpoint, url.PathEscape(req.Slug), req.Version, req.Slug)
+	cmd := fmt.Sprintf(`curl -sSLm 10 --retry 3 'https://%s/php_exts/%s.sh' | bash -s -- 'uninstall' '%d'`, s.conf.App.DownloadEndpoint, url.PathEscape(req.Slug), req.Version)
 	officials := []string{"fileinfo", "exif", "imap", "pgsql", "pdo_pgsql", "zip", "bz2", "readline", "snmp", "ldap", "enchant", "pspell", "calendar", "gmp", "sysvmsg", "sysvsem", "sysvshm", "xsl", "intl", "gettext"}
 	if slices.Contains(officials, req.Slug) {
-		cmd = fmt.Sprintf(`curl -sSLm 10 --retry 3 'https://%s/php_exts/official.sh' | bash -s -- 'uninstall' '%d' '%s' >> '/tmp/%s.log' 2>&1`, s.conf.App.DownloadEndpoint, req.Version, req.Slug, req.Slug)
+		cmd = fmt.Sprintf(`curl -sSLm 10 --retry 3 'https://%s/php_exts/official.sh' | bash -s -- 'uninstall' '%d' '%s'`, s.conf.App.DownloadEndpoint, req.Version, req.Slug)
 	}
 
 	task := new(biz.Task)
 	task.Name = s.t.Get("Uninstall PHP-%d %s module", req.Version, req.Slug)
 	task.Status = biz.TaskStatusWaiting
 	task.Shell = cmd
-	task.Log = "/tmp/" + req.Slug + ".log"
 	if err = s.taskRepo.Push(task); err != nil {
 		Error(w, http.StatusInternalServerError, "%v", err)
 		return
@@ -615,8 +614,8 @@ func (s *EnvironmentPHPService) getModules(version uint) []types.EnvironmentPHPM
 		moduleMap[modules[i].Slug] = &modules[i]
 	}
 
-	rawModuleList := strings.Split(raw, "\n")
-	for _, item := range rawModuleList {
+	rawModuleList := strings.SplitSeq(raw, "\n")
+	for item := range rawModuleList {
 		if ext, exists := moduleMap[item]; exists && !strings.Contains(item, "[") && item != "" {
 			ext.Installed = true
 		}
@@ -799,8 +798,8 @@ func (s *EnvironmentPHPService) CleanSession(w http.ResponseWriter, r *http.Requ
 
 // getINIValue 从 INI 格式内容中获取指定键的值
 func (s *EnvironmentPHPService) getINIValue(content string, key string) string {
-	lines := strings.Split(content, "\n")
-	for _, line := range lines {
+	lines := strings.SplitSeq(content, "\n")
+	for line := range lines {
 		trimmed := strings.TrimSpace(line)
 		// 跳过注释行和空行
 		if trimmed == "" || strings.HasPrefix(trimmed, ";") || strings.HasPrefix(trimmed, "#") {

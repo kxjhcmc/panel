@@ -6,18 +6,20 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"strings"
 
 	"github.com/leonelquinteros/gotext"
 	"github.com/libtnb/utils/str"
 	"gorm.io/gorm"
 
-	"github.com/acepanel/panel/internal/app"
-	"github.com/acepanel/panel/internal/biz"
-	"github.com/acepanel/panel/internal/http/request"
-	"github.com/acepanel/panel/pkg/io"
-	"github.com/acepanel/panel/pkg/os"
-	"github.com/acepanel/panel/pkg/shell"
-	"github.com/acepanel/panel/pkg/systemctl"
+	"github.com/acepanel/panel/v3/internal/app"
+	"github.com/acepanel/panel/v3/internal/biz"
+	"github.com/acepanel/panel/v3/internal/http/request"
+	"github.com/acepanel/panel/v3/pkg/io"
+	"github.com/acepanel/panel/v3/pkg/os"
+	"github.com/acepanel/panel/v3/pkg/shell"
+	"github.com/acepanel/panel/v3/pkg/systemctl"
+	"github.com/acepanel/panel/v3/pkg/types"
 )
 
 type cronRepo struct {
@@ -60,36 +62,21 @@ func (r *cronRepo) Get(id uint) (*biz.Cron, error) {
 }
 
 func (r *cronRepo) Create(ctx context.Context, req *request.CronCreate) error {
-	var script string
-	if req.Type == "backup" {
-		if req.BackupType == "website" {
-			script = fmt.Sprintf(`#!/bin/bash
-export PATH=/bin:/sbin:/usr/bin:/usr/sbin:/usr/local/bin:/usr/local/sbin:$PATH
-
-acepanel backup website -n '%s' -s '%d'
-acepanel backup clear -t website -f '%s' -k '%d' -s '%d'
-`, req.Target, req.BackupStorage, req.Target, req.Keep, req.BackupStorage)
-		}
-		if req.BackupType == "mysql" || req.BackupType == "postgres" {
-			script = fmt.Sprintf(`#!/bin/bash
-export PATH=/bin:/sbin:/usr/bin:/usr/sbin:/usr/local/bin:/usr/local/sbin:$PATH
-
-acepanel backup database -t '%s' -n '%s' -s '%d'
-acepanel backup clear -t '%s' -f '%s' -k '%d' -s '%d'
-`, req.BackupType, req.Target, req.BackupStorage, req.BackupType, req.Target, req.Keep, req.BackupStorage)
-		}
+	config := types.CronConfig{
+		Type:     req.SubType,
+		Flock:    req.Flock,
+		Targets:  req.Targets,
+		Storage:  req.Storage,
+		Keep:     req.Keep,
+		URL:      req.URL,
+		Method:   req.Method,
+		Headers:  req.Headers,
+		Body:     req.Body,
+		Timeout:  req.Timeout,
+		Insecure: req.Insecure,
+		Retries:  req.Retries,
 	}
-	if req.Type == "cutoff" {
-		script = fmt.Sprintf(`#!/bin/bash
-export PATH=/bin:/sbin:/usr/bin:/usr/sbin:/usr/local/bin:/usr/local/sbin:$PATH
-
-acepanel cutoff website -n '%s'
-acepanel cutoff clear -t website -n '%s' -k '%d'
-`, req.Target, req.Target, req.Keep)
-	}
-	if req.Type == "shell" {
-		script = req.Script
-	}
+	script := r.generateScript(req.Type, config, req.Script)
 
 	shellDir := fmt.Sprintf("%s/server/cron/", app.Root)
 	shellLogDir := fmt.Sprintf("%s/server/cron/logs/", app.Root)
@@ -107,6 +94,7 @@ acepanel cutoff clear -t website -n '%s' -k '%d'
 	cron.Time = req.Time
 	cron.Shell = shellDir + shellFile + ".sh"
 	cron.Log = shellLogDir + shellFile + ".log"
+	cron.Config = config
 
 	if err := r.db.Create(cron).Error; err != nil {
 		return err
@@ -129,13 +117,39 @@ func (r *cronRepo) Update(ctx context.Context, req *request.CronUpdate) error {
 
 	cron.Time = req.Time
 	cron.Name = req.Name
+
+	// 根据类型重新生成脚本
+	if req.Type != "shell" {
+		config := types.CronConfig{
+			Type:     req.SubType,
+			Flock:    req.Flock,
+			Targets:  req.Targets,
+			Storage:  req.Storage,
+			Keep:     req.Keep,
+			URL:      req.URL,
+			Method:   req.Method,
+			Headers:  req.Headers,
+			Body:     req.Body,
+			Timeout:  req.Timeout,
+			Insecure: req.Insecure,
+			Retries:  req.Retries,
+		}
+		cron.Config = config
+		script := r.generateScript(req.Type, config, "")
+		if err = io.Write(cron.Shell, script, 0700); err != nil {
+			return err
+		}
+	} else {
+		cron.Config.Flock = req.Flock
+		if err = io.Write(cron.Shell, req.Script, 0700); err != nil {
+			return err
+		}
+	}
+
 	if err = r.db.Save(cron).Error; err != nil {
 		return err
 	}
 
-	if err = io.Write(cron.Shell, req.Script, 0700); err != nil {
-		return err
-	}
 	if out, err := shell.Execf("dos2unix %s", cron.Shell); err != nil {
 		return errors.New(out)
 	}
@@ -167,6 +181,9 @@ func (r *cronRepo) Delete(ctx context.Context, id uint) error {
 	if err = io.Remove(cron.Shell); err != nil {
 		return err
 	}
+	// 清理 .lock 文件
+	lockFile := strings.TrimSuffix(cron.Shell, ".sh") + ".lock"
+	_ = io.Remove(lockFile)
 
 	if err = r.db.Delete(cron).Error; err != nil {
 		return err
@@ -200,7 +217,12 @@ func (r *cronRepo) Status(id uint, status bool) error {
 
 // addToSystem 添加到系统
 func (r *cronRepo) addToSystem(cron *biz.Cron) error {
-	if _, err := shell.Execf(`( crontab -l; echo "%s %s >> %s 2>&1" ) | sort - | uniq - | crontab -`, cron.Time, cron.Shell, cron.Log); err != nil {
+	cmd := cron.Shell
+	if cron.Config.Flock {
+		lockFile := strings.TrimSuffix(cron.Shell, ".sh") + ".lock"
+		cmd = fmt.Sprintf("flock -xn %s %s", lockFile, cron.Shell)
+	}
+	if _, err := shell.Execf(`( crontab -l; echo "%s %s >> %s 2>&1" ) | sort - | uniq - | crontab -`, cron.Time, cmd, cron.Log); err != nil {
 		return err
 	}
 
@@ -209,7 +231,7 @@ func (r *cronRepo) addToSystem(cron *biz.Cron) error {
 
 // deleteFromSystem 从系统中删除
 func (r *cronRepo) deleteFromSystem(cron *biz.Cron) error {
-	if _, err := shell.Execf(`( crontab -l | grep -v -F "%s %s >> %s 2>&1" ) | crontab -`, cron.Time, cron.Shell, cron.Log); err != nil {
+	if _, err := shell.Execf(`( crontab -l | grep -v -F "%s >> %s 2>&1" ) | crontab -`, cron.Shell, cron.Log); err != nil {
 		return err
 	}
 
@@ -227,4 +249,77 @@ func (r *cronRepo) restartCron() error {
 	}
 
 	return errors.New(r.t.Get("unsupported system"))
+}
+
+// generateScript 根据任务类型和配置生成 shell 脚本
+func (r *cronRepo) generateScript(typ string, config types.CronConfig, rawScript string) string {
+	if typ == "shell" {
+		return rawScript
+	}
+
+	var sb strings.Builder
+	sb.WriteString("#!/bin/bash\nexport PATH=/bin:/sbin:/usr/bin:/usr/sbin:/usr/local/bin:/usr/local/sbin:$PATH\n\n")
+
+	switch typ {
+	case "backup":
+		for _, target := range config.Targets {
+			switch config.Type {
+			case "website":
+				_, _ = fmt.Fprintf(&sb, "acepanel backup website -n '%s' -s '%d'\n", target, config.Storage)
+			case "mysql", "postgresql":
+				_, _ = fmt.Fprintf(&sb, "acepanel backup database -t '%s' -n '%s' -s '%d'\n", config.Type, target, config.Storage)
+			}
+		}
+		for _, target := range config.Targets {
+			switch config.Type {
+			case "website":
+				_, _ = fmt.Fprintf(&sb, "acepanel backup clear -t website -f '%s' -k '%d' -s '%d'\n", target, config.Keep, config.Storage)
+			case "mysql", "postgresql":
+				_, _ = fmt.Fprintf(&sb, "acepanel backup clear -t '%s' -f '%s' -k '%d' -s '%d'\n", config.Type, target, config.Keep, config.Storage)
+			}
+		}
+	case "cutoff":
+		for _, target := range config.Targets {
+			switch config.Type {
+			case "website":
+				_, _ = fmt.Fprintf(&sb, "acepanel cutoff website -n '%s' -s '%d'\n", target, config.Storage)
+			case "container":
+				_, _ = fmt.Fprintf(&sb, "acepanel cutoff container -n '%s' -s '%d'\n", target, config.Storage)
+			}
+		}
+		for _, target := range config.Targets {
+			switch config.Type {
+			case "website":
+				_, _ = fmt.Fprintf(&sb, "acepanel cutoff clear -t website -n '%s' -k '%d' -s '%d'\n", target, config.Keep, config.Storage)
+			case "container":
+				_, _ = fmt.Fprintf(&sb, "acepanel cutoff clear -t container -n '%s' -k '%d' -s '%d'\n", target, config.Keep, config.Storage)
+			}
+		}
+	case "url":
+		method := config.Method
+		if method == "" {
+			method = "GET"
+		}
+		_, _ = fmt.Fprintf(&sb, "curl -sSL -X %s", method)
+		if config.Timeout > 0 {
+			_, _ = fmt.Fprintf(&sb, " --connect-timeout %d", config.Timeout)
+		}
+		if config.Insecure {
+			sb.WriteString(" -k")
+		}
+		if config.Retries > 0 {
+			_, _ = fmt.Fprintf(&sb, " --retry %d", config.Retries)
+		}
+		for key, value := range config.Headers {
+			_, _ = fmt.Fprintf(&sb, " -H '%s: %s'", strings.ReplaceAll(key, "'", "'\"'\"'"), strings.ReplaceAll(value, "'", "'\"'\"'"))
+		}
+		if config.Body != "" {
+			_, _ = fmt.Fprintf(&sb, " -d '%s'", strings.ReplaceAll(config.Body, "'", "'\"'\"'"))
+		}
+		_, _ = fmt.Fprintf(&sb, " '%s'\n", strings.ReplaceAll(config.URL, "'", "'\"'\"'"))
+	case "synctime":
+		sb.WriteString("acepanel sync-time\n")
+	}
+
+	return sb.String()
 }

@@ -9,7 +9,7 @@ import (
 	"github.com/gookit/validate"
 	"github.com/libtnb/chix"
 
-	"github.com/acepanel/panel/internal/http/request"
+	"github.com/acepanel/panel/v3/internal/http/request"
 )
 
 // SuccessResponse 通用成功响应

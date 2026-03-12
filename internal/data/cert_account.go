@@ -10,10 +10,10 @@ import (
 	"gorm.io/gorm"
 	"resty.dev/v3"
 
-	"github.com/acepanel/panel/internal/biz"
-	"github.com/acepanel/panel/internal/http/request"
-	"github.com/acepanel/panel/pkg/acme"
-	"github.com/acepanel/panel/pkg/cert"
+	"github.com/acepanel/panel/v3/internal/biz"
+	"github.com/acepanel/panel/v3/internal/http/request"
+	"github.com/acepanel/panel/v3/pkg/acme"
+	"github.com/acepanel/panel/v3/pkg/cert"
 )
 
 type certAccountRepo struct {

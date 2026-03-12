@@ -30,6 +30,15 @@ export const useUserStore = defineStore('user', {
       resetRouter()
       this.$reset()
       toLogin()
+    },
+    refresh() {
+      const { resetTabs } = useTabStore()
+      const { resetPermission } = usePermissionStore()
+      resetPermission()
+      resetTabs()
+      resetRouter()
+      this.$reset()
+      window.location.reload()
     }
   },
   persist: true

@@ -9,7 +9,7 @@ import (
 
 	"github.com/leonelquinteros/gotext"
 
-	"github.com/acepanel/panel/internal/biz"
+	"github.com/acepanel/panel/v3/internal/biz"
 )
 
 type FileService struct {

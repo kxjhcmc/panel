@@ -11,9 +11,9 @@ import (
 	"github.com/libtnb/chix"
 	"github.com/libtnb/sessions"
 
-	"github.com/acepanel/panel/pkg/config"
-	"github.com/acepanel/panel/pkg/embed"
-	"github.com/acepanel/panel/pkg/punycode"
+	"github.com/acepanel/panel/v3/pkg/config"
+	"github.com/acepanel/panel/v3/pkg/embed"
+	"github.com/acepanel/panel/v3/pkg/punycode"
 )
 
 // Entrance 确保通过正确的入口访问

@@ -12,8 +12,8 @@ import (
 
 	"github.com/spf13/cast"
 
-	"github.com/acepanel/panel/pkg/shell"
-	"github.com/acepanel/panel/pkg/systemctl"
+	"github.com/acepanel/panel/v3/pkg/shell"
+	"github.com/acepanel/panel/v3/pkg/systemctl"
 )
 
 type firewalld struct {
@@ -58,8 +58,8 @@ func (r *firewalld) ListRule() ([]FireInfo, error) {
 		if err != nil {
 			return
 		}
-		ports := strings.Split(out, " ")
-		for _, port := range ports {
+		ports := strings.SplitSeq(out, " ")
+		for port := range ports {
 			if len(port) == 0 {
 				continue
 			}
@@ -133,7 +133,7 @@ func (r *firewalld) ListForward() ([]FireForwardInfo, error) {
 	}
 
 	var data []FireForwardInfo
-	for _, line := range strings.Split(out, "\n") {
+	for line := range strings.SplitSeq(out, "\n") {
 		line = strings.TrimFunc(line, func(r rune) bool {
 			return r <= 32
 		})
@@ -180,8 +180,8 @@ func (r *firewalld) listRichRule() ([]FireInfo, error) {
 	}
 
 	var data []FireInfo
-	rules := strings.Split(out, "\n")
-	for _, rule := range rules {
+	rules := strings.SplitSeq(out, "\n")
+	for rule := range rules {
 		if len(rule) == 0 {
 			continue
 		}

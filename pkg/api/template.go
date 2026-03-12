@@ -2,6 +2,7 @@ package api
 
 import (
 	"fmt"
+	"slices"
 	"time"
 )
 
@@ -23,6 +24,7 @@ type Template struct {
 		Options     map[string]string `json:"options,omitempty"` // 下拉框选项，key -> value
 		Default     any               `json:"default,omitempty"` // 默认值，string or number
 	} `json:"environments"`
+	Local bool `json:"local"` // 是否为本地模板
 }
 
 type Templates []*Template
@@ -31,11 +33,8 @@ type Templates []*Template
 func (t Templates) FilterByCategory(category string) Templates {
 	filtered := make(Templates, 0)
 	for _, tpl := range t {
-		for _, cat := range tpl.Categories {
-			if cat == category {
-				filtered = append(filtered, tpl)
-				break
-			}
+		if slices.Contains(tpl.Categories, category) {
+			filtered = append(filtered, tpl)
 		}
 	}
 	return filtered

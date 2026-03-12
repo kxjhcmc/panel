@@ -8,7 +8,7 @@ import (
 	"github.com/shirou/gopsutil/v4/process"
 	"github.com/spf13/cast"
 
-	"github.com/acepanel/panel/pkg/shell"
+	"github.com/acepanel/panel/v3/pkg/shell"
 )
 
 // ServiceInfo 服务详细信息
@@ -28,7 +28,7 @@ func GetServiceInfo(name string) (*ServiceInfo, error) {
 	}
 
 	info := &ServiceInfo{}
-	for _, line := range strings.Split(output, "\n") {
+	for line := range strings.SplitSeq(output, "\n") {
 		parts := strings.SplitN(line, "=", 2)
 		if len(parts) != 2 {
 			continue

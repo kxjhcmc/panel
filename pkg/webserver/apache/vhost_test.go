@@ -8,7 +8,7 @@ import (
 
 	"github.com/stretchr/testify/suite"
 
-	"github.com/acepanel/panel/pkg/webserver/types"
+	"github.com/acepanel/panel/v3/pkg/webserver/types"
 )
 
 type VhostTestSuite struct {

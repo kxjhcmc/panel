@@ -6,9 +6,9 @@ import (
 
 	mholtacme "github.com/mholt/acmez/v3/acme"
 
-	"github.com/acepanel/panel/internal/http/request"
-	"github.com/acepanel/panel/pkg/acme"
-	"github.com/acepanel/panel/pkg/types"
+	"github.com/acepanel/panel/v3/internal/http/request"
+	"github.com/acepanel/panel/v3/pkg/acme"
+	"github.com/acepanel/panel/v3/pkg/types"
 )
 
 type Cert struct {
@@ -45,5 +45,5 @@ type CertRepo interface {
 	ObtainSelfSigned(id uint) error
 	Renew(id uint) (*acme.Certificate, error)
 	RefreshRenewalInfo(id uint) (mholtacme.RenewalInfo, error)
-	Deploy(ID, WebsiteID uint) error
+	Deploy(ID, WebsiteID uint, enableHTTPS bool) error
 }

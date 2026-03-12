@@ -4,7 +4,7 @@ import (
 	"github.com/leonelquinteros/gotext"
 	"github.com/urfave/cli/v3"
 
-	"github.com/acepanel/panel/internal/service"
+	"github.com/acepanel/panel/v3/internal/service"
 )
 
 type Cli struct {
@@ -84,6 +84,11 @@ func (route *Cli) Commands() []*cli.Command {
 					Name:   "2fa",
 					Usage:  route.t.Get("Toggle two-factor authentication for a user"),
 					Action: route.cli.UserTwoFA,
+				},
+				{
+					Name:   "passkey",
+					Usage:  route.t.Get("Clear all passkeys for a user"),
+					Action: route.cli.UserPasskey,
 				},
 			},
 		},
@@ -390,10 +395,28 @@ func (route *Cli) Commands() []*cli.Command {
 							Usage:    route.t.Get("Website name"),
 							Required: true,
 						},
+						&cli.UintFlag{
+							Name:    "storage",
+							Aliases: []string{"s"},
+							Usage:   route.t.Get("Storage ID (local storage if not filled)"),
+						},
+					},
+				},
+				{
+					Name:   "container",
+					Usage:  route.t.Get("Container"),
+					Action: route.cli.CutoffContainer,
+					Flags: []cli.Flag{
 						&cli.StringFlag{
-							Name:    "path",
-							Aliases: []string{"p"},
-							Usage:   route.t.Get("Save directory (default path if not filled)"),
+							Name:     "name",
+							Aliases:  []string{"n"},
+							Usage:    route.t.Get("Container name"),
+							Required: true,
+						},
+						&cli.UintFlag{
+							Name:    "storage",
+							Aliases: []string{"s"},
+							Usage:   route.t.Get("Storage ID (local storage if not filled)"),
 						},
 					},
 				},
@@ -411,7 +434,7 @@ func (route *Cli) Commands() []*cli.Command {
 						&cli.StringFlag{
 							Name:     "name",
 							Aliases:  []string{"n"},
-							Usage:    route.t.Get("Website name"),
+							Usage:    route.t.Get("Target name"),
 							Required: true,
 						},
 						&cli.UintFlag{
@@ -420,10 +443,10 @@ func (route *Cli) Commands() []*cli.Command {
 							Usage:    route.t.Get("Number of logs to keep"),
 							Required: true,
 						},
-						&cli.StringFlag{
-							Name:    "path",
-							Aliases: []string{"p"},
-							Usage:   route.t.Get("Rotation directory (default path if not filled)"),
+						&cli.UintFlag{
+							Name:    "storage",
+							Aliases: []string{"s"},
+							Usage:   route.t.Get("Storage ID (local storage if not filled)"),
 						},
 					},
 				},

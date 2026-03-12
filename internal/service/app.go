@@ -7,9 +7,9 @@ import (
 	"github.com/leonelquinteros/gotext"
 	"github.com/libtnb/chix"
 
-	"github.com/acepanel/panel/internal/biz"
-	"github.com/acepanel/panel/internal/http/request"
-	"github.com/acepanel/panel/pkg/types"
+	"github.com/acepanel/panel/v3/internal/biz"
+	"github.com/acepanel/panel/v3/internal/http/request"
+	"github.com/acepanel/panel/v3/pkg/types"
 )
 
 type AppService struct {
@@ -185,8 +185,8 @@ func (s *AppService) IsInstalled(w http.ResponseWriter, r *http.Request) {
 	}
 
 	flag := false
-	slugs := strings.Split(req.Slugs, ",")
-	for _, item := range slugs {
+	slugs := strings.SplitSeq(req.Slugs, ",")
+	for item := range slugs {
 		installed, err := s.appRepo.IsInstalled(item)
 		if err != nil {
 			Error(w, http.StatusInternalServerError, "%v", err)

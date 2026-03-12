@@ -14,9 +14,9 @@ import (
 	"github.com/libtnb/sessions"
 	sessionmiddleware "github.com/libtnb/sessions/middleware"
 
-	"github.com/acepanel/panel/internal/app"
-	"github.com/acepanel/panel/internal/biz"
-	"github.com/acepanel/panel/pkg/config"
+	"github.com/acepanel/panel/v3/internal/app"
+	"github.com/acepanel/panel/v3/internal/biz"
+	"github.com/acepanel/panel/v3/pkg/config"
 )
 
 var ProviderSet = wire.NewSet(NewMiddlewares)

@@ -10,12 +10,12 @@ import (
 
 	"github.com/leonelquinteros/gotext"
 
-	"github.com/acepanel/panel/internal/app"
-	"github.com/acepanel/panel/internal/biz"
-	"github.com/acepanel/panel/pkg/api"
-	"github.com/acepanel/panel/pkg/config"
-	"github.com/acepanel/panel/pkg/shell"
-	"github.com/acepanel/panel/pkg/types"
+	"github.com/acepanel/panel/v3/internal/app"
+	"github.com/acepanel/panel/v3/internal/biz"
+	"github.com/acepanel/panel/v3/pkg/api"
+	"github.com/acepanel/panel/v3/pkg/config"
+	"github.com/acepanel/panel/v3/pkg/shell"
+	"github.com/acepanel/panel/v3/pkg/types"
 )
 
 type environmentRepo struct {
@@ -210,8 +210,7 @@ func (r *environmentRepo) do(typ, slug, action string) error {
 	task := new(biz.Task)
 	task.Name = name
 	task.Status = biz.TaskStatusWaiting
-	task.Shell = fmt.Sprintf(`curl -sSLm 10 --retry 3 "%s" | bash -s -- "%s" "%s" >> /tmp/%s-%s.log 2>&1`, shellUrl, env.Slug, env.Version, env.Type, env.Slug)
-	task.Log = fmt.Sprintf("/tmp/%s-%s.log", env.Type, env.Slug)
+	task.Shell = fmt.Sprintf(`curl -sSLm 10 --retry 3 "%s" | bash -s -- "%s" "%s"`, shellUrl, env.Slug, env.Version)
 
 	return r.task.Push(task)
 }

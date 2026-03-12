@@ -11,12 +11,12 @@ import (
 	"github.com/libtnb/chix"
 	"github.com/spf13/cast"
 
-	"github.com/acepanel/panel/internal/app"
-	"github.com/acepanel/panel/internal/service"
-	"github.com/acepanel/panel/pkg/firewall"
-	"github.com/acepanel/panel/pkg/io"
-	"github.com/acepanel/panel/pkg/shell"
-	"github.com/acepanel/panel/pkg/systemctl"
+	"github.com/acepanel/panel/v3/internal/app"
+	"github.com/acepanel/panel/v3/internal/service"
+	"github.com/acepanel/panel/v3/pkg/firewall"
+	"github.com/acepanel/panel/v3/pkg/io"
+	"github.com/acepanel/panel/v3/pkg/shell"
+	"github.com/acepanel/panel/v3/pkg/systemctl"
 )
 
 type App struct {
@@ -259,8 +259,8 @@ func (s *App) UpdateConfigTune(w http.ResponseWriter, r *http.Request) {
 
 // getFTPValue 从 Pure-FTPd 配置内容中获取指定键的值
 func (s *App) getFTPValue(content string, key string) string {
-	lines := strings.Split(content, "\n")
-	for _, line := range lines {
+	lines := strings.SplitSeq(content, "\n")
+	for line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
 			continue

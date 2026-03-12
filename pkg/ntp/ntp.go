@@ -8,7 +8,7 @@ import (
 
 	"github.com/beevik/ntp"
 
-	"github.com/acepanel/panel/pkg/shell"
+	"github.com/acepanel/panel/v3/pkg/shell"
 )
 
 var ErrNotReachable = errors.New("failed to reach NTP server")

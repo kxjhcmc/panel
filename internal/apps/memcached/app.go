@@ -10,10 +10,10 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/leonelquinteros/gotext"
 
-	"github.com/acepanel/panel/internal/service"
-	"github.com/acepanel/panel/pkg/io"
-	"github.com/acepanel/panel/pkg/systemctl"
-	"github.com/acepanel/panel/pkg/types"
+	"github.com/acepanel/panel/v3/internal/service"
+	"github.com/acepanel/panel/v3/pkg/io"
+	"github.com/acepanel/panel/v3/pkg/systemctl"
+	"github.com/acepanel/panel/v3/pkg/types"
 )
 
 type App struct {
@@ -170,8 +170,8 @@ func (s *App) UpdateConfigTune(w http.ResponseWriter, r *http.Request) {
 
 // getExecStartArg 从 systemd service 文件的 ExecStart 行中获取指定参数值
 func (s *App) getExecStartArg(content string, flag string) string {
-	lines := strings.Split(content, "\n")
-	for _, line := range lines {
+	lines := strings.SplitSeq(content, "\n")
+	for line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if !strings.HasPrefix(trimmed, "ExecStart=") {
 			continue

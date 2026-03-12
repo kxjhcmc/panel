@@ -9,11 +9,11 @@ import (
 	"github.com/libtnb/chix"
 	"github.com/spf13/cast"
 
-	"github.com/acepanel/panel/internal/service"
-	"github.com/acepanel/panel/pkg/io"
-	"github.com/acepanel/panel/pkg/os"
-	"github.com/acepanel/panel/pkg/shell"
-	"github.com/acepanel/panel/pkg/systemctl"
+	"github.com/acepanel/panel/v3/internal/service"
+	"github.com/acepanel/panel/v3/pkg/io"
+	"github.com/acepanel/panel/v3/pkg/os"
+	"github.com/acepanel/panel/v3/pkg/shell"
+	"github.com/acepanel/panel/v3/pkg/systemctl"
 )
 
 type App struct {
@@ -121,7 +121,7 @@ func (s *App) Processes(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var processes []Process
-	for _, line := range strings.Split(out, "\n") {
+	for line := range strings.SplitSeq(out, "\n") {
 		if len(line) == 0 {
 			continue
 		}

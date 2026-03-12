@@ -1,6 +1,6 @@
 package request
 
-import "github.com/acepanel/panel/pkg/types"
+import "github.com/acepanel/panel/v3/pkg/types"
 
 type TemplateSlug struct {
 	Slug string `uri:"slug" validate:"required"`

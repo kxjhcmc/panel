@@ -34,11 +34,13 @@ use([
 // 监控设置
 const monitorSwitch = ref(false)
 const saveDay = ref(30)
+const monitorInterval = ref(1)
 const updateLoading = ref(false)
 
 useRequest(monitor.setting()).onSuccess(({ data }) => {
   monitorSwitch.value = data.enabled
   saveDay.value = data.days
+  monitorInterval.value = data.interval
 })
 
 // 时间预设选项
@@ -688,7 +690,7 @@ const diskIOOption = computed<EChartsOption>(() => {
 // 操作函数
 const handleUpdate = async () => {
   updateLoading.value = true
-  useRequest(monitor.updateSetting(monitorSwitch.value, saveDay.value))
+  useRequest(monitor.updateSetting(monitorSwitch.value, saveDay.value, monitorInterval.value))
     .onSuccess(() => {
       window.$message.success($gettext('Operation successful'))
     })
@@ -717,6 +719,12 @@ const handleClear = async () => {
             {{ $gettext('Save Days') }}
             <n-input-number v-model:value="saveDay" :min="1" :max="365">
               <template #suffix> {{ $gettext('days') }} </template>
+            </n-input-number>
+          </div>
+          <div class="pl-20 flex gap-10 items-center">
+            {{ $gettext('Collection Interval') }}
+            <n-input-number v-model:value="monitorInterval" :min="1" :max="120">
+              <template #suffix> {{ $gettext('minutes') }} </template>
             </n-input-number>
           </div>
           <div>

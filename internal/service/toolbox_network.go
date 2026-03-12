@@ -12,7 +12,7 @@ import (
 	"github.com/shirou/gopsutil/v4/net"
 	"github.com/shirou/gopsutil/v4/process"
 
-	"github.com/acepanel/panel/internal/http/request"
+	"github.com/acepanel/panel/v3/internal/http/request"
 )
 
 type ToolboxNetworkService struct{}

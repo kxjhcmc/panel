@@ -13,16 +13,17 @@ import (
 	"github.com/andybalholm/brotli"
 	"github.com/go-chi/chi/v5"
 
-	"github.com/acepanel/panel/internal/http/middleware"
-	"github.com/acepanel/panel/internal/service"
-	"github.com/acepanel/panel/pkg/apploader"
-	"github.com/acepanel/panel/pkg/config"
-	"github.com/acepanel/panel/pkg/embed"
+	"github.com/acepanel/panel/v3/internal/http/middleware"
+	"github.com/acepanel/panel/v3/internal/service"
+	"github.com/acepanel/panel/v3/pkg/apploader"
+	"github.com/acepanel/panel/v3/pkg/config"
+	"github.com/acepanel/panel/v3/pkg/embed"
 )
 
 type Http struct {
 	conf              *config.Config
 	user              *service.UserService
+	userPasskey       *service.UserPasskeyService
 	userToken         *service.UserTokenService
 	home              *service.HomeService
 	task              *service.TaskService
@@ -30,6 +31,7 @@ type Http struct {
 	project           *service.ProjectService
 	database          *service.DatabaseService
 	databaseServer    *service.DatabaseServerService
+	databaseRedis     *service.DatabaseRedisService
 	databaseUser      *service.DatabaseUserService
 	backup            *service.BackupService
 	backupStorage     *service.BackupStorageService
@@ -48,6 +50,7 @@ type Http struct {
 	process           *service.ProcessService
 	safe              *service.SafeService
 	firewall          *service.FirewallService
+	firewallScan      *service.FirewallScanService
 	ssh               *service.SSHService
 	container         *service.ContainerService
 	containerCompose  *service.ContainerComposeService
@@ -68,12 +71,14 @@ type Http struct {
 	toolboxMigration  *service.ToolboxMigrationService
 	webhook           *service.WebHookService
 	template          *service.TemplateService
+	websiteStat       *service.WebsiteStatService
 	apps              *apploader.Loader
 }
 
 func NewHttp(
 	conf *config.Config,
 	user *service.UserService,
+	userPasskey *service.UserPasskeyService,
 	userToken *service.UserTokenService,
 	home *service.HomeService,
 	task *service.TaskService,
@@ -81,6 +86,7 @@ func NewHttp(
 	project *service.ProjectService,
 	database *service.DatabaseService,
 	databaseServer *service.DatabaseServerService,
+	databaseRedis *service.DatabaseRedisService,
 	databaseUser *service.DatabaseUserService,
 	backup *service.BackupService,
 	backupStorage *service.BackupStorageService,
@@ -99,6 +105,7 @@ func NewHttp(
 	process *service.ProcessService,
 	safe *service.SafeService,
 	firewall *service.FirewallService,
+	firewallScan *service.FirewallScanService,
 	ssh *service.SSHService,
 	container *service.ContainerService,
 	containerCompose *service.ContainerComposeService,
@@ -119,11 +126,13 @@ func NewHttp(
 	toolboxMigration *service.ToolboxMigrationService,
 	webhook *service.WebHookService,
 	template *service.TemplateService,
+	websiteStat *service.WebsiteStatService,
 	apps *apploader.Loader,
 ) *Http {
 	return &Http{
 		conf:              conf,
 		user:              user,
+		userPasskey:       userPasskey,
 		userToken:         userToken,
 		home:              home,
 		task:              task,
@@ -131,6 +140,7 @@ func NewHttp(
 		project:           project,
 		database:          database,
 		databaseServer:    databaseServer,
+		databaseRedis:     databaseRedis,
 		databaseUser:      databaseUser,
 		backup:            backup,
 		backupStorage:     backupStorage,
@@ -149,6 +159,7 @@ func NewHttp(
 		process:           process,
 		safe:              safe,
 		firewall:          firewall,
+		firewallScan:      firewallScan,
 		ssh:               ssh,
 		container:         container,
 		containerCompose:  containerCompose,
@@ -169,6 +180,7 @@ func NewHttp(
 		toolboxMigration:  toolboxMigration,
 		webhook:           webhook,
 		template:          template,
+		websiteStat:       websiteStat,
 		apps:              apps,
 	}
 }
@@ -183,6 +195,12 @@ func (route *Http) Register(r *chi.Mux) {
 			r.Get("/is_login", route.user.IsLogin)
 			r.Get("/is_2fa", route.user.IsTwoFA)
 			r.Get("/info", route.user.Info)
+			// 通行密钥
+			r.Get("/passkey/enabled", route.userPasskey.Enabled)
+			r.Post("/passkey/register", route.userPasskey.BeginRegister)
+			r.Put("/passkey/register", route.userPasskey.FinishRegister)
+			r.With(middleware.Throttle(route.conf.HTTP.IPHeader, 5, time.Minute)).Post("/passkey/login", route.userPasskey.BeginLogin)
+			r.Put("/passkey/login", route.userPasskey.FinishLogin)
 		})
 
 		r.Route("/users", func(r chi.Router) {
@@ -203,6 +221,12 @@ func (route *Http) Register(r *chi.Mux) {
 			r.Delete("/{id}", route.userToken.Delete)
 		})
 
+		r.Route("/user_passkeys", func(r chi.Router) {
+			r.Get("/", route.userPasskey.List)
+			r.Get("/supported", route.userPasskey.Supported)
+			r.Delete("/{id}", route.userPasskey.Delete)
+		})
+
 		r.Route("/home", func(r chi.Router) {
 			r.Get("/panel", route.home.Panel)
 			r.Get("/apps", route.home.Apps)
@@ -216,6 +240,8 @@ func (route *Http) Register(r *chi.Mux) {
 			r.Post("/restart", route.home.Restart)
 			r.Get("/top_processes", route.home.TopProcesses)
 			r.Post("/restart_server", route.home.RestartServer)
+			r.Get("/runtime_info", route.home.RuntimeInfo)
+			r.Get("/goroutines", route.home.Goroutines)
 		})
 
 		r.Route("/task", func(r chi.Router) {
@@ -240,6 +266,21 @@ func (route *Http) Register(r *chi.Mux) {
 			r.Post("/{id}/reset_config", route.website.ResetConfig)
 			r.Post("/{id}/status", route.website.UpdateStatus)
 			r.Post("/{id}/obtain_cert", route.website.ObtainCert)
+
+			// 网站统计
+			r.Get("/stat/overview", route.websiteStat.Overview)
+			r.Get("/stat/realtime", route.websiteStat.Realtime)
+			r.Get("/stat/sites", route.websiteStat.SiteStats)
+			r.Get("/stat/spiders", route.websiteStat.SpiderStats)
+			r.Get("/stat/clients", route.websiteStat.ClientStats)
+			r.Get("/stat/ips", route.websiteStat.IPStats)
+			r.Get("/stat/geos", route.websiteStat.GeoStats)
+			r.Get("/stat/uris", route.websiteStat.URIStats)
+			r.Get("/stat/slow_uris", route.websiteStat.SlowURIStats)
+			r.Get("/stat/errors", route.websiteStat.ErrorStats)
+			r.Get("/stat/setting", route.websiteStat.GetSetting)
+			r.Post("/stat/setting", route.websiteStat.UpdateSetting)
+			r.Post("/stat/clear", route.websiteStat.Clear)
 		})
 
 		r.Route("/project", func(r chi.Router) {
@@ -274,6 +315,17 @@ func (route *Http) Register(r *chi.Mux) {
 			r.Put("/{id}", route.databaseUser.Update)
 			r.Put("/{id}/remark", route.databaseUser.UpdateRemark)
 			r.Delete("/{id}", route.databaseUser.Delete)
+		})
+
+		r.Route("/database_redis", func(r chi.Router) {
+			r.Get("/databases", route.databaseRedis.Databases)
+			r.Get("/data", route.databaseRedis.Data)
+			r.Get("/key", route.databaseRedis.KeyGet)
+			r.Post("/key", route.databaseRedis.KeySet)
+			r.Delete("/key", route.databaseRedis.KeyDelete)
+			r.Post("/key/ttl", route.databaseRedis.KeyTTL)
+			r.Post("/key/rename", route.databaseRedis.KeyRename)
+			r.Post("/clear", route.databaseRedis.Clear)
 		})
 
 		r.Route("/backup", func(r chi.Router) {
@@ -410,6 +462,7 @@ func (route *Http) Register(r *chi.Mux) {
 			r.Get("/status", route.firewall.GetStatus)
 			r.Post("/status", route.firewall.UpdateStatus)
 			r.Get("/rule", route.firewall.GetRules)
+			r.Get("/rule/port_usage", route.firewall.GetPortUsage)
 			r.Post("/rule", route.firewall.CreateRule)
 			r.Delete("/rule", route.firewall.DeleteRule)
 			r.Get("/ip_rule", route.firewall.GetIPRules)
@@ -418,6 +471,17 @@ func (route *Http) Register(r *chi.Mux) {
 			r.Get("/forward", route.firewall.GetForwards)
 			r.Post("/forward", route.firewall.CreateForward)
 			r.Delete("/forward", route.firewall.DeleteForward)
+
+			// 扫描感知
+			r.Get("/scan/setting", route.firewallScan.GetSetting)
+			r.Post("/scan/setting", route.firewallScan.UpdateSetting)
+			r.Get("/scan/interfaces", route.firewallScan.GetInterfaces)
+			r.Get("/scan/summary", route.firewallScan.GetSummary)
+			r.Get("/scan/trend", route.firewallScan.GetTrend)
+			r.Get("/scan/top_ips", route.firewallScan.GetTopSourceIPs)
+			r.Get("/scan/top_ports", route.firewallScan.GetTopPorts)
+			r.Get("/scan/events", route.firewallScan.ListEvents)
+			r.Post("/scan/clear", route.firewallScan.Clear)
 		})
 
 		r.Route("/ssh", func(r chi.Router) {
@@ -583,6 +647,9 @@ func (route *Http) Register(r *chi.Mux) {
 			r.Post("/lvm/lv", route.toolboxDisk.CreateLV)
 			r.Delete("/lvm/lv", route.toolboxDisk.RemoveLV)
 			r.Post("/lvm/lv/extend", route.toolboxDisk.ExtendLV)
+			r.Get("/smart/disks", route.toolboxDisk.GetSmartDisks)
+			r.Get("/smart/info", route.toolboxDisk.GetSmartInfo)
+			r.Get("/raid/info", route.toolboxDisk.GetRaidInfo)
 		})
 
 		r.Route("/toolbox_log", func(r chi.Router) {

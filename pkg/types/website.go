@@ -1,6 +1,6 @@
 package types
 
-import "github.com/acepanel/panel/pkg/webserver/types"
+import "github.com/acepanel/panel/v3/pkg/webserver/types"
 
 // WebsiteListen 网站监听配置
 type WebsiteListen struct {
@@ -28,7 +28,6 @@ type WebsiteSetting struct {
 	OCSP          bool     `json:"ocsp"`
 	HTTPRedirect  bool     `json:"http_redirect"`
 	SSLProtocols  []string `json:"ssl_protocols"`
-	SSLCiphers    string   `json:"ssl_ciphers"`
 	SSLNotBefore  string   `json:"ssl_not_before"`
 	SSLNotAfter   string   `json:"ssl_not_after"`
 	SSLDNSNames   []string `json:"ssl_dns_names"`
@@ -51,9 +50,10 @@ type WebsiteSetting struct {
 	Redirects []types.Redirect `json:"redirects"`
 
 	// 高级设置
-	RateLimit *types.RateLimit  `json:"rate_limit"` // 限流限速配置
-	RealIP    *types.RealIP     `json:"real_ip"`    // 真实 IP 配置
-	BasicAuth map[string]string `json:"basic_auth"` // 基本认证配置
+	StatEnabled bool              `json:"stat_enabled"` // 是否启用访问统计
+	RateLimit   *types.RateLimit  `json:"rate_limit"`   // 限流限速配置
+	RealIP      *types.RealIP     `json:"real_ip"`      // 真实 IP 配置
+	BasicAuth   map[string]string `json:"basic_auth"`   // 基本认证配置
 
 	// 自定义配置
 	CustomConfigs []WebsiteCustomConfig `json:"custom_configs"`

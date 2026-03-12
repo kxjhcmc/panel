@@ -8,7 +8,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/acepanel/panel/pkg/types"
+	"github.com/acepanel/panel/v3/pkg/types"
 )
 
 var apps sync.Map
@@ -45,7 +45,7 @@ func getSlug(app types.App) string {
 	}
 
 	t := reflect.TypeOf(app)
-	if t.Kind() == reflect.Ptr {
+	if t.Kind() == reflect.Pointer {
 		t = t.Elem()
 	}
 

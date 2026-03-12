@@ -5,8 +5,8 @@ import (
 
 	"github.com/leonelquinteros/gotext"
 
-	"github.com/acepanel/panel/internal/http/request"
-	"github.com/acepanel/panel/pkg/systemctl"
+	"github.com/acepanel/panel/v3/internal/http/request"
+	"github.com/acepanel/panel/v3/pkg/systemctl"
 )
 
 type SystemctlService struct {

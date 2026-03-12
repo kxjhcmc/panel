@@ -5,9 +5,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/acepanel/panel/internal/biz"
-	"github.com/acepanel/panel/internal/http/request"
-	"github.com/acepanel/panel/pkg/types"
+	"github.com/acepanel/panel/v3/internal/biz"
+	"github.com/acepanel/panel/v3/internal/http/request"
+	"github.com/acepanel/panel/v3/pkg/types"
 )
 
 type MonitorService struct {
@@ -118,6 +118,12 @@ func (s *MonitorService) List(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
+		// 计算与上一条记录的时间差（秒），用于速率计算
+		elapsed := monitor.CreatedAt.Sub(monitors[i-1].CreatedAt).Seconds()
+		if elapsed < 1 {
+			elapsed = 1
+		}
+
 		// 处理网络数据
 		for _, net := range monitor.Info.Net {
 			if net.Name == "lo" {
@@ -136,8 +142,8 @@ func (s *MonitorService) List(w http.ResponseWriter, r *http.Request) {
 			device := netDeviceData[net.Name]
 			device.Sent = append(device.Sent, fmt.Sprintf("%.2f", float64(net.BytesSent)/1024/1024))
 			device.Recv = append(device.Recv, fmt.Sprintf("%.2f", float64(net.BytesRecv)/1024/1024))
-			device.Tx = append(device.Tx, fmt.Sprintf("%.2f", float64(net.BytesSent-prev.sent)/60/1024/1024))
-			device.Rx = append(device.Rx, fmt.Sprintf("%.2f", float64(net.BytesRecv-prev.recv)/60/1024/1024))
+			device.Tx = append(device.Tx, fmt.Sprintf("%.2f", float64(net.BytesSent-prev.sent)/elapsed/1024/1024))
+			device.Rx = append(device.Rx, fmt.Sprintf("%.2f", float64(net.BytesRecv-prev.recv)/elapsed/1024/1024))
 			netDevicePrev[net.Name] = struct {
 				sent uint64
 				recv uint64
@@ -157,9 +163,9 @@ func (s *MonitorService) List(w http.ResponseWriter, r *http.Request) {
 			diskData := diskIOData[disk.Name]
 			diskData.ReadBytes = append(diskData.ReadBytes, fmt.Sprintf("%.2f", float64(disk.ReadBytes)/1024/1024))
 			diskData.WriteBytes = append(diskData.WriteBytes, fmt.Sprintf("%.2f", float64(disk.WriteBytes)/1024/1024))
-			// 监控频率为 1 分钟，所以这里除以 60 即可得到每秒的速度 (KB/s)
-			diskData.ReadSpeed = append(diskData.ReadSpeed, fmt.Sprintf("%.2f", float64(disk.ReadBytes-prev.read)/60/1024))
-			diskData.WriteSpeed = append(diskData.WriteSpeed, fmt.Sprintf("%.2f", float64(disk.WriteBytes-prev.write)/60/1024))
+			// 根据实际时间差计算每秒速度 (KB/s)
+			diskData.ReadSpeed = append(diskData.ReadSpeed, fmt.Sprintf("%.2f", float64(disk.ReadBytes-prev.read)/elapsed/1024))
+			diskData.WriteSpeed = append(diskData.WriteSpeed, fmt.Sprintf("%.2f", float64(disk.WriteBytes-prev.write)/elapsed/1024))
 			diskIOPrev[disk.Name] = struct {
 				read  uint64
 				write uint64

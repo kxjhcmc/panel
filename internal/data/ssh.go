@@ -10,9 +10,9 @@ import (
 	cryptossh "golang.org/x/crypto/ssh"
 	"gorm.io/gorm"
 
-	"github.com/acepanel/panel/internal/biz"
-	"github.com/acepanel/panel/internal/http/request"
-	pkgssh "github.com/acepanel/panel/pkg/ssh"
+	"github.com/acepanel/panel/v3/internal/biz"
+	"github.com/acepanel/panel/v3/internal/http/request"
+	pkgssh "github.com/acepanel/panel/v3/pkg/ssh"
 )
 
 type sshRepo struct {

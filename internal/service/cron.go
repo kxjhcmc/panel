@@ -5,8 +5,8 @@ import (
 
 	"github.com/libtnb/chix"
 
-	"github.com/acepanel/panel/internal/biz"
-	"github.com/acepanel/panel/internal/http/request"
+	"github.com/acepanel/panel/v3/internal/biz"
+	"github.com/acepanel/panel/v3/internal/http/request"
 )
 
 type CronService struct {

@@ -11,10 +11,10 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/acepanel/panel/internal/app"
-	"github.com/acepanel/panel/internal/service"
-	"github.com/acepanel/panel/pkg/systemctl"
-	webserverNginx "github.com/acepanel/panel/pkg/webserver/nginx"
+	"github.com/acepanel/panel/v3/internal/app"
+	"github.com/acepanel/panel/v3/internal/service"
+	"github.com/acepanel/panel/v3/pkg/systemctl"
+	webserverNginx "github.com/acepanel/panel/v3/pkg/webserver/nginx"
 )
 
 // ListStreamServers 获取 Stream Server 列表
@@ -547,18 +547,18 @@ func (s *App) saveStreamServerConfig(filePath string, server *StreamServer) erro
 // saveStreamUpstreamConfig 生成并保存 Stream Upstream 配置
 func (s *App) saveStreamUpstreamConfig(filePath string, upstream *StreamUpstream) error {
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("upstream %s {\n", upstream.Name))
+	_, _ = fmt.Fprintf(&sb, "upstream %s {\n", upstream.Name)
 
 	// 负载均衡算法
 	if upstream.Algo != "" {
-		sb.WriteString(fmt.Sprintf("    %s;\n", upstream.Algo))
+		_, _ = fmt.Fprintf(&sb, "    %s;\n", upstream.Algo)
 	}
 
 	// resolver 配置
 	if len(upstream.Resolver) > 0 {
-		sb.WriteString(fmt.Sprintf("    resolver %s;\n", strings.Join(upstream.Resolver, " ")))
+		_, _ = fmt.Fprintf(&sb, "    resolver %s;\n", strings.Join(upstream.Resolver, " "))
 		if upstream.ResolverTimeout > 0 {
-			sb.WriteString(fmt.Sprintf("    resolver_timeout %s;\n", formatNginxDuration(upstream.ResolverTimeout)))
+			_, _ = fmt.Fprintf(&sb, "    resolver_timeout %s;\n", formatNginxDuration(upstream.ResolverTimeout))
 		}
 	}
 
@@ -572,9 +572,9 @@ func (s *App) saveStreamUpstreamConfig(filePath string, upstream *StreamUpstream
 	for _, addr := range addrs {
 		options := upstream.Servers[addr]
 		if options != "" {
-			sb.WriteString(fmt.Sprintf("    server %s %s;\n", addr, options))
+			_, _ = fmt.Fprintf(&sb, "    server %s %s;\n", addr, options)
 		} else {
-			sb.WriteString(fmt.Sprintf("    server %s;\n", addr))
+			_, _ = fmt.Fprintf(&sb, "    server %s;\n", addr)
 		}
 	}
 

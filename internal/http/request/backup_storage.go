@@ -1,6 +1,6 @@
 package request
 
-import "github.com/acepanel/panel/pkg/types"
+import "github.com/acepanel/panel/v3/pkg/types"
 
 type BackupStorageCreate struct {
 	Type string                  `form:"type" json:"type" validate:"required|in:s3,sftp,webdav"`

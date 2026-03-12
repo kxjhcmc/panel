@@ -35,7 +35,7 @@ export const http = createAlova({
         if (!noAlert) {
           if (code === 422) {
             window.$message.error(msg)
-          } else if (code !== 401) {
+          } else if (code !== 401 && code !== 418) {
             window.$dialog.error({
               title: '错误',
               content: msg,

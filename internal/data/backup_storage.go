@@ -7,9 +7,9 @@ import (
 	"github.com/leonelquinteros/gotext"
 	"gorm.io/gorm"
 
-	"github.com/acepanel/panel/internal/biz"
-	"github.com/acepanel/panel/internal/http/request"
-	"github.com/acepanel/panel/pkg/types"
+	"github.com/acepanel/panel/v3/internal/biz"
+	"github.com/acepanel/panel/v3/internal/http/request"
+	"github.com/acepanel/panel/v3/pkg/types"
 )
 
 type backupAccountRepo struct {

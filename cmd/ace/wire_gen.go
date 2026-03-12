@@ -7,34 +7,35 @@
 package main
 
 import (
-	"github.com/acepanel/panel/internal/app"
-	"github.com/acepanel/panel/internal/apps/apache"
-	"github.com/acepanel/panel/internal/apps/codeserver"
-	"github.com/acepanel/panel/internal/apps/docker"
-	"github.com/acepanel/panel/internal/apps/fail2ban"
-	"github.com/acepanel/panel/internal/apps/frp"
-	"github.com/acepanel/panel/internal/apps/gitea"
-	"github.com/acepanel/panel/internal/apps/mariadb"
-	"github.com/acepanel/panel/internal/apps/memcached"
-	"github.com/acepanel/panel/internal/apps/minio"
-	"github.com/acepanel/panel/internal/apps/mysql"
-	"github.com/acepanel/panel/internal/apps/nginx"
-	"github.com/acepanel/panel/internal/apps/openresty"
-	"github.com/acepanel/panel/internal/apps/percona"
-	"github.com/acepanel/panel/internal/apps/phpmyadmin"
-	"github.com/acepanel/panel/internal/apps/podman"
-	"github.com/acepanel/panel/internal/apps/postgresql"
-	"github.com/acepanel/panel/internal/apps/pureftpd"
-	"github.com/acepanel/panel/internal/apps/redis"
-	"github.com/acepanel/panel/internal/apps/rsync"
-	"github.com/acepanel/panel/internal/apps/s3fs"
-	"github.com/acepanel/panel/internal/apps/supervisor"
-	"github.com/acepanel/panel/internal/bootstrap"
-	"github.com/acepanel/panel/internal/data"
-	"github.com/acepanel/panel/internal/http/middleware"
-	"github.com/acepanel/panel/internal/job"
-	"github.com/acepanel/panel/internal/route"
-	"github.com/acepanel/panel/internal/service"
+	"github.com/acepanel/panel/v3/internal/app"
+	"github.com/acepanel/panel/v3/internal/apps/apache"
+	"github.com/acepanel/panel/v3/internal/apps/codeserver"
+	"github.com/acepanel/panel/v3/internal/apps/docker"
+	"github.com/acepanel/panel/v3/internal/apps/fail2ban"
+	"github.com/acepanel/panel/v3/internal/apps/frp"
+	"github.com/acepanel/panel/v3/internal/apps/gitea"
+	"github.com/acepanel/panel/v3/internal/apps/mariadb"
+	"github.com/acepanel/panel/v3/internal/apps/memcached"
+	"github.com/acepanel/panel/v3/internal/apps/minio"
+	"github.com/acepanel/panel/v3/internal/apps/mysql"
+	"github.com/acepanel/panel/v3/internal/apps/nginx"
+	"github.com/acepanel/panel/v3/internal/apps/openresty"
+	"github.com/acepanel/panel/v3/internal/apps/percona"
+	"github.com/acepanel/panel/v3/internal/apps/phpmyadmin"
+	"github.com/acepanel/panel/v3/internal/apps/podman"
+	"github.com/acepanel/panel/v3/internal/apps/postgresql"
+	"github.com/acepanel/panel/v3/internal/apps/pureftpd"
+	"github.com/acepanel/panel/v3/internal/apps/redis"
+	"github.com/acepanel/panel/v3/internal/apps/rsync"
+	"github.com/acepanel/panel/v3/internal/apps/s3fs"
+	"github.com/acepanel/panel/v3/internal/apps/supervisor"
+	"github.com/acepanel/panel/v3/internal/bootstrap"
+	"github.com/acepanel/panel/v3/internal/data"
+	"github.com/acepanel/panel/v3/internal/http/middleware"
+	"github.com/acepanel/panel/v3/internal/job"
+	"github.com/acepanel/panel/v3/internal/route"
+	"github.com/acepanel/panel/v3/internal/service"
+	"github.com/acepanel/panel/v3/pkg/websitestat"
 )
 
 import (
@@ -63,13 +64,15 @@ func initAce() (*app.Ace, error) {
 	}
 	logger := bootstrap.NewLog(config)
 	cacheRepo := data.NewCacheRepo(db)
-	queue := bootstrap.NewQueue()
-	taskRepo := data.NewTaskRepo(locale, db, logger, queue)
+	taskRunner := bootstrap.NewRunner(db, logger)
+	taskRepo := data.NewTaskRepo(locale, db, logger, taskRunner)
 	appRepo := data.NewAppRepo(locale, config, db, logger, cacheRepo, taskRepo)
 	userTokenRepo := data.NewUserTokenRepo(locale, config, db)
 	middlewares := middleware.NewMiddlewares(config, manager, appRepo, userTokenRepo)
 	userRepo := data.NewUserRepo(locale, db, logger)
 	userService := service.NewUserService(locale, config, manager, userRepo)
+	userPasskeyRepo := data.NewUserPasskeyRepo(db)
+	userPasskeyService := service.NewUserPasskeyService(locale, config, manager, userPasskeyRepo, userRepo)
 	userTokenService := service.NewUserTokenService(locale, userTokenRepo)
 	databaseServerRepo := data.NewDatabaseServerRepo(locale, db, logger)
 	databaseUserRepo := data.NewDatabaseUserRepo(locale, db, logger, databaseServerRepo)
@@ -82,12 +85,15 @@ func initAce() (*app.Ace, error) {
 	environmentRepo := data.NewEnvironmentRepo(locale, config, cacheRepo, taskRepo)
 	cronRepo := data.NewCronRepo(locale, db, logger)
 	backupRepo := data.NewBackupRepo(locale, config, db, logger, settingRepo, websiteRepo)
-	homeService := service.NewHomeService(locale, config, taskRepo, websiteRepo, projectRepo, appRepo, environmentRepo, settingRepo, cronRepo, backupRepo)
+	containerRepo := data.NewContainerRepo(settingRepo)
+	homeService := service.NewHomeService(locale, config, taskRepo, websiteRepo, projectRepo, appRepo, environmentRepo, settingRepo, cronRepo, backupRepo, containerRepo)
 	taskService := service.NewTaskService(taskRepo)
 	websiteService := service.NewWebsiteService(websiteRepo, settingRepo)
 	projectService := service.NewProjectService(projectRepo, settingRepo)
 	databaseService := service.NewDatabaseService(databaseRepo)
 	databaseServerService := service.NewDatabaseServerService(databaseServerRepo)
+	databaseRedisRepo := data.NewDatabaseRedisRepo(locale, db, logger)
+	databaseRedisService := service.NewDatabaseRedisService(databaseRedisRepo)
 	databaseUserService := service.NewDatabaseUserService(databaseUserRepo)
 	backupService := service.NewBackupService(locale, backupRepo)
 	backupAccountRepo := data.NewBackupAccountRepo(locale, db, logger, settingRepo)
@@ -109,17 +115,21 @@ func initAce() (*app.Ace, error) {
 	safeRepo := data.NewSafeRepo(logger)
 	safeService := service.NewSafeService(safeRepo)
 	firewallService := service.NewFirewallService()
+	scanEventRepo, err := data.NewScanEventRepo(settingRepo)
+	if err != nil {
+		return nil, err
+	}
+	firewallScanService := service.NewFirewallScanService(scanEventRepo)
 	sshRepo := data.NewSSHRepo(locale, db, logger)
 	sshService := service.NewSSHService(sshRepo)
-	containerRepo := data.NewContainerRepo()
 	containerService := service.NewContainerService(containerRepo)
 	containerComposeRepo := data.NewContainerComposeRepo()
 	containerComposeService := service.NewContainerComposeService(containerComposeRepo)
-	containerNetworkRepo := data.NewContainerNetworkRepo()
+	containerNetworkRepo := data.NewContainerNetworkRepo(settingRepo)
 	containerNetworkService := service.NewContainerNetworkService(containerNetworkRepo)
-	containerImageRepo := data.NewContainerImageRepo()
+	containerImageRepo := data.NewContainerImageRepo(settingRepo)
 	containerImageService := service.NewContainerImageService(containerImageRepo)
-	containerVolumeRepo := data.NewContainerVolumeRepo()
+	containerVolumeRepo := data.NewContainerVolumeRepo(settingRepo)
 	containerVolumeService := service.NewContainerVolumeService(containerVolumeRepo)
 	fileService := service.NewFileService(locale, taskRepo)
 	logRepo := data.NewLogRepo(db)
@@ -137,8 +147,14 @@ func initAce() (*app.Ace, error) {
 	toolboxMigrationService := service.NewToolboxMigrationService(locale, config, logger, settingRepo, websiteRepo, databaseRepo, databaseServerRepo, databaseUserRepo, projectRepo, appRepo, environmentRepo)
 	webHookRepo := data.NewWebHookRepo(locale, db, logger)
 	webHookService := service.NewWebHookService(webHookRepo)
-	templateRepo := data.NewTemplateRepo(locale, cacheRepo)
+	templateRepo := data.NewTemplateRepo(locale, logger, cacheRepo)
 	templateService := service.NewTemplateService(locale, templateRepo, settingRepo)
+	websiteStatRepo, err := data.NewWebsiteStatRepo()
+	if err != nil {
+		return nil, err
+	}
+	aggregator := websitestat.NewAggregator()
+	websiteStatService := service.NewWebsiteStatService(settingRepo, websiteStatRepo, websiteRepo, aggregator)
 	apacheApp := apache.NewApp(locale)
 	codeserverApp := codeserver.NewApp()
 	dockerApp := docker.NewApp()
@@ -156,13 +172,13 @@ func initAce() (*app.Ace, error) {
 	podmanApp := podman.NewApp()
 	postgresqlApp := postgresql.NewApp(locale, settingRepo, databaseServerRepo)
 	pureftpdApp := pureftpd.NewApp(locale)
-	redisApp := redis.NewApp(locale)
+	redisApp := redis.NewApp(locale, databaseServerRepo)
 	rsyncApp := rsync.NewApp(locale)
 	s3fsApp := s3fs.NewApp(locale)
 	supervisorApp := supervisor.NewApp(locale)
 	loader := bootstrap.NewLoader(apacheApp, codeserverApp, dockerApp, fail2banApp, frpApp, giteaApp, mariadbApp, memcachedApp, minioApp, mysqlApp, nginxApp, openrestyApp, perconaApp, phpmyadminApp, podmanApp, postgresqlApp, pureftpdApp, redisApp, rsyncApp, s3fsApp, supervisorApp)
-	http := route.NewHttp(config, userService, userTokenService, homeService, taskService, websiteService, projectService, databaseService, databaseServerService, databaseUserService, backupService, backupStorageService, certService, certDNSService, certAccountService, appService, environmentService, environmentGoService, environmentJavaService, environmentNodejsService, environmentPHPService, environmentPythonService, environmentDotnetService, cronService, processService, safeService, firewallService, sshService, containerService, containerComposeService, containerNetworkService, containerImageService, containerVolumeService, fileService, logService, monitorService, settingService, systemctlService, toolboxNetworkService, toolboxSystemService, toolboxBenchmarkService, toolboxSSHService, toolboxDiskService, toolboxLogService, toolboxMigrationService, webHookService, templateService, loader)
-	wsService := service.NewWsService(locale, config, logger, sshRepo)
+	http := route.NewHttp(config, userService, userPasskeyService, userTokenService, homeService, taskService, websiteService, projectService, databaseService, databaseServerService, databaseRedisService, databaseUserService, backupService, backupStorageService, certService, certDNSService, certAccountService, appService, environmentService, environmentGoService, environmentJavaService, environmentNodejsService, environmentPHPService, environmentPythonService, environmentDotnetService, cronService, processService, safeService, firewallService, firewallScanService, sshService, containerService, containerComposeService, containerNetworkService, containerImageService, containerVolumeService, fileService, logService, monitorService, settingService, systemctlService, toolboxNetworkService, toolboxSystemService, toolboxBenchmarkService, toolboxSSHService, toolboxDiskService, toolboxLogService, toolboxMigrationService, webHookService, templateService, websiteStatService, loader)
+	wsService := service.NewWsService(locale, config, logger, sshRepo, settingRepo)
 	ws := route.NewWs(wsService, toolboxMigrationService)
 	mux, err := bootstrap.NewRouter(locale, middlewares, http, ws)
 	if err != nil {
@@ -177,12 +193,12 @@ func initAce() (*app.Ace, error) {
 		return nil, err
 	}
 	gormigrate := bootstrap.NewMigrate(db)
-	jobs := job.NewJobs(config, db, logger, settingRepo, certRepo, certAccountRepo, backupRepo, cacheRepo, taskRepo)
+	jobs := job.NewJobs(config, db, logger, aggregator, settingRepo, certRepo, certAccountRepo, backupRepo, cacheRepo, taskRepo, scanEventRepo, websiteStatRepo)
 	cron, err := bootstrap.NewCron(config, logger, jobs)
 	if err != nil {
 		return nil, err
 	}
 	validation := bootstrap.NewValidator(config, db)
-	ace := app.NewAce(config, mux, server, reloader, gormigrate, cron, queue, validation)
+	ace := app.NewAce(config, mux, server, reloader, gormigrate, cron, taskRunner, validation)
 	return ace, nil
 }

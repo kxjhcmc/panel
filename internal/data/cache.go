@@ -7,10 +7,10 @@ import (
 
 	"gorm.io/gorm"
 
-	"github.com/acepanel/panel/internal/app"
-	"github.com/acepanel/panel/internal/biz"
-	"github.com/acepanel/panel/pkg/api"
-	"github.com/acepanel/panel/pkg/apploader"
+	"github.com/acepanel/panel/v3/internal/app"
+	"github.com/acepanel/panel/v3/internal/biz"
+	"github.com/acepanel/panel/v3/pkg/api"
+	"github.com/acepanel/panel/v3/pkg/apploader"
 )
 
 type cacheRepo struct {

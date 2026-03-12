@@ -3,7 +3,7 @@
 package biz
 
 import (
-	types "github.com/acepanel/panel/pkg/types"
+	types "github.com/acepanel/panel/v3/pkg/types"
 	mock "github.com/stretchr/testify/mock"
 )
 

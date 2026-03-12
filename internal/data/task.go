@@ -7,24 +7,23 @@ import (
 	"github.com/leonelquinteros/gotext"
 	"gorm.io/gorm"
 
-	"github.com/acepanel/panel/internal/biz"
-	"github.com/acepanel/panel/internal/queuejob"
-	"github.com/acepanel/panel/pkg/queue"
+	"github.com/acepanel/panel/v3/internal/biz"
+	"github.com/acepanel/panel/v3/pkg/types"
 )
 
 type taskRepo struct {
-	t     *gotext.Locale
-	db    *gorm.DB
-	log   *slog.Logger
-	queue *queue.Queue
+	t      *gotext.Locale
+	db     *gorm.DB
+	log    *slog.Logger
+	runner types.TaskRunner
 }
 
-func NewTaskRepo(t *gotext.Locale, db *gorm.DB, log *slog.Logger, queue *queue.Queue) biz.TaskRepo {
+func NewTaskRepo(t *gotext.Locale, db *gorm.DB, log *slog.Logger, runner types.TaskRunner) biz.TaskRepo {
 	return &taskRepo{
-		t:     t,
-		db:    db,
-		log:   log,
-		queue: queue,
+		t:      t,
+		db:     db,
+		log:    log,
+		runner: runner,
 	}
 }
 
@@ -55,6 +54,10 @@ func (r *taskRepo) UpdateStatus(id uint, status biz.TaskStatus) error {
 	return r.db.Model(&biz.Task{}).Where("id = ?", id).Update("status", status).Error
 }
 
+func (r *taskRepo) UpdateLog(id uint, log string) error {
+	return r.db.Model(&biz.Task{}).Where("id = ?", id).Update("log", log).Error
+}
+
 func (r *taskRepo) Push(task *biz.Task) error {
 	// 防止有人喜欢酒吧点炒饭
 	var count int64
@@ -69,14 +72,6 @@ func (r *taskRepo) Push(task *biz.Task) error {
 		return err
 	}
 
-	return r.queue.Push(queuejob.NewProcessTask(r.log, r), []any{
-		task.ID,
-	})
-}
-
-func (r *taskRepo) ClearZombieTasks() error {
-	if err := r.db.Model(&biz.Task{}).Where("status = ? or status = ?", biz.TaskStatusRunning, biz.TaskStatusWaiting).Update("status", biz.TaskStatusFailed).Error; err != nil {
-		return err
-	}
+	r.runner.Notify()
 	return nil
 }

@@ -3,7 +3,7 @@ package biz
 import (
 	"context"
 
-	"github.com/acepanel/panel/internal/http/request"
+	"github.com/acepanel/panel/v3/internal/http/request"
 )
 
 type DatabaseType string

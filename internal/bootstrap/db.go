@@ -10,9 +10,9 @@ import (
 	sloggorm "github.com/orandin/slog-gorm"
 	"gorm.io/gorm"
 
-	"github.com/acepanel/panel/internal/app"
-	"github.com/acepanel/panel/internal/migration"
-	"github.com/acepanel/panel/pkg/config"
+	"github.com/acepanel/panel/v3/internal/app"
+	"github.com/acepanel/panel/v3/internal/migration"
+	"github.com/acepanel/panel/v3/pkg/config"
 )
 
 func NewDB(conf *config.Config) (*gorm.DB, error) {

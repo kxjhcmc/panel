@@ -4,7 +4,11 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"regexp"
+	"runtime"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/hashicorp/go-version"
 	"github.com/leonelquinteros/gotext"
@@ -14,15 +18,15 @@ import (
 	"github.com/shirou/gopsutil/v4/host"
 	"github.com/spf13/cast"
 
-	"github.com/acepanel/panel/internal/app"
-	"github.com/acepanel/panel/internal/biz"
-	"github.com/acepanel/panel/internal/http/request"
-	"github.com/acepanel/panel/pkg/api"
-	"github.com/acepanel/panel/pkg/config"
-	"github.com/acepanel/panel/pkg/db"
-	"github.com/acepanel/panel/pkg/os"
-	"github.com/acepanel/panel/pkg/tools"
-	"github.com/acepanel/panel/pkg/types"
+	"github.com/acepanel/panel/v3/internal/app"
+	"github.com/acepanel/panel/v3/internal/biz"
+	"github.com/acepanel/panel/v3/internal/http/request"
+	"github.com/acepanel/panel/v3/pkg/api"
+	"github.com/acepanel/panel/v3/pkg/config"
+	"github.com/acepanel/panel/v3/pkg/db"
+	"github.com/acepanel/panel/v3/pkg/os"
+	"github.com/acepanel/panel/v3/pkg/tools"
+	"github.com/acepanel/panel/v3/pkg/types"
 )
 
 type HomeService struct {
@@ -37,9 +41,10 @@ type HomeService struct {
 	settingRepo     biz.SettingRepo
 	cronRepo        biz.CronRepo
 	backupRepo      biz.BackupRepo
+	containerRepo   biz.ContainerRepo
 }
 
-func NewHomeService(t *gotext.Locale, conf *config.Config, task biz.TaskRepo, website biz.WebsiteRepo, project biz.ProjectRepo, appRepo biz.AppRepo, environment biz.EnvironmentRepo, setting biz.SettingRepo, cron biz.CronRepo, backupRepo biz.BackupRepo) *HomeService {
+func NewHomeService(t *gotext.Locale, conf *config.Config, task biz.TaskRepo, website biz.WebsiteRepo, project biz.ProjectRepo, appRepo biz.AppRepo, environment biz.EnvironmentRepo, setting biz.SettingRepo, cron biz.CronRepo, backupRepo biz.BackupRepo, container biz.ContainerRepo) *HomeService {
 	return &HomeService{
 		t:               t,
 		api:             api.NewAPI(app.Version, app.Locale),
@@ -52,6 +57,7 @@ func NewHomeService(t *gotext.Locale, conf *config.Config, task biz.TaskRepo, we
 		settingRepo:     setting,
 		cronRepo:        cron,
 		backupRepo:      backupRepo,
+		containerRepo:   container,
 	}
 }
 
@@ -209,11 +215,18 @@ func (s *HomeService) CountInfo(w http.ResponseWriter, r *http.Request) {
 		cronCount = -1
 	}
 
+	containerCount := -1
+	containers, err := s.containerRepo.ListAll()
+	if err == nil {
+		containerCount = len(containers)
+	}
+
 	Success(w, chix.M{
-		"website":  websiteCount,
-		"database": databaseCount,
-		"project":  projectCount,
-		"cron":     cronCount,
+		"website":   websiteCount,
+		"database":  databaseCount,
+		"project":   projectCount,
+		"cron":      cronCount,
+		"container": containerCount,
 	})
 }
 
@@ -439,4 +452,100 @@ func (s *HomeService) TopProcesses(w http.ResponseWriter, r *http.Request) {
 	default:
 		Error(w, http.StatusUnprocessableEntity, s.t.Get("invalid type"))
 	}
+}
+
+// RuntimeInfo 返回 Go Runtime 统计数据
+func (s *HomeService) RuntimeInfo(w http.ResponseWriter, r *http.Request) {
+	var mem runtime.MemStats
+	runtime.ReadMemStats(&mem)
+
+	Success(w, chix.M{
+		"uptime":          time.Since(app.StartTime).Seconds(),
+		"goroutines":      runtime.NumGoroutine(),
+		"go_version":      runtime.Version(),
+		"num_cpu":         runtime.NumCPU(),
+		"num_cgo_call":    runtime.NumCgoCall(),
+		"memory_alloc":    mem.Alloc,
+		"memory_total":    mem.TotalAlloc,
+		"memory_sys":      mem.Sys,
+		"memory_lookups":  mem.Lookups,
+		"memory_mallocs":  mem.Mallocs,
+		"memory_frees":    mem.Frees,
+		"heap_alloc":      mem.HeapAlloc,
+		"heap_sys":        mem.HeapSys,
+		"heap_idle":       mem.HeapIdle,
+		"heap_inuse":      mem.HeapInuse,
+		"heap_released":   mem.HeapReleased,
+		"heap_objects":    mem.HeapObjects,
+		"stack_inuse":     mem.StackInuse,
+		"stack_sys":       mem.StackSys,
+		"mspan_inuse":     mem.MSpanInuse,
+		"mspan_sys":       mem.MSpanSys,
+		"mcache_inuse":    mem.MCacheInuse,
+		"mcache_sys":      mem.MCacheSys,
+		"buck_hash_sys":   mem.BuckHashSys,
+		"gc_sys":          mem.GCSys,
+		"other_sys":       mem.OtherSys,
+		"gc_next":         mem.NextGC,
+		"gc_last":         mem.LastGC,
+		"gc_pause_total":  mem.PauseTotalNs,
+		"gc_num":          mem.NumGC,
+		"gc_num_forced":   mem.NumForcedGC,
+		"gc_cpu_fraction": mem.GCCPUFraction,
+	})
+}
+
+// GoroutineInfo Goroutine 信息
+type GoroutineInfo struct {
+	ID    int    `json:"id"`
+	State string `json:"state"`
+	Stack string `json:"stack"`
+}
+
+// goroutineHeaderRe 匹配 goroutine 头部行
+var goroutineHeaderRe = regexp.MustCompile(`^goroutine (\d+) \[([^\]]+)\]:$`)
+
+// Goroutines 返回所有 Goroutine 堆栈信息
+func (s *HomeService) Goroutines(w http.ResponseWriter, r *http.Request) {
+	buf := make([]byte, 1<<16) // 64KB 起步
+	for {
+		n := runtime.Stack(buf, true)
+		if n < len(buf) {
+			buf = buf[:n]
+			break
+		}
+		buf = make([]byte, len(buf)*2)
+	}
+
+	raw := string(buf)
+	blocks := strings.Split(raw, "\n\n")
+
+	var goroutines []GoroutineInfo
+	for _, block := range blocks {
+		block = strings.TrimSpace(block)
+		if block == "" {
+			continue
+		}
+
+		lines := strings.SplitN(block, "\n", 2)
+		matches := goroutineHeaderRe.FindStringSubmatch(lines[0])
+		if matches == nil {
+			continue
+		}
+
+		id, _ := strconv.Atoi(matches[1])
+		state := matches[2]
+		stack := ""
+		if len(lines) > 1 {
+			stack = lines[1]
+		}
+
+		goroutines = append(goroutines, GoroutineInfo{
+			ID:    id,
+			State: state,
+			Stack: stack,
+		})
+	}
+
+	Success(w, goroutines)
 }

@@ -8,9 +8,9 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/acepanel/panel/internal/service"
-	"github.com/acepanel/panel/pkg/io"
-	"github.com/acepanel/panel/pkg/systemctl"
+	"github.com/acepanel/panel/v3/internal/service"
+	"github.com/acepanel/panel/v3/pkg/io"
+	"github.com/acepanel/panel/v3/pkg/systemctl"
 )
 
 type App struct{}
@@ -103,8 +103,8 @@ func (s *App) GetSettings(w http.ResponseWriter, r *http.Request) {
 
 	// 从 exec-opts 中提取 cgroup-driver
 	for _, opt := range daemonConfig.ExecOpts {
-		if strings.HasPrefix(opt, "native.cgroupdriver=") {
-			settings.CgroupDriver = strings.TrimPrefix(opt, "native.cgroupdriver=")
+		if after, ok := strings.CutPrefix(opt, "native.cgroupdriver="); ok {
+			settings.CgroupDriver = after
 			break
 		}
 	}

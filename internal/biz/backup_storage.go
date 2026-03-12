@@ -7,9 +7,9 @@ import (
 	"github.com/libtnb/utils/crypt"
 	"gorm.io/gorm"
 
-	"github.com/acepanel/panel/internal/app"
-	"github.com/acepanel/panel/internal/http/request"
-	"github.com/acepanel/panel/pkg/types"
+	"github.com/acepanel/panel/v3/internal/app"
+	"github.com/acepanel/panel/v3/internal/http/request"
+	"github.com/acepanel/panel/v3/pkg/types"
 )
 
 type BackupStorageType string

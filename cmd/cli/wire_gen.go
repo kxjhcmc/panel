@@ -7,32 +7,32 @@
 package main
 
 import (
-	"github.com/acepanel/panel/internal/app"
-	"github.com/acepanel/panel/internal/apps/apache"
-	"github.com/acepanel/panel/internal/apps/codeserver"
-	"github.com/acepanel/panel/internal/apps/docker"
-	"github.com/acepanel/panel/internal/apps/fail2ban"
-	"github.com/acepanel/panel/internal/apps/frp"
-	"github.com/acepanel/panel/internal/apps/gitea"
-	"github.com/acepanel/panel/internal/apps/mariadb"
-	"github.com/acepanel/panel/internal/apps/memcached"
-	"github.com/acepanel/panel/internal/apps/minio"
-	"github.com/acepanel/panel/internal/apps/mysql"
-	"github.com/acepanel/panel/internal/apps/nginx"
-	"github.com/acepanel/panel/internal/apps/openresty"
-	"github.com/acepanel/panel/internal/apps/percona"
-	"github.com/acepanel/panel/internal/apps/phpmyadmin"
-	"github.com/acepanel/panel/internal/apps/podman"
-	"github.com/acepanel/panel/internal/apps/postgresql"
-	"github.com/acepanel/panel/internal/apps/pureftpd"
-	"github.com/acepanel/panel/internal/apps/redis"
-	"github.com/acepanel/panel/internal/apps/rsync"
-	"github.com/acepanel/panel/internal/apps/s3fs"
-	"github.com/acepanel/panel/internal/apps/supervisor"
-	"github.com/acepanel/panel/internal/bootstrap"
-	"github.com/acepanel/panel/internal/data"
-	"github.com/acepanel/panel/internal/route"
-	"github.com/acepanel/panel/internal/service"
+	"github.com/acepanel/panel/v3/internal/app"
+	"github.com/acepanel/panel/v3/internal/apps/apache"
+	"github.com/acepanel/panel/v3/internal/apps/codeserver"
+	"github.com/acepanel/panel/v3/internal/apps/docker"
+	"github.com/acepanel/panel/v3/internal/apps/fail2ban"
+	"github.com/acepanel/panel/v3/internal/apps/frp"
+	"github.com/acepanel/panel/v3/internal/apps/gitea"
+	"github.com/acepanel/panel/v3/internal/apps/mariadb"
+	"github.com/acepanel/panel/v3/internal/apps/memcached"
+	"github.com/acepanel/panel/v3/internal/apps/minio"
+	"github.com/acepanel/panel/v3/internal/apps/mysql"
+	"github.com/acepanel/panel/v3/internal/apps/nginx"
+	"github.com/acepanel/panel/v3/internal/apps/openresty"
+	"github.com/acepanel/panel/v3/internal/apps/percona"
+	"github.com/acepanel/panel/v3/internal/apps/phpmyadmin"
+	"github.com/acepanel/panel/v3/internal/apps/podman"
+	"github.com/acepanel/panel/v3/internal/apps/postgresql"
+	"github.com/acepanel/panel/v3/internal/apps/pureftpd"
+	"github.com/acepanel/panel/v3/internal/apps/redis"
+	"github.com/acepanel/panel/v3/internal/apps/rsync"
+	"github.com/acepanel/panel/v3/internal/apps/s3fs"
+	"github.com/acepanel/panel/v3/internal/apps/supervisor"
+	"github.com/acepanel/panel/v3/internal/bootstrap"
+	"github.com/acepanel/panel/v3/internal/data"
+	"github.com/acepanel/panel/v3/internal/route"
+	"github.com/acepanel/panel/v3/internal/service"
 )
 
 import (
@@ -57,10 +57,11 @@ func initCli() (*app.Cli, error) {
 	}
 	logger := bootstrap.NewLog(config)
 	cacheRepo := data.NewCacheRepo(db)
-	queue := bootstrap.NewQueue()
-	taskRepo := data.NewTaskRepo(locale, db, logger, queue)
+	taskRunner := bootstrap.NewRunner(db, logger)
+	taskRepo := data.NewTaskRepo(locale, db, logger, taskRunner)
 	appRepo := data.NewAppRepo(locale, config, db, logger, cacheRepo, taskRepo)
 	userRepo := data.NewUserRepo(locale, db, logger)
+	userPasskeyRepo := data.NewUserPasskeyRepo(db)
 	settingRepo := data.NewSettingRepo(locale, db, logger, config, taskRepo)
 	databaseServerRepo := data.NewDatabaseServerRepo(locale, db, logger)
 	databaseUserRepo := data.NewDatabaseUserRepo(locale, db, logger, databaseServerRepo)
@@ -69,7 +70,7 @@ func initCli() (*app.Cli, error) {
 	certAccountRepo := data.NewCertAccountRepo(locale, db, userRepo, logger)
 	websiteRepo := data.NewWebsiteRepo(locale, db, logger, cacheRepo, databaseRepo, databaseServerRepo, databaseUserRepo, certRepo, certAccountRepo, settingRepo)
 	backupRepo := data.NewBackupRepo(locale, config, db, logger, settingRepo, websiteRepo)
-	cliService := service.NewCliService(locale, config, db, appRepo, cacheRepo, userRepo, settingRepo, backupRepo, websiteRepo, databaseServerRepo, certRepo, certAccountRepo)
+	cliService := service.NewCliService(locale, config, db, appRepo, cacheRepo, userRepo, userPasskeyRepo, settingRepo, backupRepo, websiteRepo, databaseServerRepo, certRepo, certAccountRepo)
 	cli := route.NewCli(locale, cliService)
 	command := bootstrap.NewCli(locale, cli)
 	gormigrate := bootstrap.NewMigrate(db)
@@ -90,7 +91,7 @@ func initCli() (*app.Cli, error) {
 	podmanApp := podman.NewApp()
 	postgresqlApp := postgresql.NewApp(locale, settingRepo, databaseServerRepo)
 	pureftpdApp := pureftpd.NewApp(locale)
-	redisApp := redis.NewApp(locale)
+	redisApp := redis.NewApp(locale, databaseServerRepo)
 	rsyncApp := rsync.NewApp(locale)
 	s3fsApp := s3fs.NewApp(locale)
 	supervisorApp := supervisor.NewApp(locale)

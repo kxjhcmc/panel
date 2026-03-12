@@ -10,7 +10,7 @@ import (
 
 	"github.com/spf13/cast"
 
-	"github.com/acepanel/panel/pkg/shell"
+	"github.com/acepanel/panel/v3/pkg/shell"
 )
 
 type ufw struct {
@@ -54,7 +54,7 @@ func (r *ufw) ListRule() ([]FireInfo, error) {
 	}
 
 	var data []FireInfo
-	for _, line := range strings.Split(out, "\n") {
+	for line := range strings.SplitSeq(out, "\n") {
 		line = strings.TrimSpace(line)
 		if !r.ruleRegex.MatchString(line) {
 			continue

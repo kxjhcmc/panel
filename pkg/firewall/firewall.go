@@ -5,7 +5,7 @@ import (
 	"net"
 	"strings"
 
-	"github.com/acepanel/panel/pkg/shell"
+	"github.com/acepanel/panel/v3/pkg/shell"
 )
 
 // Firewall 防火墙统一接口

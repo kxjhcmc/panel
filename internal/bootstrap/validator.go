@@ -7,8 +7,8 @@ import (
 	"github.com/gookit/validate/locales/zhtw"
 	"gorm.io/gorm"
 
-	"github.com/acepanel/panel/internal/http/rule"
-	"github.com/acepanel/panel/pkg/config"
+	"github.com/acepanel/panel/v3/internal/http/rule"
+	"github.com/acepanel/panel/v3/pkg/config"
 )
 
 // NewValidator just for register global rules

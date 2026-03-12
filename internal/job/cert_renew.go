@@ -9,11 +9,11 @@ import (
 
 	"gorm.io/gorm"
 
-	"github.com/acepanel/panel/internal/app"
-	"github.com/acepanel/panel/internal/biz"
-	"github.com/acepanel/panel/internal/http/request"
-	pkgcert "github.com/acepanel/panel/pkg/cert"
-	"github.com/acepanel/panel/pkg/config"
+	"github.com/acepanel/panel/v3/internal/app"
+	"github.com/acepanel/panel/v3/internal/biz"
+	"github.com/acepanel/panel/v3/internal/http/request"
+	pkgcert "github.com/acepanel/panel/v3/pkg/cert"
+	"github.com/acepanel/panel/v3/pkg/config"
 )
 
 // CertRenew 证书续签

@@ -1,6 +1,6 @@
 package request
 
-import "github.com/acepanel/panel/pkg/types"
+import "github.com/acepanel/panel/v3/pkg/types"
 
 type ContainerNetworkID struct {
 	ID string `json:"id" form:"id" validate:"required"`

@@ -3,12 +3,13 @@ package service
 import (
 	"net/http"
 	"slices"
+	"strconv"
 
 	"github.com/libtnb/chix"
 
-	"github.com/acepanel/panel/internal/http/request"
-	"github.com/acepanel/panel/pkg/firewall"
-	"github.com/acepanel/panel/pkg/os"
+	"github.com/acepanel/panel/v3/internal/http/request"
+	"github.com/acepanel/panel/v3/pkg/firewall"
+	"github.com/acepanel/panel/v3/pkg/os"
 )
 
 type FirewallService struct {
@@ -245,4 +246,19 @@ func (s *FirewallService) DeleteForward(w http.ResponseWriter, r *http.Request) 
 	}
 
 	Success(w, nil)
+}
+
+func (s *FirewallService) GetPortUsage(w http.ResponseWriter, r *http.Request) {
+	port, err := strconv.ParseUint(r.URL.Query().Get("port"), 10, 32)
+	if err != nil || port == 0 || port > 65535 {
+		Error(w, http.StatusUnprocessableEntity, "invalid port")
+		return
+	}
+
+	protocol := r.URL.Query().Get("protocol")
+	if protocol != "tcp" && protocol != "udp" {
+		protocol = "tcp"
+	}
+
+	Success(w, os.GetPortProcess(uint(port), protocol))
 }

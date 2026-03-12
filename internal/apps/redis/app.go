@@ -9,21 +9,24 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/leonelquinteros/gotext"
 
-	"github.com/acepanel/panel/internal/app"
-	"github.com/acepanel/panel/internal/service"
-	"github.com/acepanel/panel/pkg/io"
-	"github.com/acepanel/panel/pkg/shell"
-	"github.com/acepanel/panel/pkg/systemctl"
-	"github.com/acepanel/panel/pkg/types"
+	"github.com/acepanel/panel/v3/internal/app"
+	"github.com/acepanel/panel/v3/internal/biz"
+	"github.com/acepanel/panel/v3/internal/service"
+	"github.com/acepanel/panel/v3/pkg/io"
+	"github.com/acepanel/panel/v3/pkg/shell"
+	"github.com/acepanel/panel/v3/pkg/systemctl"
+	"github.com/acepanel/panel/v3/pkg/types"
 )
 
 type App struct {
-	t *gotext.Locale
+	t                  *gotext.Locale
+	databaseServerRepo biz.DatabaseServerRepo
 }
 
-func NewApp(t *gotext.Locale) *App {
+func NewApp(t *gotext.Locale, databaseServer biz.DatabaseServerRepo) *App {
 	return &App{
-		t: t,
+		t:                  t,
+		databaseServerRepo: databaseServer,
 	}
 }
 
@@ -53,7 +56,7 @@ func (s *App) Load(w http.ResponseWriter, r *http.Request) {
 		service.Error(w, http.StatusInternalServerError, "%v", err)
 		return
 	}
-	re := regexp.MustCompile(`^requirepass\s+(.+)`)
+	re := regexp.MustCompile(`(?m)^requirepass\s+(.+)`)
 	matches := re.FindStringSubmatch(config)
 	if len(matches) == 2 {
 		withPassword = " -a " + matches[1]
@@ -184,13 +187,16 @@ func (s *App) UpdateConfigTune(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 同步密码到数据库服务器记录
+	_ = s.databaseServerRepo.UpdatePassword("local_redis", req.Requirepass)
+
 	service.Success(w, nil)
 }
 
 // getRedisValue 从 Redis 配置内容中获取指定键的值
 func (s *App) getRedisValue(content string, key string) string {
-	lines := strings.Split(content, "\n")
-	for _, line := range lines {
+	lines := strings.SplitSeq(content, "\n")
+	for line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
 			continue

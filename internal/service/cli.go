@@ -21,18 +21,19 @@ import (
 	"github.com/urfave/cli/v3"
 	"gorm.io/gorm"
 
-	"github.com/acepanel/panel/internal/app"
-	"github.com/acepanel/panel/internal/biz"
-	"github.com/acepanel/panel/internal/http/request"
-	"github.com/acepanel/panel/pkg/api"
-	"github.com/acepanel/panel/pkg/cert"
-	"github.com/acepanel/panel/pkg/config"
-	"github.com/acepanel/panel/pkg/firewall"
-	"github.com/acepanel/panel/pkg/io"
-	"github.com/acepanel/panel/pkg/ntp"
-	"github.com/acepanel/panel/pkg/os"
-	"github.com/acepanel/panel/pkg/systemctl"
-	"github.com/acepanel/panel/pkg/tools"
+	"github.com/acepanel/panel/v3/internal/app"
+	"github.com/acepanel/panel/v3/internal/biz"
+	"github.com/acepanel/panel/v3/internal/http/request"
+	"github.com/acepanel/panel/v3/pkg/api"
+	"github.com/acepanel/panel/v3/pkg/cert"
+	"github.com/acepanel/panel/v3/pkg/config"
+	"github.com/acepanel/panel/v3/pkg/firewall"
+	"github.com/acepanel/panel/v3/pkg/io"
+	"github.com/acepanel/panel/v3/pkg/ntp"
+	"github.com/acepanel/panel/v3/pkg/os"
+	"github.com/acepanel/panel/v3/pkg/shell"
+	"github.com/acepanel/panel/v3/pkg/systemctl"
+	"github.com/acepanel/panel/v3/pkg/tools"
 )
 
 type CliService struct {
@@ -44,6 +45,7 @@ type CliService struct {
 	appRepo            biz.AppRepo
 	cacheRepo          biz.CacheRepo
 	userRepo           biz.UserRepo
+	userPasskeyRepo    biz.UserPasskeyRepo
 	settingRepo        biz.SettingRepo
 	backupRepo         biz.BackupRepo
 	websiteRepo        biz.WebsiteRepo
@@ -53,7 +55,7 @@ type CliService struct {
 	hash               hash.Hasher
 }
 
-func NewCliService(t *gotext.Locale, conf *config.Config, db *gorm.DB, appRepo biz.AppRepo, cache biz.CacheRepo, user biz.UserRepo, setting biz.SettingRepo, backup biz.BackupRepo, website biz.WebsiteRepo, databaseServer biz.DatabaseServerRepo, cert biz.CertRepo, certAccount biz.CertAccountRepo) *CliService {
+func NewCliService(t *gotext.Locale, conf *config.Config, db *gorm.DB, appRepo biz.AppRepo, cache biz.CacheRepo, user biz.UserRepo, userPasskey biz.UserPasskeyRepo, setting biz.SettingRepo, backup biz.BackupRepo, website biz.WebsiteRepo, databaseServer biz.DatabaseServerRepo, cert biz.CertRepo, certAccount biz.CertAccountRepo) *CliService {
 	return &CliService{
 		hr:                 `+----------------------------------------------------`,
 		api:                api.NewAPI(app.Version, app.Locale),
@@ -63,6 +65,7 @@ func NewCliService(t *gotext.Locale, conf *config.Config, db *gorm.DB, appRepo b
 		appRepo:            appRepo,
 		cacheRepo:          cache,
 		userRepo:           user,
+		userPasskeyRepo:    userPasskey,
 		settingRepo:        setting,
 		backupRepo:         backup,
 		websiteRepo:        website,
@@ -328,6 +331,28 @@ func (s *CliService) UserTwoFA(ctx context.Context, cmd *cli.Command) error {
 		return errors.New(s.t.Get("Failed to update 2FA: %v", err))
 	}
 
+	return nil
+}
+
+func (s *CliService) UserPasskey(ctx context.Context, cmd *cli.Command) error {
+	user := new(biz.User)
+	username := cmd.Args().Get(0)
+	if username == "" {
+		return errors.New(s.t.Get("Username cannot be empty"))
+	}
+
+	if err := s.db.Where("username", username).First(user).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return errors.New(s.t.Get("User not exists"))
+		}
+		return errors.New(s.t.Get("Failed to get user: %v", err))
+	}
+
+	if err := s.userPasskeyRepo.DeleteAllByUserID(user.ID); err != nil {
+		return errors.New(s.t.Get("Failed to clear passkeys: %v", err))
+	}
+
+	fmt.Println(s.t.Get("All passkeys cleared for user %s", username))
 	return nil
 }
 
@@ -706,21 +731,71 @@ func (s *CliService) CutoffWebsite(ctx context.Context, cmd *cli.Command) error 
 		return err
 	}
 	path := filepath.Join(app.Root, "sites", website.Name, "log")
-	if cmd.String("path") != "" {
-		path = cmd.String("path")
-	}
 
 	fmt.Println(s.hr)
 	fmt.Println(s.t.Get("★ Start log rotation [%s]", time.Now().Format(time.DateTime)))
 	fmt.Println(s.hr)
 	fmt.Println(s.t.Get("|-Rotation type: website"))
 	fmt.Println(s.t.Get("|-Rotation target: %s", website.Name))
-	if err = s.backupRepo.CutoffLog(path, filepath.Join(app.Root, "sites", website.Name, "log", "access.log")); err != nil {
+
+	var files []string
+	zipPath, err := s.backupRepo.CutoffLog(path, filepath.Join(path, "access.log"))
+	if err != nil {
 		return err
 	}
-	if err = s.backupRepo.CutoffLog(path, filepath.Join(app.Root, "sites", website.Name, "log", "error.log")); err != nil {
+	files = append(files, zipPath)
+	zipPath, err = s.backupRepo.CutoffLog(path, filepath.Join(path, "error.log"))
+	if err != nil {
 		return err
 	}
+	files = append(files, zipPath)
+
+	// 上传到远程存储
+	if cmd.Uint("storage") != 0 {
+		if err = s.backupRepo.CutoffUpload(cmd.Uint("storage"), biz.BackupTypeWebsite, website.Name, files); err != nil {
+			return err
+		}
+	}
+
+	fmt.Println(s.hr)
+	fmt.Println(s.t.Get("☆ Rotation successful [%s]", time.Now().Format(time.DateTime)))
+	fmt.Println(s.hr)
+	return nil
+}
+
+func (s *CliService) CutoffContainer(ctx context.Context, cmd *cli.Command) error {
+	name := cmd.String("name")
+
+	// 获取容器日志路径
+	logPath, err := shell.Execf("docker inspect --format='{{.LogPath}}' '%s'", name)
+	if err != nil {
+		return errors.New(s.t.Get("Failed to get container log path: %v", err))
+	}
+	logPath = strings.TrimSpace(logPath)
+	if logPath == "" {
+		return errors.New(s.t.Get("Container %s has no log file", name))
+	}
+
+	savePath := filepath.Join(app.Root, "server/cutoff/container", name)
+
+	fmt.Println(s.hr)
+	fmt.Println(s.t.Get("★ Start log rotation [%s]", time.Now().Format(time.DateTime)))
+	fmt.Println(s.hr)
+	fmt.Println(s.t.Get("|-Rotation type: container"))
+	fmt.Println(s.t.Get("|-Rotation target: %s", name))
+
+	zipPath, err := s.backupRepo.CutoffLog(savePath, logPath)
+	if err != nil {
+		return err
+	}
+
+	// 上传到远程存储
+	if cmd.Uint("storage") != 0 {
+		if err = s.backupRepo.CutoffUpload(cmd.Uint("storage"), "container", name, []string{zipPath}); err != nil {
+			return err
+		}
+	}
+
 	fmt.Println(s.hr)
 	fmt.Println(s.t.Get("☆ Rotation successful [%s]", time.Now().Format(time.DateTime)))
 	fmt.Println(s.hr)
@@ -728,32 +803,47 @@ func (s *CliService) CutoffWebsite(ctx context.Context, cmd *cli.Command) error 
 }
 
 func (s *CliService) CutoffClear(ctx context.Context, cmd *cli.Command) error {
-	if cmd.String("type") != "website" {
-		return errors.New(s.t.Get("Currently only website log rotation is supported"))
-	}
-
-	website, err := s.websiteRepo.GetByName(cmd.String("name"))
-	if err != nil {
-		return err
-	}
-
-	path := filepath.Join(app.Root, "sites", website.Name, "log")
-	if cmd.String("path") != "" {
-		path = cmd.String("path")
-	}
+	typ := cmd.String("type")
+	name := cmd.String("name")
+	keep := cmd.Uint("keep")
+	storageID := cmd.Uint("storage")
 
 	fmt.Println(s.hr)
 	fmt.Println(s.t.Get("★ Start cleaning rotated logs [%s]", time.Now().Format(time.DateTime)))
 	fmt.Println(s.hr)
-	fmt.Println(s.t.Get("|-Cleaning type: %s", cmd.String("type")))
-	fmt.Println(s.t.Get("|-Cleaning target: %s", website.Name))
-	fmt.Println(s.t.Get("|-Keep count: %d", cmd.Uint("keep")))
-	if err = s.backupRepo.ClearExpired(path, "access.log", cmd.Uint("keep")); err != nil {
-		return err
+	fmt.Println(s.t.Get("|-Cleaning type: %s", typ))
+	fmt.Println(s.t.Get("|-Cleaning target: %s", name))
+	fmt.Println(s.t.Get("|-Keep count: %d", keep))
+
+	switch typ {
+	case "website":
+		website, err := s.websiteRepo.GetByName(name)
+		if err != nil {
+			return err
+		}
+		path := filepath.Join(app.Root, "sites", website.Name, "log")
+		if err = s.backupRepo.ClearExpired(path, "access_", keep); err != nil {
+			return err
+		}
+		if err = s.backupRepo.ClearExpired(path, "error_", keep); err != nil {
+			return err
+		}
+	case "container":
+		path := filepath.Join(app.Root, "server/cutoff/container", name)
+		if err := s.backupRepo.ClearExpired(path, "", keep); err != nil {
+			return err
+		}
+	default:
+		return errors.New(s.t.Get("Unsupported rotation type: %s", typ))
 	}
-	if err = s.backupRepo.ClearExpired(path, "error.log", cmd.Uint("keep")); err != nil {
-		return err
+
+	// 清理远程存储过期日志
+	if storageID != 0 {
+		if err := s.backupRepo.ClearStorageExpired(storageID, biz.BackupType(typ), name, keep); err != nil {
+			return err
+		}
 	}
+
 	fmt.Println(s.hr)
 	fmt.Println(s.t.Get("☆ Cleaning successful [%s]", time.Now().Format(time.DateTime)))
 	fmt.Println(s.hr)
@@ -949,14 +1039,23 @@ func (s *CliService) Init(ctx context.Context, cmd *cli.Command) error {
 		{Key: biz.SettingKeyVersion, Value: app.Version},
 		{Key: biz.SettingKeyMonitor, Value: "true"},
 		{Key: biz.SettingKeyMonitorDays, Value: "30"},
+		{Key: biz.SettingKeyMonitorInterval, Value: "1"},
 		{Key: biz.SettingKeyBackupPath, Value: filepath.Join(app.Root, "backup")},
 		{Key: biz.SettingKeyWebsitePath, Value: filepath.Join(app.Root, "sites")},
 		{Key: biz.SettingKeyProjectPath, Value: filepath.Join(app.Root, "projects")},
+		{Key: biz.SettingKeyContainerSock, Value: "/var/run/docker.sock"},
 		{Key: biz.SettingKeyWebsiteTLSVersions, Value: `["TLSv1.2","TLSv1.3"]`},
-		{Key: biz.SettingKeyWebsiteCipherSuites, Value: `ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305:DHE-RSA-AES128-GCM-SHA256:DHE-RSA-AES256-GCM-SHA384:DHE-RSA-CHACHA20-POLY1305`},
 		{Key: biz.SettingKeyOfflineMode, Value: "false"},
 		{Key: biz.SettingKeyAutoUpdate, Value: "true"},
 		{Key: biz.SettingHiddenMenu, Value: "[]"},
+		{Key: biz.SettingKeyScanAware, Value: "false"},
+		{Key: biz.SettingKeyScanAwareDays, Value: "30"},
+		{Key: biz.SettingKeyWebsiteStatDays, Value: "30"},
+		{Key: biz.SettingKeyWebsiteStatErrBufMax, Value: "10000"},
+		{Key: biz.SettingKeyWebsiteStatUVMaxKeys, Value: "1000000"},
+		{Key: biz.SettingKeyWebsiteStatIPMaxKeys, Value: "500000"},
+		{Key: biz.SettingKeyWebsiteStatDetailMaxKeys, Value: "50000"},
+		{Key: biz.SettingKeyWebsiteStatBodyEnabled, Value: "false"},
 	}
 	if err = s.db.Create(&settings).Error; err != nil {
 		return errors.New(s.t.Get("Initialization failed: %v", err))

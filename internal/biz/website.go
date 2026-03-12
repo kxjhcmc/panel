@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/acepanel/panel/internal/http/request"
-	"github.com/acepanel/panel/pkg/types"
+	"github.com/acepanel/panel/v3/internal/http/request"
+	"github.com/acepanel/panel/v3/pkg/types"
 )
 
 type WebsiteType string
@@ -49,5 +49,5 @@ type WebsiteRepo interface {
 	ResetConfig(id uint) error
 	UpdateStatus(id uint, status bool) error
 	UpdateCert(req *request.WebsiteUpdateCert) error
-	ObtainCert(ctx context.Context, id uint) error
+	ObtainCert(ctx context.Context, id uint, dnsID uint) error
 }

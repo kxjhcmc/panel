@@ -3,8 +3,8 @@ package biz
 import (
 	"time"
 
-	"github.com/acepanel/panel/pkg/api"
-	"github.com/acepanel/panel/pkg/types"
+	"github.com/acepanel/panel/v3/pkg/api"
+	"github.com/acepanel/panel/v3/pkg/types"
 )
 
 type App struct {

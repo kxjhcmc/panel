@@ -3,7 +3,7 @@ package biz
 import (
 	"context"
 
-	"github.com/acepanel/panel/pkg/types"
+	"github.com/acepanel/panel/v3/pkg/types"
 )
 
 type BackupType string
@@ -12,7 +12,7 @@ const (
 	BackupTypePath     BackupType = "path"
 	BackupTypeWebsite  BackupType = "website"
 	BackupTypeMySQL    BackupType = "mysql"
-	BackupTypePostgres BackupType = "postgres"
+	BackupTypePostgres BackupType = "postgresql"
 	BackupTypeRedis    BackupType = "redis"
 	BackupTypePanel    BackupType = "panel"
 )
@@ -25,7 +25,8 @@ type BackupRepo interface {
 	Restore(ctx context.Context, typ BackupType, backup, target string) error
 	ClearExpired(path, prefix string, save uint) error
 	ClearStorageExpired(account uint, typ BackupType, prefix string, save uint) error
-	CutoffLog(path, target string) error
+	CutoffLog(path, target string) (string, error)
+	CutoffUpload(account uint, typ BackupType, name string, files []string) error
 	GetDefaultPath(typ BackupType) string
 	FixPanel() error
 	UpdatePanel(version, url, checksum string) error

@@ -141,7 +141,7 @@ func (d *Directive) ExportWithOptions(options *ExportOptions, indent int) string
 
 			// 如果参数包含空格，需要引用
 			if strings.Contains(arg, " ") && !strings.HasPrefix(arg, "\"") {
-				builder.WriteString(fmt.Sprintf(`"%s"`, arg))
+				_, _ = fmt.Fprintf(&builder, `"%s"`, arg)
 			} else {
 				builder.WriteString(arg)
 			}
@@ -250,7 +250,7 @@ func (b *Block) ExportWithOptions(options *ExportOptions, indent int) string {
 			}
 			// 如果参数包含空格，需要引用
 			if strings.Contains(arg, " ") && !strings.HasPrefix(arg, "\"") {
-				builder.WriteString(fmt.Sprintf(`"%s"`, arg))
+				_, _ = fmt.Fprintf(&builder, `"%s"`, arg)
 			} else {
 				builder.WriteString(arg)
 			}
@@ -314,7 +314,7 @@ func (b *Block) ExportWithOptions(options *ExportOptions, indent int) string {
 // exportItem 用于排序的导出项目
 type exportItem struct {
 	line int
-	item interface{}
+	item any
 	typ  string
 }
 

@@ -6,8 +6,8 @@ import (
 	"github.com/leonelquinteros/gotext"
 	"github.com/libtnb/chix"
 
-	"github.com/acepanel/panel/internal/biz"
-	"github.com/acepanel/panel/internal/http/request"
+	"github.com/acepanel/panel/v3/internal/biz"
+	"github.com/acepanel/panel/v3/internal/http/request"
 )
 
 type TemplateService struct {
@@ -86,8 +86,10 @@ func (s *TemplateService) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 回调
-	_ = s.templateRepo.Callback(req.Slug)
+	// 本地模板无需回调
+	if !template.Local {
+		_ = s.templateRepo.Callback(req.Slug)
+	}
 
 	Success(w, dir)
 }

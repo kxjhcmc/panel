@@ -5,9 +5,9 @@ import (
 
 	"github.com/robfig/cron/v3"
 
-	"github.com/acepanel/panel/internal/job"
-	"github.com/acepanel/panel/pkg/config"
-	pkgcron "github.com/acepanel/panel/pkg/cron"
+	"github.com/acepanel/panel/v3/internal/job"
+	"github.com/acepanel/panel/v3/pkg/config"
+	pkgcron "github.com/acepanel/panel/v3/pkg/cron"
 )
 
 func NewCron(conf *config.Config, log *slog.Logger, jobs *job.Jobs) (*cron.Cron, error) {

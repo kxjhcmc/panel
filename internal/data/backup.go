@@ -14,15 +14,15 @@ import (
 	"github.com/leonelquinteros/gotext"
 	"gorm.io/gorm"
 
-	"github.com/acepanel/panel/internal/app"
-	"github.com/acepanel/panel/internal/biz"
-	"github.com/acepanel/panel/pkg/config"
-	"github.com/acepanel/panel/pkg/db"
-	"github.com/acepanel/panel/pkg/io"
-	"github.com/acepanel/panel/pkg/shell"
-	"github.com/acepanel/panel/pkg/storage"
-	"github.com/acepanel/panel/pkg/tools"
-	"github.com/acepanel/panel/pkg/types"
+	"github.com/acepanel/panel/v3/internal/app"
+	"github.com/acepanel/panel/v3/internal/biz"
+	"github.com/acepanel/panel/v3/pkg/config"
+	"github.com/acepanel/panel/v3/pkg/db"
+	"github.com/acepanel/panel/v3/pkg/io"
+	"github.com/acepanel/panel/v3/pkg/shell"
+	"github.com/acepanel/panel/v3/pkg/storage"
+	"github.com/acepanel/panel/v3/pkg/tools"
+	"github.com/acepanel/panel/v3/pkg/types"
 )
 
 type backupRepo struct {
@@ -261,19 +261,51 @@ func (r *backupRepo) GetDefaultPath(typ biz.BackupType) string {
 // CutoffLog 切割日志
 // path 保存目录绝对路径
 // target 待切割日志文件绝对路径
-func (r *backupRepo) CutoffLog(path, target string) error {
+func (r *backupRepo) CutoffLog(path, target string) (string, error) {
 	if !io.Exists(target) {
-		return errors.New(r.t.Get("log file %s not exists", target))
+		return "", errors.New(r.t.Get("log file %s not exists", target))
 	}
 
-	to := filepath.Join(path, fmt.Sprintf("%s_%s.zip", time.Now().Format("20060102150405"), filepath.Base(target)))
+	name := strings.TrimSuffix(filepath.Base(target), filepath.Ext(target))
+	to := filepath.Join(path, fmt.Sprintf("%s_%s.zip", name, time.Now().Format("20060102150405")))
 	if err := io.Compress(filepath.Dir(target), []string{filepath.Base(target)}, to); err != nil {
-		return err
+		return "", err
 	}
 
 	// 原文件不能直接删除，直接删的话仍会占用空间直到重启相关的应用
 	if _, err := shell.Execf("cat /dev/null > '%s'", target); err != nil {
+		return "", err
+	}
+
+	return to, nil
+}
+
+// CutoffUpload 将指定的切割日志文件上传到远程存储
+func (r *backupRepo) CutoffUpload(account uint, typ biz.BackupType, name string, files []string) error {
+	backupStorage := new(biz.BackupStorage)
+	if err := r.db.First(backupStorage, account).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return errors.New(r.t.Get("backup storage not found"))
+		}
 		return err
+	}
+
+	client, err := r.getStorage(*backupStorage)
+	if err != nil {
+		return err
+	}
+
+	for _, localPath := range files {
+		file, err := os.Open(localPath)
+		if err != nil {
+			return err
+		}
+		remotePath := filepath.Join("cutoff", string(typ), name, filepath.Base(localPath))
+		if putErr := client.Put(remotePath, file); putErr != nil {
+			_ = file.Close()
+			return putErr
+		}
+		_ = file.Close()
 	}
 
 	return nil
@@ -461,7 +493,7 @@ func (r *backupRepo) createWebsite(name string, storage storage.Storage, target 
 	}
 	defer func(file *os.File) { _ = file.Close() }(file)
 
-	if err = storage.Put(filepath.Join("website", name), file); err != nil {
+	if err = storage.Put(filepath.Join(string(biz.BackupTypeWebsite), name), file); err != nil {
 		return err
 	}
 
@@ -519,7 +551,7 @@ func (r *backupRepo) createMySQL(name string, storage storage.Storage, target st
 	}
 	defer func(file *os.File) { _ = file.Close() }(file)
 
-	if err = storage.Put(filepath.Join("mysql", name), file); err != nil {
+	if err = storage.Put(filepath.Join(string(biz.BackupTypeMySQL), name), file); err != nil {
 		return err
 	}
 
@@ -577,7 +609,7 @@ func (r *backupRepo) createPostgres(name string, storage storage.Storage, target
 	}
 	defer func(file *os.File) { _ = file.Close() }(file)
 
-	if err = storage.Put(filepath.Join("postgres", name), file); err != nil {
+	if err = storage.Put(filepath.Join(string(biz.BackupTypePostgres), name), file); err != nil {
 		return err
 	}
 
@@ -717,19 +749,57 @@ func (r *backupRepo) FixPanel() error {
 	}
 
 	// 检查关键文件是否正常
-	flag := !io.Exists(filepath.Join(app.Root, "panel", "ace")) ||
+	panelBroken := !io.Exists(filepath.Join(app.Root, "panel", "ace")) ||
 		!io.Exists(filepath.Join(app.Root, "panel", "storage", "config.yml")) ||
 		!io.Exists(filepath.Join(app.Root, "panel", "storage", "panel.db")) ||
 		io.Exists("/tmp/panel-storage.zip")
-	// 检查数据库连接
+	// 检查主数据库连接
 	if err := r.db.Exec("VACUUM").Error; err != nil {
-		flag = true
+		panelBroken = true
 	}
 	if err := r.db.Exec("PRAGMA wal_checkpoint(TRUNCATE);").Error; err != nil {
-		flag = true
+		panelBroken = true
 	}
-	if !flag {
+
+	// 检查辅助数据库是否异常
+	var brokenAuxDBs []string
+	for _, name := range []string{"stat", "scan"} {
+		auxDB, err := openDB(name)
+		if err == nil {
+			if sqlDB, dbErr := auxDB.DB(); dbErr == nil {
+				_ = sqlDB.Close()
+			}
+			continue
+		}
+		brokenAuxDBs = append(brokenAuxDBs, name)
+	}
+
+	// 一切正常，无需修复
+	if !panelBroken && len(brokenAuxDBs) == 0 {
 		return errors.New(r.t.Get("Files are normal and do not need to be repaired, please run acepanel update to update the panel"))
+	}
+
+	// 有异常，先停止面板
+	tools.StopPanel()
+
+	// 删除损坏的辅助数据库（会自动重建）
+	for _, name := range brokenAuxDBs {
+		dbPath := filepath.Join(app.Root, "panel", "storage", name+".db")
+		if removeErr := io.Remove(dbPath); removeErr != nil {
+			return errors.New(r.t.Get("Failed to remove %s.db: %v", name, removeErr))
+		}
+		if app.IsCli {
+			fmt.Println(r.t.Get("|-Found %s.db is abnormal, removed it", name))
+		}
+	}
+
+	// 仅辅助数据库异常，重启即可恢复
+	if !panelBroken {
+		if app.IsCli {
+			fmt.Println(r.t.Get("|-Fix completed"))
+		}
+		tools.RestartPanel()
+		return nil
 	}
 
 	// 再次确认是否需要修复

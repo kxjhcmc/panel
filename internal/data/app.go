@@ -13,12 +13,12 @@ import (
 	"github.com/spf13/cast"
 	"gorm.io/gorm"
 
-	"github.com/acepanel/panel/internal/app"
-	"github.com/acepanel/panel/internal/biz"
-	"github.com/acepanel/panel/pkg/api"
-	"github.com/acepanel/panel/pkg/config"
-	"github.com/acepanel/panel/pkg/shell"
-	"github.com/acepanel/panel/pkg/types"
+	"github.com/acepanel/panel/v3/internal/app"
+	"github.com/acepanel/panel/v3/internal/biz"
+	"github.com/acepanel/panel/v3/pkg/api"
+	"github.com/acepanel/panel/v3/pkg/config"
+	"github.com/acepanel/panel/v3/pkg/shell"
+	"github.com/acepanel/panel/v3/pkg/types"
 )
 
 type appRepo struct {
@@ -227,8 +227,7 @@ func (r *appRepo) Install(channel, slug string) error {
 	task := new(biz.Task)
 	task.Name = r.t.Get("Install app %s", item.Name)
 	task.Status = biz.TaskStatusWaiting
-	task.Shell = fmt.Sprintf(`curl -sSLm 10 --retry 3 "%s" | bash -s -- "%s" "%s" >> /tmp/%s.log 2>&1`, shellUrl, shellChannel, shellVersion, item.Slug)
-	task.Log = "/tmp/" + item.Slug + ".log"
+	task.Shell = fmt.Sprintf(`curl -sSLm 10 --retry 3 "%s" | bash -s -- "%s" "%s"`, shellUrl, shellChannel, shellVersion)
 
 	return r.task.Push(task)
 }
@@ -282,8 +281,7 @@ func (r *appRepo) UnInstall(slug string) error {
 	task := new(biz.Task)
 	task.Name = r.t.Get("Uninstall app %s", item.Name)
 	task.Status = biz.TaskStatusWaiting
-	task.Shell = fmt.Sprintf(`curl -sSLm 10 --retry 3 "%s" | bash -s -- "%s" "%s" >> /tmp/%s.log 2>&1`, shellUrl, shellChannel, shellVersion, item.Slug)
-	task.Log = "/tmp/" + item.Slug + ".log"
+	task.Shell = fmt.Sprintf(`curl -sSLm 10 --retry 3 "%s" | bash -s -- "%s" "%s"`, shellUrl, shellChannel, shellVersion)
 
 	return r.task.Push(task)
 }
@@ -342,8 +340,7 @@ func (r *appRepo) Update(slug string) error {
 	task := new(biz.Task)
 	task.Name = r.t.Get("Update app %s", item.Name)
 	task.Status = biz.TaskStatusWaiting
-	task.Shell = fmt.Sprintf(`curl -sSLm 10 --retry 3 "%s" | bash -s -- "%s" "%s" >> /tmp/%s.log 2>&1`, shellUrl, shellChannel, shellVersion, item.Slug)
-	task.Log = "/tmp/" + item.Slug + ".log"
+	task.Shell = fmt.Sprintf(`curl -sSLm 10 --retry 3 "%s" | bash -s -- "%s" "%s"`, shellUrl, shellChannel, shellVersion)
 
 	return r.task.Push(task)
 }

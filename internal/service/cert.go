@@ -6,10 +6,10 @@ import (
 	"github.com/leonelquinteros/gotext"
 	"github.com/libtnb/chix"
 
-	"github.com/acepanel/panel/internal/biz"
-	"github.com/acepanel/panel/internal/http/request"
-	"github.com/acepanel/panel/pkg/acme"
-	"github.com/acepanel/panel/pkg/types"
+	"github.com/acepanel/panel/v3/internal/biz"
+	"github.com/acepanel/panel/v3/internal/http/request"
+	"github.com/acepanel/panel/v3/pkg/acme"
+	"github.com/acepanel/panel/v3/pkg/types"
 )
 
 type CertService struct {
@@ -272,7 +272,7 @@ func (s *CertService) Deploy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err = s.certRepo.Deploy(req.ID, req.WebsiteID)
+	err = s.certRepo.Deploy(req.ID, req.WebsiteID, req.EnableHTTPS)
 	if err != nil {
 		Error(w, http.StatusInternalServerError, "%v", err)
 		return

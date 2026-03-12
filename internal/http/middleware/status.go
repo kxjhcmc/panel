@@ -5,7 +5,7 @@ import (
 
 	"github.com/leonelquinteros/gotext"
 
-	"github.com/acepanel/panel/internal/app"
+	"github.com/acepanel/panel/v3/internal/app"
 )
 
 // Status 检查程序状态

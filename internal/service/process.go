@@ -12,8 +12,8 @@ import (
 	"github.com/libtnb/chix"
 	"github.com/shirou/gopsutil/v4/process"
 
-	"github.com/acepanel/panel/internal/http/request"
-	"github.com/acepanel/panel/pkg/types"
+	"github.com/acepanel/panel/v3/internal/http/request"
+	"github.com/acepanel/panel/v3/pkg/types"
 )
 
 type ProcessService struct {

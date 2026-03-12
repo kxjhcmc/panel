@@ -17,7 +17,7 @@
 [![Go](https://img.shields.io/github/go-mod/go-version/acepanel/panel)](https://go.dev/)
 [![Release](https://img.shields.io/github/release/acepanel/panel.svg)](https://github.com/acepanel/panel/releases)
 [![Test](https://github.com/acepanel/panel/actions/workflows/test.yml/badge.svg)](https://github.com/acepanel/panel/actions)
-[![Report Card](https://goreportcard.com/badge/github.com/acepanel/panel)](https://goreportcard.com/report/github.com/acepanel/panel)
+[![Report Card](https://goreportcard.com/badge/github.com/acepanel/panel/v3)](https://goreportcard.com/report/github.com/acepanel/panel/v3)
 [![Stars](https://img.shields.io/github/stars/acepanel/panel?style=flat)](https://github.com/acepanel/panel)
 [![License](https://img.shields.io/github/license/acepanel/panel)](https://opensource.org/license/bsd-3-clause)
 
@@ -43,7 +43,7 @@ bash <(curl -sSLm 10 https://dl.acepanel.net/helper.sh)
 ```
 
 > [!NOTE]
-> 耗子面板 2.x -> AcePanel 3.0 迁移工具将在近期发布，敬请期待！
+> 耗子面板 2.x -> AcePanel 3.0 迁移说明：[https://tom.moe/t/topic/3540](https://tom.moe/t/topic/3540)
 
 ## UI 截图
 

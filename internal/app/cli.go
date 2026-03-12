@@ -8,7 +8,7 @@ import (
 	"github.com/gookit/color"
 	"github.com/urfave/cli/v3"
 
-	"github.com/acepanel/panel/pkg/apploader"
+	"github.com/acepanel/panel/v3/pkg/apploader"
 )
 
 type Cli struct {

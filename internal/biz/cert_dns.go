@@ -4,8 +4,8 @@ import (
 	"context"
 	"time"
 
-	"github.com/acepanel/panel/internal/http/request"
-	"github.com/acepanel/panel/pkg/acme"
+	"github.com/acepanel/panel/v3/internal/http/request"
+	"github.com/acepanel/panel/v3/pkg/acme"
 )
 
 type CertDNS struct {

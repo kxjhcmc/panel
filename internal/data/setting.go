@@ -4,104 +4,103 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"path/filepath"
+	"time"
 
 	"github.com/leonelquinteros/gotext"
+	"github.com/libtnb/cache"
 	"github.com/spf13/cast"
 	"gorm.io/gorm"
 
-	"github.com/acepanel/panel/internal/app"
-	"github.com/acepanel/panel/internal/biz"
-	"github.com/acepanel/panel/internal/http/request"
-	"github.com/acepanel/panel/pkg/cert"
-	"github.com/acepanel/panel/pkg/config"
-	"github.com/acepanel/panel/pkg/firewall"
-	"github.com/acepanel/panel/pkg/io"
-	"github.com/acepanel/panel/pkg/os"
+	"github.com/acepanel/panel/v3/internal/app"
+	"github.com/acepanel/panel/v3/internal/biz"
+	"github.com/acepanel/panel/v3/internal/http/request"
+	"github.com/acepanel/panel/v3/pkg/cert"
+	"github.com/acepanel/panel/v3/pkg/config"
+	"github.com/acepanel/panel/v3/pkg/firewall"
+	"github.com/acepanel/panel/v3/pkg/io"
+	"github.com/acepanel/panel/v3/pkg/os"
 )
 
+const settingCacheTTL = 5 * time.Minute
+
 type settingRepo struct {
-	t    *gotext.Locale
-	db   *gorm.DB
-	log  *slog.Logger
-	conf *config.Config
-	task biz.TaskRepo
+	t     *gotext.Locale
+	db    *gorm.DB
+	log   *slog.Logger
+	conf  *config.Config
+	cache cache.Cache
+	task  biz.TaskRepo
 }
 
 func NewSettingRepo(t *gotext.Locale, db *gorm.DB, log *slog.Logger, conf *config.Config, task biz.TaskRepo) biz.SettingRepo {
 	return &settingRepo{
-		t:    t,
-		db:   db,
-		log:  log,
-		conf: conf,
-		task: task,
+		t:     t,
+		db:    db,
+		log:   log,
+		conf:  conf,
+		cache: cache.NewCache(),
+		task:  task,
 	}
 }
 
 func (r *settingRepo) Get(key biz.SettingKey, defaultValue ...string) (string, error) {
-	setting := new(biz.Setting)
-	if err := r.db.Where("key = ?", key).First(setting).Error; err != nil {
-		if !errors.Is(err, gorm.ErrRecordNotFound) {
-			return "", err
-		}
+	value, err := r.getRaw(key)
+	if err != nil {
+		return "", err
 	}
 
-	if setting.Value == "" && len(defaultValue) > 0 {
+	if value == "" && len(defaultValue) > 0 {
 		return defaultValue[0], nil
 	}
 
-	return setting.Value, nil
+	return value, nil
 }
 
 func (r *settingRepo) GetBool(key biz.SettingKey, defaultValue ...bool) (bool, error) {
-	setting := new(biz.Setting)
-	if err := r.db.Where("key = ?", key).First(setting).Error; err != nil {
-		if !errors.Is(err, gorm.ErrRecordNotFound) {
-			return false, err
-		}
+	value, err := r.getRaw(key)
+	if err != nil {
+		return false, err
 	}
 
-	if setting.Value == "" && len(defaultValue) > 0 {
+	if value == "" && len(defaultValue) > 0 {
 		return defaultValue[0], nil
 	}
 
-	return cast.ToBool(setting.Value), nil
+	return cast.ToBool(value), nil
 }
 
 func (r *settingRepo) GetInt(key biz.SettingKey, defaultValue ...int) (int, error) {
-	setting := new(biz.Setting)
-	if err := r.db.Where("key = ?", key).First(setting).Error; err != nil {
-		if !errors.Is(err, gorm.ErrRecordNotFound) {
-			return 0, err
-		}
+	value, err := r.getRaw(key)
+	if err != nil {
+		return 0, err
 	}
 
-	if setting.Value == "" && len(defaultValue) > 0 {
+	if value == "" && len(defaultValue) > 0 {
 		return defaultValue[0], nil
 	}
 
-	return cast.ToInt(setting.Value), nil
+	return cast.ToInt(value), nil
 }
 
 func (r *settingRepo) GetSlice(key biz.SettingKey, defaultValue ...[]string) ([]string, error) {
-	setting := new(biz.Setting)
-	if err := r.db.Where("key = ?", key).First(setting).Error; err != nil {
-		if !errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, err
-		}
+	value, err := r.getRaw(key)
+	if err != nil {
+		return nil, err
 	}
 
 	// 设置值为空时提前返回
 	slice := make([]string, 0)
-	if setting.Value == "" {
+	if value == "" {
 		if len(defaultValue) > 0 {
 			return defaultValue[0], nil
 		}
 		return slice, nil
 	}
 
-	if err := json.Unmarshal([]byte(setting.Value), &slice); err != nil {
+	if err = json.Unmarshal([]byte(value), &slice); err != nil {
 		return nil, err
 	}
 	if len(slice) == 0 && len(defaultValue) > 0 {
@@ -125,6 +124,7 @@ func (r *settingRepo) Set(key biz.SettingKey, value string) error {
 		return err
 	}
 
+	r.cache.Forget(r.cacheKey(key))
 	return nil
 }
 
@@ -151,6 +151,7 @@ func (r *settingRepo) SetSlice(key biz.SettingKey, value []string) error {
 		return err
 	}
 
+	r.cache.Forget(r.cacheKey(key))
 	return nil
 }
 
@@ -160,6 +161,7 @@ func (r *settingRepo) Delete(key biz.SettingKey) error {
 		return err
 	}
 
+	r.cache.Forget(r.cacheKey(key))
 	return nil
 }
 
@@ -192,11 +194,27 @@ func (r *settingRepo) GetPanel() (*request.SettingPanel, error) {
 	if err != nil {
 		return nil, err
 	}
+	containerSock, err := r.Get(biz.SettingKeyContainerSock)
+	if err != nil {
+		return nil, err
+	}
 	hiddenMenu, err := r.GetSlice(biz.SettingHiddenMenu)
 	if err != nil {
 		return nil, err
 	}
 	customLogo, err := r.Get(biz.SettingKeyCustomLogo)
+	if err != nil {
+		return nil, err
+	}
+	ipdbType, err := r.Get(biz.SettingKeyIPDBType)
+	if err != nil {
+		return nil, err
+	}
+	ipdbURL, err := r.Get(biz.SettingKeyIPDBURL)
+	if err != nil {
+		return nil, err
+	}
+	ipdbPath, err := r.Get(biz.SettingKeyIPDBPath)
 	if err != nil {
 		return nil, err
 	}
@@ -229,8 +247,12 @@ func (r *settingRepo) GetPanel() (*request.SettingPanel, error) {
 		WebsitePath:   websitePath,
 		BackupPath:    backupPath,
 		ProjectPath:   projectPath,
+		ContainerSock: containerSock,
 		HiddenMenu:    hiddenMenu,
 		CustomLogo:    customLogo,
+		IPDBType:      ipdbType,
+		IPDBURL:       ipdbURL,
+		IPDBPath:      ipdbPath,
 		Port:          r.conf.HTTP.Port,
 		HTTPS:         r.conf.HTTP.TLS,
 		ACME:          r.conf.HTTP.ACME,
@@ -262,14 +284,43 @@ func (r *settingRepo) UpdatePanel(ctx context.Context, req *request.SettingPanel
 	if err := r.Set(biz.SettingKeyProjectPath, req.ProjectPath); err != nil {
 		return false, err
 	}
+	if err := r.Set(biz.SettingKeyContainerSock, req.ContainerSock); err != nil {
+		return false, err
+	}
 	if err := r.SetSlice(biz.SettingHiddenMenu, req.HiddenMenu); err != nil {
 		return false, err
 	}
 	if err := r.Set(biz.SettingKeyCustomLogo, req.CustomLogo); err != nil {
 		return false, err
 	}
+	if err := r.Set(biz.SettingKeyIPDBType, req.IPDBType); err != nil {
+		return false, err
+	}
+	ipdbURL := req.IPDBURL
+	if req.IPDBType == "subscribe" && ipdbURL == "" {
+		// https://github.com/metowolf/qqwry.ipdb
+		ipdbURL = "https://fastly.jsdelivr.net/npm/qqwry.ipdb/qqwry.ipdb"
+	}
+	if err := r.Set(biz.SettingKeyIPDBURL, ipdbURL); err != nil {
+		return false, err
+	}
+	if err := r.Set(biz.SettingKeyIPDBPath, req.IPDBPath); err != nil {
+		return false, err
+	}
 	if err := r.SetSlice(biz.SettingKeyPublicIPs, req.PublicIP); err != nil {
 		return false, err
+	}
+
+	// 订阅模式后台下载 IPDB
+	if req.IPDBType == "subscribe" && ipdbURL != "" {
+		go func() {
+			destPath := filepath.Join(app.Root, "panel/storage/geo.ipdb")
+			if err := io.DownloadFile(ipdbURL, destPath); err != nil {
+				r.log.Warn("failed to download ipdb", slog.String("url", ipdbURL), slog.Any("err", err))
+			} else {
+				r.log.Info("ipdb downloaded", slog.String("url", ipdbURL))
+			}
+		}()
 	}
 
 	// 下面是需要需要重启的设置
@@ -372,4 +423,27 @@ func (r *settingRepo) UpdateCert(req *request.SettingCert) error {
 	}
 
 	return nil
+}
+
+// cacheKey 生成设置项的缓存 key
+func (r *settingRepo) cacheKey(key biz.SettingKey) string {
+	return fmt.Sprintf("setting:%s", key)
+}
+
+// getRaw 从缓存或数据库获取设置项的原始字符串值
+func (r *settingRepo) getRaw(key biz.SettingKey) (string, error) {
+	cacheKey := r.cacheKey(key)
+	if r.cache.Has(cacheKey) {
+		return r.cache.GetString(cacheKey), nil
+	}
+
+	setting := new(biz.Setting)
+	if err := r.db.Where("key = ?", key).First(setting).Error; err != nil {
+		if !errors.Is(err, gorm.ErrRecordNotFound) {
+			return "", err
+		}
+	}
+
+	_ = r.cache.Put(cacheKey, setting.Value, settingCacheTTL)
+	return setting.Value, nil
 }

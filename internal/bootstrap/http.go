@@ -10,11 +10,11 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/leonelquinteros/gotext"
 
-	"github.com/acepanel/panel/internal/app"
-	"github.com/acepanel/panel/internal/http/middleware"
-	"github.com/acepanel/panel/internal/route"
-	"github.com/acepanel/panel/pkg/config"
-	"github.com/acepanel/panel/pkg/tlscert"
+	"github.com/acepanel/panel/v3/internal/app"
+	"github.com/acepanel/panel/v3/internal/http/middleware"
+	"github.com/acepanel/panel/v3/internal/route"
+	"github.com/acepanel/panel/v3/pkg/config"
+	"github.com/acepanel/panel/v3/pkg/tlscert"
 )
 
 func NewRouter(t *gotext.Locale, middlewares *middleware.Middlewares, http *route.Http, ws *route.Ws) (*chi.Mux, error) {

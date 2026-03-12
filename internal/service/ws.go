@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/coder/websocket"
 	"github.com/leonelquinteros/gotext"
@@ -14,27 +16,29 @@ import (
 	"github.com/moby/moby/client"
 	stdssh "golang.org/x/crypto/ssh"
 
-	"github.com/acepanel/panel/internal/biz"
-	"github.com/acepanel/panel/internal/http/request"
-	"github.com/acepanel/panel/pkg/config"
-	"github.com/acepanel/panel/pkg/docker"
-	"github.com/acepanel/panel/pkg/shell"
-	"github.com/acepanel/panel/pkg/ssh"
+	"github.com/acepanel/panel/v3/internal/biz"
+	"github.com/acepanel/panel/v3/internal/http/request"
+	"github.com/acepanel/panel/v3/pkg/config"
+	"github.com/acepanel/panel/v3/pkg/docker"
+	"github.com/acepanel/panel/v3/pkg/shell"
+	"github.com/acepanel/panel/v3/pkg/ssh"
 )
 
 type WsService struct {
-	t       *gotext.Locale
-	conf    *config.Config
-	log     *slog.Logger
-	sshRepo biz.SSHRepo
+	t           *gotext.Locale
+	conf        *config.Config
+	log         *slog.Logger
+	sshRepo     biz.SSHRepo
+	settingRepo biz.SettingRepo
 }
 
-func NewWsService(t *gotext.Locale, conf *config.Config, log *slog.Logger, ssh biz.SSHRepo) *WsService {
+func NewWsService(t *gotext.Locale, conf *config.Config, log *slog.Logger, ssh biz.SSHRepo, settingRepo biz.SettingRepo) *WsService {
 	return &WsService{
-		t:       t,
-		conf:    conf,
-		log:     log,
-		sshRepo: ssh,
+		t:           t,
+		conf:        conf,
+		log:         log,
+		sshRepo:     ssh,
+		settingRepo: settingRepo,
 	}
 }
 
@@ -178,14 +182,13 @@ func (s *WsService) ContainerTerminal(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 
-	// 默认使用 bash 作为 shell，如果不存在则回退到 sh
-	turn, err := docker.NewTurn(ctx, ws, req.ID, []string{"/bin/bash"})
+	sock := s.getContainerSock()
+
+	// 通过 /bin/sh 启动，自动尝试切换到 bash，不存在则留在 sh
+	turn, err := docker.NewTurn(ctx, ws, req.ID, []string{"/bin/sh", "-c", "exec bash 2>/dev/null || exec sh"}, sock)
 	if err != nil {
-		turn, err = docker.NewTurn(ctx, ws, req.ID, []string{"/bin/sh"})
-		if err != nil {
-			_ = ws.Close(websocket.StatusNormalClosure, s.t.Get("failed to start container terminal: %v", err))
-			return
-		}
+		_ = ws.Close(websocket.StatusNormalClosure, s.t.Get("failed to start container terminal: %v", err))
+		return
 	}
 
 	go func() {
@@ -220,7 +223,7 @@ func (s *WsService) ContainerImagePull(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 创建 Docker 客户端
-	apiClient, err := client.New(client.WithHost("unix:///var/run/docker.sock"))
+	apiClient, err := client.New(client.WithHost(s.getContainerSock()))
 	if err != nil {
 		_ = ws.Close(websocket.StatusNormalClosure, s.t.Get("failed to create docker client: %v", err))
 		return
@@ -286,6 +289,18 @@ func (s *WsService) ContainerImagePull(w http.ResponseWriter, r *http.Request) {
 	})
 	_ = ws.Write(ctx, websocket.MessageText, completeMsg)
 	_ = ws.Close(websocket.StatusNormalClosure, "")
+}
+
+// getContainerSock 获取容器 socket 路径
+func (s *WsService) getContainerSock() string {
+	sock, _ := s.settingRepo.Get(biz.SettingKeyContainerSock)
+	if sock == "" {
+		sock = "/var/run/docker.sock"
+	}
+	if !strings.Contains(sock, "://") {
+		sock = fmt.Sprintf("unix://%s", sock)
+	}
+	return sock
 }
 
 func (s *WsService) upgrade(w http.ResponseWriter, r *http.Request) (*websocket.Conn, error) {

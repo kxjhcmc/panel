@@ -1,6 +1,6 @@
 package request
 
-import "github.com/acepanel/panel/pkg/types"
+import "github.com/acepanel/panel/v3/pkg/types"
 
 type ProjectCreate struct {
 	Name         string            `form:"name" json:"name" validate:"required|regex:^[a-zA-Z0-9_-]+$"`

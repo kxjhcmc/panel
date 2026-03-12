@@ -4,8 +4,8 @@ import (
 	"log"
 	"time"
 
-	"github.com/acepanel/panel/internal/app"
-	"github.com/acepanel/panel/pkg/config"
+	"github.com/acepanel/panel/v3/internal/app"
+	"github.com/acepanel/panel/v3/pkg/config"
 )
 
 func NewConf() (*config.Config, error) {

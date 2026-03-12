@@ -7,10 +7,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/acepanel/panel/internal/app"
-	"github.com/acepanel/panel/internal/biz"
-	"github.com/acepanel/panel/pkg/shell"
-	"github.com/acepanel/panel/pkg/types"
+	"github.com/acepanel/panel/v3/internal/app"
+	"github.com/acepanel/panel/v3/internal/biz"
+	"github.com/acepanel/panel/v3/pkg/shell"
+	"github.com/acepanel/panel/v3/pkg/types"
 )
 
 type containerComposeRepo struct{}
@@ -78,7 +78,7 @@ func (r *containerComposeRepo) Get(name string) (string, []types.KV, error) {
 	env, _ := os.ReadFile(filepath.Join(app.Root, "compose", name, ".env"))
 
 	var envs []types.KV
-	for _, line := range strings.Split(string(env), "\n") {
+	for line := range strings.SplitSeq(string(env), "\n") {
 		if line == "" {
 			continue
 		}

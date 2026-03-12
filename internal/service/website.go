@@ -6,10 +6,10 @@ import (
 
 	"github.com/libtnb/chix"
 
-	"github.com/acepanel/panel/internal/app"
-	"github.com/acepanel/panel/internal/biz"
-	"github.com/acepanel/panel/internal/http/request"
-	"github.com/acepanel/panel/pkg/io"
+	"github.com/acepanel/panel/v3/internal/app"
+	"github.com/acepanel/panel/v3/internal/biz"
+	"github.com/acepanel/panel/v3/internal/http/request"
+	"github.com/acepanel/panel/v3/pkg/io"
 )
 
 type WebsiteService struct {
@@ -50,14 +50,12 @@ func (s *WebsiteService) GetDefaultConfig(w http.ResponseWriter, r *http.Request
 	stop, _ := io.Read(filepath.Join(htmlPath, "stop.html"))
 	notFound, _ := io.Read(filepath.Join(htmlPath, "404.html"))
 	tlsVersions, _ := s.settingRepo.GetSlice(biz.SettingKeyWebsiteTLSVersions)
-	cipherSuites, _ := s.settingRepo.Get(biz.SettingKeyWebsiteCipherSuites)
 
 	Success(w, chix.M{
-		"index":         index,
-		"stop":          stop,
-		"not_found":     notFound,
-		"tls_versions":  tlsVersions,
-		"cipher_suites": cipherSuites,
+		"index":        index,
+		"stop":         stop,
+		"not_found":    notFound,
+		"tls_versions": tlsVersions,
 	})
 }
 
@@ -239,13 +237,13 @@ func (s *WebsiteService) UpdateStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *WebsiteService) ObtainCert(w http.ResponseWriter, r *http.Request) {
-	req, err := Bind[request.ID](r)
+	req, err := Bind[request.WebsiteObtainCert](r)
 	if err != nil {
 		Error(w, http.StatusUnprocessableEntity, "%v", err)
 		return
 	}
 
-	if err = s.websiteRepo.ObtainCert(r.Context(), req.ID); err != nil {
+	if err = s.websiteRepo.ObtainCert(r.Context(), req.ID, req.DNSID); err != nil {
 		Error(w, http.StatusInternalServerError, "%v", err)
 		return
 	}

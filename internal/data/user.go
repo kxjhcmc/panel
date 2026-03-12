@@ -13,7 +13,7 @@ import (
 	"github.com/spf13/cast"
 	"gorm.io/gorm"
 
-	"github.com/acepanel/panel/internal/biz"
+	"github.com/acepanel/panel/v3/internal/biz"
 )
 
 type userRepo struct {

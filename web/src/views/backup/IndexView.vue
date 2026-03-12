@@ -37,7 +37,7 @@ const postgreSQLInstalled = computed(() => {
       <n-tabs v-model:value="currentTab" animated>
         <n-tab name="website" :tab="$gettext('Website')" />
         <n-tab v-if="mySQLInstalled" name="mysql" tab="MySQL" />
-        <n-tab v-if="postgreSQLInstalled" name="postgres" tab="PostgreSQL" />
+        <n-tab v-if="postgreSQLInstalled" name="postgresql" tab="PostgreSQL" />
         <n-tab name="storage" :tab="$gettext('Storage')" />
       </n-tabs>
     </template>

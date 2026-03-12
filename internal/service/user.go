@@ -20,10 +20,10 @@ import (
 	"github.com/pquerna/otp/totp"
 	"github.com/spf13/cast"
 
-	"github.com/acepanel/panel/internal/biz"
-	"github.com/acepanel/panel/internal/http/request"
-	"github.com/acepanel/panel/pkg/config"
-	"github.com/acepanel/panel/pkg/rsacrypto"
+	"github.com/acepanel/panel/v3/internal/biz"
+	"github.com/acepanel/panel/v3/internal/http/request"
+	"github.com/acepanel/panel/v3/pkg/config"
+	"github.com/acepanel/panel/v3/pkg/rsacrypto"
 )
 
 // 登录失败次数阈值，超过此次数需要验证码
@@ -175,6 +175,7 @@ func (s *UserService) Login(w http.ResponseWriter, r *http.Request) {
 	sess.Put("refresh_at", time.Now().Unix())
 	sess.Forget("key")
 	sess.Forget("login_fail_count")
+
 	Success(w, nil)
 }
 

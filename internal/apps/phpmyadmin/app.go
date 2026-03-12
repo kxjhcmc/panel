@@ -12,12 +12,12 @@ import (
 	"github.com/libtnb/chix"
 	"github.com/spf13/cast"
 
-	"github.com/acepanel/panel/internal/app"
-	"github.com/acepanel/panel/internal/service"
-	"github.com/acepanel/panel/pkg/firewall"
-	"github.com/acepanel/panel/pkg/io"
-	"github.com/acepanel/panel/pkg/shell"
-	"github.com/acepanel/panel/pkg/systemctl"
+	"github.com/acepanel/panel/v3/internal/app"
+	"github.com/acepanel/panel/v3/internal/service"
+	"github.com/acepanel/panel/v3/pkg/firewall"
+	"github.com/acepanel/panel/v3/pkg/io"
+	"github.com/acepanel/panel/v3/pkg/shell"
+	"github.com/acepanel/panel/v3/pkg/systemctl"
 )
 
 type App struct {

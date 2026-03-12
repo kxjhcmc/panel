@@ -3,15 +3,14 @@ package request
 import (
 	"net/http"
 
-	"github.com/acepanel/panel/pkg/webserver/types"
+	"github.com/acepanel/panel/v3/pkg/webserver/types"
 )
 
 type WebsiteDefaultConfig struct {
-	Index        string   `json:"index" form:"index" validate:"required"`
-	Stop         string   `json:"stop" form:"stop" validate:"required"`
-	NotFound     string   `json:"not_found" form:"not_found"`
-	TLSVersions  []string `json:"tls_versions" form:"tls_versions" validate:"required|isSlice"`
-	CipherSuites string   `json:"cipher_suites" form:"cipher_suites" validate:"required"`
+	Index       string   `json:"index" form:"index" validate:"required"`
+	Stop        string   `json:"stop" form:"stop" validate:"required"`
+	NotFound    string   `json:"not_found" form:"not_found"`
+	TLSVersions []string `json:"tls_versions" form:"tls_versions" validate:"required|isSlice"`
 }
 
 func (r *WebsiteDefaultConfig) Rules(_ *http.Request) map[string]string {
@@ -71,7 +70,6 @@ type WebsiteUpdate struct {
 	OCSP         bool     `form:"ocsp" json:"ocsp"`
 	HTTPRedirect bool     `form:"http_redirect" json:"http_redirect"`
 	SSLProtocols []string `json:"ssl_protocols"`
-	SSLCiphers   string   `json:"ssl_ciphers"`
 
 	// PHP 相关
 	PHP         uint   `form:"php" json:"php"`
@@ -86,11 +84,12 @@ type WebsiteUpdate struct {
 	Redirects []types.Redirect `json:"redirects"`
 
 	// 高级设置
-	AccessLog string            `json:"access_log"` // 访问日志路径
-	ErrorLog  string            `json:"error_log"`  // 错误日志路径
-	RateLimit *types.RateLimit  `json:"rate_limit"` // 限流限速配置
-	RealIP    *types.RealIP     `json:"real_ip"`    // 真实 IP 配置
-	BasicAuth map[string]string `json:"basic_auth"` // 基本认证配置
+	StatEnabled bool              `json:"stat_enabled"` // 是否启用访问统计
+	AccessLog   string            `json:"access_log"`   // 访问日志路径
+	ErrorLog    string            `json:"error_log"`    // 错误日志路径
+	RateLimit   *types.RateLimit  `json:"rate_limit"`   // 限流限速配置
+	RealIP      *types.RealIP     `json:"real_ip"`      // 真实 IP 配置
+	BasicAuth   map[string]string `json:"basic_auth"`   // 基本认证配置
 
 	// 自定义配置
 	CustomConfigs []WebsiteCustomConfig `json:"custom_configs"`
@@ -125,4 +124,9 @@ type WebsiteUpdateCert struct {
 	Name string `json:"name" validate:"required|exists:websites,name|regex:^[a-zA-Z0-9_-]+$"`
 	Cert string `json:"cert" validate:"required"`
 	Key  string `json:"key" validate:"required"`
+}
+
+type WebsiteObtainCert struct {
+	ID    uint `json:"id" form:"id" uri:"id" validate:"required|exists:websites,id"`
+	DNSID uint `json:"dns_id" form:"dns_id"`
 }

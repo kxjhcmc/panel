@@ -6,6 +6,6 @@ outpkg: "{{.PackageName}}"
 filename: "{{.InterfaceName}}.go"
 all: True
 packages:
-  github.com/acepanel/panel/internal/biz:
+  github.com/acepanel/panel/v3/internal/biz:
     config:
       recursive: True

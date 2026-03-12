@@ -23,14 +23,14 @@ import (
 	"github.com/libtnb/utils/file"
 	"github.com/spf13/cast"
 
-	"github.com/acepanel/panel/internal/app"
-	"github.com/acepanel/panel/internal/biz"
-	"github.com/acepanel/panel/internal/http/request"
-	"github.com/acepanel/panel/pkg/chattr"
-	"github.com/acepanel/panel/pkg/io"
-	"github.com/acepanel/panel/pkg/os"
-	"github.com/acepanel/panel/pkg/shell"
-	"github.com/acepanel/panel/pkg/tools"
+	"github.com/acepanel/panel/v3/internal/app"
+	"github.com/acepanel/panel/v3/internal/biz"
+	"github.com/acepanel/panel/v3/internal/http/request"
+	"github.com/acepanel/panel/v3/pkg/chattr"
+	"github.com/acepanel/panel/v3/pkg/io"
+	"github.com/acepanel/panel/v3/pkg/os"
+	"github.com/acepanel/panel/v3/pkg/shell"
+	"github.com/acepanel/panel/v3/pkg/tools"
 )
 
 type FileService struct {
@@ -219,6 +219,11 @@ func (s *FileService) Move(w http.ResponseWriter, r *http.Request) {
 	}
 
 	for item := range slices.Values(req) {
+		// 源和目标相同，跳过（同目录粘贴覆盖的情况）
+		if item.Source == item.Target {
+			continue
+		}
+
 		if io.Exists(item.Target) && !item.Force {
 			continue
 		}
@@ -248,6 +253,11 @@ func (s *FileService) Copy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	for item := range slices.Values(req) {
+		// 源和目标相同，跳过（同目录粘贴覆盖的情况）
+		if item.Source == item.Target {
+			continue
+		}
+
 		if io.Exists(item.Target) && !item.Force {
 			continue
 		}
@@ -295,12 +305,10 @@ func (s *FileService) RemoteDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	timestamp := time.Now().Format("20060102150405")
 	task := new(biz.Task)
 	task.Name = s.t.Get("Download remote file %v", filepath.Base(req.Path))
 	task.Status = biz.TaskStatusWaiting
-	task.Shell = fmt.Sprintf(`aria2c -c --file-allocation=falloc --allow-overwrite=true --auto-file-renaming=false --retry-wait=5 --max-tries=5 -x 16 -s 16 -k 1M -d '%s' -o '%s' '%s' > /tmp/remote-download-%s.log 2>&1 && chmod 0755 '%s' && chown www:www '%s'`, filepath.Dir(req.Path), filepath.Base(req.Path), req.URL, timestamp, req.Path, req.Path)
-	task.Log = fmt.Sprintf("/tmp/remote-download-%s.log", timestamp)
+	task.Shell = fmt.Sprintf(`aria2c -c --file-allocation=falloc --allow-overwrite=true --auto-file-renaming=false --retry-wait=5 --max-tries=5 -x 16 -s 16 -k 1M -d '%s' -o '%s' '%s' && chmod 0755 '%s' && chown www:www '%s'`, filepath.Dir(req.Path), filepath.Base(req.Path), req.URL, req.Path, req.Path)
 
 	if err = s.taskRepo.Push(task); err != nil {
 		Error(w, http.StatusInternalServerError, "%v", err)
@@ -593,9 +601,9 @@ func (s *FileService) ChunkUploadStart(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 		name := entry.Name()
-		if strings.HasPrefix(name, prefix) {
+		if after, ok := strings.CutPrefix(name, prefix); ok {
 			// 提取分块索引
-			indexStr := strings.TrimPrefix(name, prefix)
+			indexStr := after
 			if index, err := strconv.Atoi(indexStr); err == nil && index >= 0 && index < req.ChunkCount {
 				uploadedChunks = append(uploadedChunks, index)
 			}

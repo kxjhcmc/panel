@@ -5,7 +5,7 @@ import (
 
 	"go.yaml.in/yaml/v4"
 
-	"github.com/acepanel/panel/pkg/io"
+	"github.com/acepanel/panel/v3/pkg/io"
 )
 
 const configPath = "/opt/ace/panel/storage/config.yml"

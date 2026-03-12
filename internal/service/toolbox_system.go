@@ -12,14 +12,14 @@ import (
 	"github.com/libtnb/chix"
 	"github.com/spf13/cast"
 
-	"github.com/acepanel/panel/internal/app"
-	"github.com/acepanel/panel/internal/http/request"
-	"github.com/acepanel/panel/pkg/dns"
-	"github.com/acepanel/panel/pkg/io"
-	"github.com/acepanel/panel/pkg/ntp"
-	"github.com/acepanel/panel/pkg/shell"
-	"github.com/acepanel/panel/pkg/tools"
-	"github.com/acepanel/panel/pkg/types"
+	"github.com/acepanel/panel/v3/internal/app"
+	"github.com/acepanel/panel/v3/internal/http/request"
+	"github.com/acepanel/panel/v3/pkg/dns"
+	"github.com/acepanel/panel/v3/pkg/io"
+	"github.com/acepanel/panel/v3/pkg/ntp"
+	"github.com/acepanel/panel/v3/pkg/shell"
+	"github.com/acepanel/panel/v3/pkg/tools"
+	"github.com/acepanel/panel/v3/pkg/types"
 )
 
 type ToolboxSystemService struct {

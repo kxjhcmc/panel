@@ -12,9 +12,9 @@ import (
 	"github.com/libtnb/chix"
 	"github.com/spf13/cast"
 
-	"github.com/acepanel/panel/internal/service"
-	"github.com/acepanel/panel/pkg/io"
-	"github.com/acepanel/panel/pkg/shell"
+	"github.com/acepanel/panel/v3/internal/service"
+	"github.com/acepanel/panel/v3/pkg/io"
+	"github.com/acepanel/panel/v3/pkg/shell"
 )
 
 type App struct {
@@ -178,7 +178,7 @@ func (s *App) mounts() ([]Mount, error) {
 	if err != nil {
 		return nil, err
 	}
-	for _, id := range strings.Split(ids, "\n") {
+	for id := range strings.SplitSeq(ids, "\n") {
 		if id == "" {
 			continue
 		}

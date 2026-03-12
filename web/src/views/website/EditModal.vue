@@ -37,7 +37,6 @@ const initialSetting = {
   ocsp: false,
   http_redirect: false,
   ssl_protocols: [],
-  ssl_ciphers: '',
   ssl_not_before: '',
   ssl_not_after: '',
   ssl_dns_names: [],
@@ -143,6 +142,14 @@ const handleSave = () => {
     })
   }
 
+  // 将真实 IP 文本转回数组
+  if (setting.value.real_ip) {
+    setting.value.real_ip.from = realIPFrom.value
+      .split('\n')
+      .map((s: string) => s.trim())
+      .filter((s: string) => s.length > 0)
+  }
+
   saveLoading.value = true
   useRequest(website.saveConfig(id.value, setting.value))
     .onSuccess(() => {
@@ -172,12 +179,52 @@ const handleRewrite = (value: string) => {
 }
 
 const isObtainCert = ref(false)
+const dnsModal = ref(false)
+const dnsList = ref<any>([])
+const selectedDnsId = ref<number | null>(null)
+
 const handleObtainCert = () => {
+  // 检测泛域名
+  const hasWildcard = setting.value.domains?.some((domain: string) => domain.includes('*'))
+  if (hasWildcard) {
+    // 加载 DNS 列表并弹窗选择
+    useRequest(cert.dns(1, 10000)).onSuccess(({ data }) => {
+      dnsList.value = data.items.map((item: any) => ({
+        label: item.name,
+        value: item.id
+      }))
+      if (dnsList.value.length === 0) {
+        window.$message.error(
+          $gettext(
+            'Your website contains wildcard domains, which require DNS verification. Please add a DNS provider in Certificate Management first.'
+          )
+        )
+        return
+      }
+      selectedDnsId.value = null
+      dnsModal.value = true
+    })
+    return
+  }
+
+  doObtainCert()
+}
+
+const handleDnsObtainCert = () => {
+  if (!selectedDnsId.value) {
+    window.$message.error($gettext('Please select a DNS provider'))
+    return
+  }
+  dnsModal.value = false
+  doObtainCert(selectedDnsId.value)
+}
+
+const doObtainCert = (dnsId?: number) => {
   isObtainCert.value = true
   messageReactive = window.$message.loading($gettext('Please wait...'), {
     duration: 0
   })
-  useRequest(website.obtainCert(id.value))
+  useRequest(website.obtainCert(id.value, dnsId))
     .onSuccess(() => {
       fetchSetting()
       window.$message.success($gettext('Issued successfully'))
@@ -718,6 +765,16 @@ const realIPEnabled = computed({
       }
     } else {
       setting.value.real_ip = null
+    }
+  }
+})
+
+// 真实 IP 来源列表，多行文本与数组双向转换
+const realIPFrom = computed({
+  get: () => setting.value.real_ip?.from?.join('\n') ?? '',
+  set: (value: string) => {
+    if (setting.value.real_ip) {
+      setting.value.real_ip.from = value.split('\n')
     }
   }
 })
@@ -1563,7 +1620,7 @@ const removeCustomConfig = (index: number) => {
                   <n-select
                     v-model:value="setting.ssl_protocols"
                     :options="[
-                      { label: 'TLS 1.0', value: 'TLSv1.0' },
+                      { label: 'TLS 1.0', value: 'TLSv1' },
                       { label: 'TLS 1.1', value: 'TLSv1.1' },
                       { label: 'TLS 1.2', value: 'TLSv1.2' },
                       { label: 'TLS 1.3', value: 'TLSv1.3' }
@@ -1574,12 +1631,6 @@ const removeCustomConfig = (index: number) => {
               </n-grid>
             </n-form>
             <n-form v-if="setting.ssl">
-              <n-form-item :label="$gettext('Cipher Suites')">
-                <n-input
-                  v-model:value="setting.ssl_ciphers"
-                  :placeholder="$gettext('Enter the cipher suite, leave blank to reset to default')"
-                />
-              </n-form-item>
               <n-grid :cols="2" :x-gap="24">
                 <n-gi>
                   <n-form-item :label="$gettext('Certificate')">
@@ -1713,6 +1764,19 @@ const removeCustomConfig = (index: number) => {
         </n-tab-pane>
         <n-tab-pane name="advanced" :tab="$gettext('Advanced Settings')">
           <n-collapse accordion>
+            <!-- 访问统计（仅 nginx） -->
+            <n-collapse-item
+              v-if="isNginx"
+              :title="$gettext('Access Statistics')"
+              name="stat_settings"
+            >
+              <n-form label-placement="left" label-width="140px">
+                <n-form-item :label="$gettext('Enable Statistics')">
+                  <n-switch v-model:value="setting.stat_enabled" />
+                </n-form-item>
+              </n-form>
+            </n-collapse-item>
+
             <!-- 日志设置 -->
             <n-collapse-item :title="$gettext('Log Settings')" name="log_settings">
               <n-form label-placement="left" label-width="140px">
@@ -1809,9 +1873,11 @@ const removeCustomConfig = (index: number) => {
                 </n-form-item>
                 <template v-if="realIPEnabled && setting.real_ip">
                   <n-form-item :label="$gettext('IP Sources')">
-                    <n-dynamic-input
-                      v-model:value="setting.real_ip.from"
-                      :placeholder="$gettext('e.g., 127.0.0.1 or 10.0.0.0/8')"
+                    <n-input
+                      v-model:value="realIPFrom"
+                      type="textarea"
+                      :placeholder="$gettext('One per line, e.g., 127.0.0.1 or 10.0.0.0/8')"
+                      :autosize="{ minRows: 3, maxRows: 10 }"
                     />
                   </n-form-item>
                   <n-form-item :label="$gettext('IP Header')">
@@ -2003,6 +2069,36 @@ const removeCustomConfig = (index: number) => {
         </n-button>
       </n-flex>
     </template>
+  </n-modal>
+  <n-modal
+    v-model:show="dnsModal"
+    preset="card"
+    :title="$gettext('Select DNS Provider')"
+    style="width: 60vw"
+    :bordered="false"
+    :segmented="false"
+  >
+    <n-flex vertical>
+      <n-alert type="warning">
+        {{
+          $gettext(
+            'Your website contains wildcard domains (e.g. *.example.com), which require DNS verification to issue certificates.'
+          )
+        }}
+      </n-alert>
+      <n-form>
+        <n-form-item :label="$gettext('DNS')">
+          <n-select
+            v-model:value="selectedDnsId"
+            :placeholder="$gettext('Select DNS for certificate issuance')"
+            :options="dnsList"
+          />
+        </n-form-item>
+      </n-form>
+      <n-button type="info" block :disabled="!selectedDnsId" @click="handleDnsObtainCert">
+        {{ $gettext('Issue') }}
+      </n-button>
+    </n-flex>
   </n-modal>
 </template>
 

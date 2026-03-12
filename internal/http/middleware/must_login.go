@@ -14,8 +14,8 @@ import (
 	"github.com/libtnb/sessions"
 	"github.com/spf13/cast"
 
-	"github.com/acepanel/panel/internal/biz"
-	"github.com/acepanel/panel/pkg/config"
+	"github.com/acepanel/panel/v3/internal/biz"
+	"github.com/acepanel/panel/v3/pkg/config"
 )
 
 // MustLogin 确保已登录
@@ -26,6 +26,8 @@ func MustLogin(t *gotext.Locale, conf *config.Config, session *sessions.Manager,
 		"/api/user/captcha",
 		"/api/user/login",
 		"/api/user/logout",
+		"/api/user/passkey/enabled",
+		"/api/user/passkey/login",
 		"/api/user/is_login",
 		"/api/user/is_2fa",
 		"/api/home/panel",

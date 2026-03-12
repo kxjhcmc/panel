@@ -1,6 +1,6 @@
 package request
 
-import "github.com/acepanel/panel/pkg/types"
+import "github.com/acepanel/panel/v3/pkg/types"
 
 type ContainerComposeGet struct {
 	Name string `uri:"name" validate:"required|regex:^[a-zA-Z0-9_-]+$"`

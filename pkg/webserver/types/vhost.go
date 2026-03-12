@@ -88,7 +88,7 @@ type Vhost interface {
 	Config(name string, typ string) string
 	// SetConfig 设置指定名称的配置内容
 	// type 可选值: "site", "shared"
-	SetConfig(name string, typ string, content string) error
+	SetConfig(name string, typ string, content string, skipComment ...bool) error
 	// RemoveConfig 清除指定名称的配置内容
 	// type 可选值: "site", "shared"
 	RemoveConfig(name string, typ string) error
@@ -158,7 +158,6 @@ type SSLConfig struct {
 	Cert      string   `json:"cert"`      // 证书路径
 	Key       string   `json:"key"`       // 私钥路径
 	Protocols []string `json:"protocols"` // 支持的协议，如: ["TLSv1.2", "TLSv1.3"]
-	Ciphers   string   `json:"ciphers"`   // 加密套件
 
 	// 高级选项
 	HSTS         bool   `json:"hsts"`          // HTTP 严格传输安全

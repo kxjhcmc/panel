@@ -10,6 +10,10 @@ export function resolveResError(code: number | string | undefined, msg = ''): st
       msg = msg ?? '登录已过期'
       useUserStore().logout()
       break
+    case 418:
+      msg = msg ?? '登录已过期'
+      useUserStore().refresh()
+      break
     case 403:
       msg = msg ?? '没有权限'
       break

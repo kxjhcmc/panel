@@ -4,7 +4,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/leonelquinteros/gotext"
 
-	"github.com/acepanel/panel/internal/apps/nginx"
+	"github.com/acepanel/panel/v3/internal/apps/nginx"
 )
 
 type App struct {
