@@ -59,6 +59,14 @@ const hostList = ref<any[]>([])
 const tabs = ref<TerminalTab[]>([])
 const activeTabId = ref<string>('')
 
+const readClipboardText = async (): Promise<string> => {
+  if (window.isSecureContext && navigator.clipboard?.readText) {
+    return navigator.clipboard.readText()
+  }
+  window.$message.warning($gettext('Clipboard is unavailable in non-HTTPS context, please use Ctrl+V to paste'))
+  return ''
+}
+
 // 本机选项
 const localServerOption = {
   label: $gettext('Local'),
@@ -377,7 +385,7 @@ const onContextMenu = async (event: MouseEvent) => {
   const tab = tabs.value.find((t) => t.id === activeTabId.value)
   if (tab?.terminal && tab.ws?.readyState === WebSocket.OPEN) {
     try {
-      const text = await navigator.clipboard.readText()
+      const text = await readClipboardText()
       if (text) {
         tab.ws.send(text)
       }
@@ -410,7 +418,7 @@ const onKeyDown = (event: KeyboardEvent) => {
     (event.metaKey && event.key === 'v')
   ) {
     event.preventDefault()
-    navigator.clipboard.readText().then((text) => {
+    readClipboardText().then((text) => {
       if (text && tab.ws?.readyState === WebSocket.OPEN) {
         tab.ws.send(text)
       }
