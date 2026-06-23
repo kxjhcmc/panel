@@ -1,11 +1,14 @@
 package job
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net"
 	"sync"
 	"time"
+
+	"github.com/samber/lo"
 
 	"github.com/acepanel/panel/v3/internal/app"
 	"github.com/acepanel/panel/v3/internal/biz"
@@ -48,16 +51,16 @@ func NewFirewallScan(log *slog.Logger, setting biz.SettingRepo, scanRepo biz.Sca
 	}
 }
 
-func (r *FirewallScan) Run() {
+func (r *FirewallScan) Run(_ context.Context) error {
 	if app.Status != app.StatusNormal {
-		return
+		return nil
 	}
 
 	enabled, err := r.setting.GetBool(biz.SettingKeyScanAware)
 	if err != nil || !enabled {
 		// 未启用时，确保 scanner 已停止
 		r.stopScanner()
-		return
+		return nil
 	}
 
 	// 确保 scanner 已启动
@@ -74,6 +77,7 @@ func (r *FirewallScan) Run() {
 
 	// 清理过期数据
 	r.cleanup()
+	return nil
 }
 
 // ensureScanner 确保 scanner 正在运行
@@ -166,10 +170,7 @@ func (r *FirewallScan) flush() {
 		return
 	}
 
-	events := make([]*biz.ScanEvent, 0, len(r.buffer))
-	for _, evt := range r.buffer {
-		events = append(events, evt)
-	}
+	events := lo.Values(r.buffer)
 	r.buffer = make(map[string]*biz.ScanEvent)
 	r.mu.Unlock()
 
@@ -350,12 +351,9 @@ func isWhitelisted(ip string, whitelist []net.IPNet) bool {
 	if parsed.IsLoopback() || parsed.IsUnspecified() {
 		return true
 	}
-	for _, cidr := range whitelist {
-		if cidr.Contains(parsed) {
-			return true
-		}
-	}
-	return false
+	return lo.ContainsBy(whitelist, func(cidr net.IPNet) bool {
+		return cidr.Contains(parsed)
+	})
 }
 
 // cleanup 清理过期数据

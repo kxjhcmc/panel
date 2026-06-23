@@ -1,68 +1,33 @@
 <script setup lang="ts">
-import ws from '@/api/ws'
-import type { LogInst } from 'naive-ui'
 import { useGettext } from 'vue3-gettext'
+
+import RealtimeLog from './RealtimeLog.vue'
 
 const { $gettext } = useGettext()
 const show = defineModel<boolean>('show', { type: Boolean, required: true })
 const props = defineProps({
   path: {
     type: String,
-    required: true
+    required: false,
   },
-  language: {
+  container: {
     type: String,
     required: false,
-    default: 'systemdlog'
-  }
+  },
+  clearable: {
+    type: Boolean,
+    default: false,
+  },
 })
+const emit = defineEmits<{ clear: [] }>()
 
-const log = ref('')
-const logRef = ref<LogInst | null>(null)
-let logWs: WebSocket | null = null
+const logRef = ref<{ clear: () => void } | null>(null)
 
-const init = async () => {
-  const cmd = `tail -n 100 -f '${props.path}'`
-  ws.exec(cmd)
-    .then((ws: WebSocket) => {
-      logWs = ws
-      ws.onmessage = (event) => {
-        log.value += event.data + '\n'
-        const lines = log.value.split('\n')
-        if (lines.length > 500) {
-          log.value = lines.slice(lines.length - 500).join('\n')
-        }
-      }
-    })
-    .catch(() => {
-      window.$message.error($gettext('Failed to get log stream'))
-    })
+const clear = async () => {
+  logRef.value?.clear()
 }
 
-const handleClose = () => {
-  if (logWs) {
-    logWs.close()
-  }
-  log.value = ''
-}
-
-watch([() => props.path, () => show.value], () => {
-  handleClose()
-  if (show.value) {
-    init()
-  }
-})
-watchEffect(() => {
-  if (log.value) {
-    nextTick(() => {
-      logRef.value?.scrollTo({ position: 'bottom', silent: true })
-    })
-  }
-})
-
-defineExpose({
-  init
-})
+defineExpose({ clear })
 </script>
 
 <template>
@@ -74,12 +39,20 @@ defineExpose({
     size="huge"
     :bordered="false"
     :segmented="false"
-    @close="handleClose"
-    @mask-click="handleClose"
   >
-    <n-log v-if="log" ref="logRef" :log="log" trim :rows="40" :language="props.language" />
-    <n-empty v-else :description="$gettext('No logs available')" />
+    <template v-if="clearable" #header-extra>
+      <ConfirmDialog
+        type="danger"
+        :content="$gettext('Are you sure you want to clear the log?')"
+        @confirm="emit('clear')"
+      >
+        <template #trigger>
+          <n-button size="small" type="warning">
+            {{ $gettext('Clear Log') }}
+          </n-button>
+        </template>
+      </ConfirmDialog>
+    </template>
+    <realtime-log v-if="show" ref="logRef" :path="props.path" :container="props.container" />
   </n-modal>
 </template>
-
-<style scoped lang="scss"></style>

@@ -1,12 +1,12 @@
 <script setup lang="ts">
 import type { TreeSelectOption } from 'naive-ui'
+import { useGettext } from 'vue3-gettext'
 
 import PathSelector from '@/components/common/PathSelector.vue'
 import { translateTitle } from '@/locales/menu'
-import { usePermissionStore } from '@/store'
+import { usePermissionStore } from '@/stores'
+import type { RouteType } from '@/types/router'
 import { locales as availableLocales } from '@/utils'
-import { useGettext } from 'vue3-gettext'
-import type { RouteType } from '~/types/router'
 
 const { $gettext } = useGettext()
 const permissionStore = usePermissionStore()
@@ -50,7 +50,7 @@ const locales = computed(() => {
   return Object.entries(availableLocales).map(([code, name]: [string, string]) => {
     return {
       label: name,
-      value: code
+      value: code,
     }
   })
 })
@@ -58,12 +58,20 @@ const locales = computed(() => {
 const channels = [
   {
     label: $gettext('Stable'),
-    value: 'stable'
+    value: 'stable',
   },
   {
     label: $gettext('Beta'),
-    value: 'beta'
-  }
+    value: 'beta',
+  },
+]
+
+const backupFormats = [
+  { label: 'tar.xz', value: 'tar.xz' },
+  { label: 'tar.gz', value: 'tar.gz' },
+  { label: 'tar.zst', value: 'tar.zst' },
+  { label: 'zip', value: 'zip' },
+  { label: '7z', value: '7z' },
 ]
 
 // 不允许隐藏的菜单项（首页 home/home-index 和设置页 setting/setting-index）
@@ -75,7 +83,7 @@ const getOption = (route: RouteType): TreeSelectOption => {
   let menuItem: TreeSelectOption = {
     label: route.meta?.title ? translateTitle(route.meta.title) : route.name,
     key: route.name,
-    disabled: isDisabled
+    disabled: isDisabled,
   }
 
   const visibleChildren = route.children
@@ -148,6 +156,9 @@ const menus = computed<TreeSelectOption[]>(() => {
             </template>
           </n-button>
         </n-input-group>
+      </n-form-item>
+      <n-form-item :label="$gettext('Backup Compression Format')">
+        <n-select v-model:value="model.backup_format" :options="backupFormats" />
       </n-form-item>
       <n-form-item :label="$gettext('Default Project Directory')">
         <n-input-group>

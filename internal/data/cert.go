@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"path/filepath"
 	"slices"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/leonelquinteros/gotext"
 	mholtacme "github.com/mholt/acmez/v3/acme"
+	"github.com/samber/lo"
 	"gorm.io/gorm"
 
 	"github.com/acepanel/panel/v3/internal/app"
@@ -49,8 +51,7 @@ func (r *certRepo) List(page, limit uint) ([]*types.CertList, int64, error) {
 	var total int64
 	err := r.db.Model(&biz.Cert{}).Preload("Website").Preload("Account").Preload("DNS").Order("id desc").Count(&total).Offset(int((page - 1) * limit)).Limit(int(limit)).Find(&certs).Error
 
-	list := make([]*types.CertList, 0)
-	for cert := range slices.Values(certs) {
+	list := lo.Map(certs, func(cert *biz.Cert, _ int) *types.CertList {
 		item := &types.CertList{
 			ID:          cert.ID,
 			AccountID:   cert.AccountID,
@@ -58,6 +59,7 @@ func (r *certRepo) List(page, limit uint) ([]*types.CertList, int64, error) {
 			DNSID:       cert.DNSID,
 			Type:        cert.Type,
 			Domains:     cert.Domains,
+			Alias:       cert.Alias,
 			AutoRenewal: cert.AutoRenewal,
 			NextRenewal: cert.RenewalInfo.SelectedTime,
 			Cert:        cert.Cert,
@@ -73,13 +75,12 @@ func (r *certRepo) List(page, limit uint) ([]*types.CertList, int64, error) {
 			item.Issuer = decode.Issuer.CommonName
 			item.OCSPServer = decode.OCSPServer
 			// 合并 DNSNames 和 IPAddresses
-			item.DNSNames = decode.DNSNames
-			for _, ip := range decode.IPAddresses {
-				item.DNSNames = append(item.DNSNames, ip.String())
-			}
+			item.DNSNames = append(decode.DNSNames, lo.Map(decode.IPAddresses, func(ip net.IP, _ int) string {
+				return ip.String()
+			})...)
 		}
-		list = append(list, item)
-	}
+		return item
+	})
 
 	return list, total, err
 }
@@ -134,6 +135,7 @@ func (r *certRepo) Create(ctx context.Context, req *request.CertCreate) (*biz.Ce
 		DNSID:       req.DNSID,
 		Type:        req.Type,
 		Domains:     req.Domains,
+		Alias:       req.Alias,
 		AutoRenewal: req.AutoRenewal,
 	}
 	if err := r.db.Create(cert).Error; err != nil {
@@ -169,6 +171,7 @@ func (r *certRepo) Update(ctx context.Context, req *request.CertUpdate) error {
 		Key:         req.Key,
 		Script:      req.Script,
 		Domains:     req.Domains,
+		Alias:       req.Alias,
 		AutoRenewal: req.AutoRenewal,
 	}).Error; err != nil {
 		return err
@@ -192,6 +195,17 @@ func (r *certRepo) Delete(ctx context.Context, id uint) error {
 }
 
 func (r *certRepo) ObtainAuto(id uint) (*acme.Certificate, error) {
+	return r.ObtainAutoWithProgressCallback(context.Background(), id, nil)
+}
+
+func (r *certRepo) ObtainAutoWithProgressCallback(ctx context.Context, id uint, progressCallback func(string)) (*acme.Certificate, error) {
+	report := func(msg string) {
+		if progressCallback != nil {
+			progressCallback(msg)
+		}
+	}
+
+	report(r.t.Get("initializing ACME client"))
 	cert, err := r.Get(id)
 	if err != nil {
 		return nil, err
@@ -205,7 +219,12 @@ func (r *certRepo) ObtainAuto(id uint) (*acme.Certificate, error) {
 	webServer, _ := r.settingRepo.Get(biz.SettingKeyWebserver)
 
 	if cert.DNS != nil {
-		client.UseDns(cert.DNS.Type, cert.DNS.Data)
+		client.UseDns(cert.DNS.Type, cert.DNS.Data, acme.DnsOption{
+			Alias:            cert.Alias,
+			DnsServer:        cert.DNS.Data.DnsServer,
+			SkipVerify:       cert.DNS.Data.SkipVerify,
+			ProgressCallback: progressCallback,
+		})
 	} else {
 		if cert.Website == nil {
 			return nil, errors.New(r.t.Get("this certificate is not associated with a website and cannot be obtained. You can try to obtain it manually"))
@@ -220,13 +239,15 @@ func (r *certRepo) ObtainAuto(id uint) (*acme.Certificate, error) {
 		client.UseHTTP(conf, webServer)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	report(r.t.Get("issuing certificate, domains: %s", strings.Join(cert.Domains, ", ")))
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 	ssl, err := client.ObtainCertificate(ctx, cert.Domains, acme.KeyType(cert.Type))
 	if err != nil {
 		return nil, err
 	}
 
+	report(r.t.Get("obtaining and saving certificate"))
 	cert.RenewalInfo = *ssl.RenewalInfo
 	cert.CertURL = ssl.URL
 	cert.Cert = string(ssl.ChainPEM)
@@ -236,6 +257,7 @@ func (r *certRepo) ObtainAuto(id uint) (*acme.Certificate, error) {
 	}
 
 	if cert.Website != nil {
+		report(r.t.Get("deploying certificate to website"))
 		return &ssl, r.Deploy(cert.ID, cert.WebsiteID, false)
 	}
 
@@ -298,6 +320,17 @@ func (r *certRepo) ObtainSelfSigned(id uint) error {
 }
 
 func (r *certRepo) Renew(id uint) (*acme.Certificate, error) {
+	return r.RenewWithProgressCallback(context.Background(), id, nil)
+}
+
+func (r *certRepo) RenewWithProgressCallback(ctx context.Context, id uint, progressCallback func(string)) (*acme.Certificate, error) {
+	report := func(msg string) {
+		if progressCallback != nil {
+			progressCallback(msg)
+		}
+	}
+
+	report(r.t.Get("preparing renewal"))
 	cert, err := r.Get(id)
 	if err != nil {
 		return nil, err
@@ -315,7 +348,12 @@ func (r *certRepo) Renew(id uint) (*acme.Certificate, error) {
 	webServer, _ := r.settingRepo.Get(biz.SettingKeyWebserver)
 
 	if cert.DNS != nil {
-		client.UseDns(cert.DNS.Type, cert.DNS.Data)
+		client.UseDns(cert.DNS.Type, cert.DNS.Data, acme.DnsOption{
+			Alias:            cert.Alias,
+			DnsServer:        cert.DNS.Data.DnsServer,
+			SkipVerify:       cert.DNS.Data.SkipVerify,
+			ProgressCallback: progressCallback,
+		})
 	} else {
 		if cert.Website == nil {
 			return nil, errors.New(r.t.Get("this certificate is not associated with a website and cannot be obtained. You can try to obtain it manually"))
@@ -330,17 +368,20 @@ func (r *certRepo) Renew(id uint) (*acme.Certificate, error) {
 		}
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	report(r.t.Get("renewing certificate, domains: %s", strings.Join(cert.Domains, ", ")))
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 	ssl, err := client.RenewCertificate(ctx, cert.CertURL, cert.Domains, acme.KeyType(cert.Type))
 	if err != nil {
 		// 续签失败，尝试重签
+		report(r.t.Get("renewal failed, attempting re-issuance"))
 		ssl, err = client.ObtainCertificate(ctx, cert.Domains, acme.KeyType(cert.Type))
 		if err != nil {
 			return nil, err
 		}
 	}
 
+	report(r.t.Get("obtaining and saving certificate"))
 	cert.RenewalInfo = *ssl.RenewalInfo
 	cert.CertURL = ssl.URL
 	cert.Cert = string(ssl.ChainPEM)
@@ -350,6 +391,7 @@ func (r *certRepo) Renew(id uint) (*acme.Certificate, error) {
 	}
 
 	if cert.Website != nil {
+		report(r.t.Get("deploying certificate to website"))
 		return &ssl, r.Deploy(cert.ID, cert.WebsiteID, false)
 	}
 
@@ -540,8 +582,6 @@ func (r *certRepo) getClient(cert *biz.Cert) (*acme.Client, error) {
 		ca = acme.CALetsEncrypt
 	case "litessl":
 		ca = acme.CALiteSSL
-	case "buypass":
-		ca = acme.CABuypass
 	case "zerossl":
 		ca = acme.CAZeroSSL
 		eab = &acme.EAB{KeyID: cert.Account.Kid, MACKey: cert.Account.HmacEncoded}

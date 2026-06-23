@@ -1,30 +1,37 @@
 <script setup lang="ts">
 defineOptions({
-  name: 'apps-supervisor-index'
+  name: 'apps-supervisor-index',
 })
 
-import { NButton, NDataTable, NInput, NPopconfirm } from 'naive-ui'
+import { NButton, NDataTable, NFlex } from 'naive-ui'
 import { useGettext } from 'vue3-gettext'
 
 import supervisor from '@/api/apps/supervisor'
+import file from '@/api/panel/file'
 import ServiceStatus from '@/components/common/ServiceStatus.vue'
+import { useConfirm } from '@/components/system/composables/useConfirm'
 
 const { $gettext } = useGettext()
+const { confirmDelete, confirmAction } = useConfirm()
 const currentTab = ref('status')
 const saveConfigLoading = ref(false)
+const saveProcessConfigLoading = ref(false)
 const clearLogLoading = ref(false)
 const createProcessLoading = ref(false)
 const processLog = ref('')
+const processLogModalRef = ref<{ clear: () => void } | null>(null)
+const daemonLogRef = ref<{ clear: () => void } | null>(null)
+const daemonLogPath = '/var/log/supervisor/supervisord.log'
 
 const { data: serviceName } = useRequest(supervisor.service, {
-  initialData: ''
+  initialData: '',
 }).onSuccess(() => {
   refresh()
   config.value = supervisor.config()
 })
 
 const { data: config } = useRequest(supervisor.config, {
-  initialData: ''
+  initialData: '',
 })
 
 const createProcessModal = ref(false)
@@ -33,13 +40,13 @@ const createProcessModel = ref({
   user: 'www',
   path: '',
   command: '',
-  num: 1
+  num: 1,
 })
 
 const editProcessModal = ref(false)
 const editProcessModel = ref({
   process: '',
-  config: ''
+  config: '',
 })
 
 const processLogModal = ref(false)
@@ -50,28 +57,28 @@ const processColumns: any = [
     key: 'name',
     minWidth: 200,
     resizable: true,
-    ellipsis: { tooltip: true }
+    ellipsis: { tooltip: true },
   },
   {
     title: $gettext('Status'),
     key: 'status',
     minWidth: 100,
     resizable: true,
-    ellipsis: { tooltip: true }
+    ellipsis: { tooltip: true },
   },
   {
     title: 'PID',
     key: 'pid',
     minWidth: 100,
     resizable: true,
-    ellipsis: { tooltip: true }
+    ellipsis: { tooltip: true },
   },
   {
     title: $gettext('Uptime'),
     key: 'uptime',
     minWidth: 150,
     resizable: true,
-    ellipsis: { tooltip: true }
+    ellipsis: { tooltip: true },
   },
   {
     title: $gettext('Actions'),
@@ -79,131 +86,101 @@ const processColumns: any = [
     width: 500,
     hideInExcel: true,
     render(row: any) {
-      return [
+      const items: any[] = [
         h(
           NButton,
           {
             size: 'small',
             type: 'warning',
             secondary: true,
-            onClick: () => handleShowProcessLog(row)
+            onClick: () => handleShowProcessLog(row),
           },
-          {
-            default: () => $gettext('Logs')
-          }
+          { default: () => $gettext('Logs') },
         ),
         h(
           NButton,
           {
             size: 'small',
             type: 'info',
-            style: 'margin-left: 15px',
-            onClick: () => handleEditProcess(row.name)
+            onClick: () => handleEditProcess(row.name),
           },
-          {
-            default: () => $gettext('Configure')
-          }
+          { default: () => $gettext('Configure') },
         ),
-        row.status != 'RUNNING'
-          ? h(
-              NButton,
-              {
-                size: 'small',
-                type: 'primary',
-                secondary: true,
-                style: 'margin-left: 15px',
-                onClick: () => handleProcessStart(row.name)
-              },
-              {
-                default: () => $gettext('Start')
-              }
-            )
-          : null,
-        row.status == 'RUNNING'
-          ? h(
-              NPopconfirm,
-              {
-                onPositiveClick: () => handleProcessStop(row.name)
-              },
-              {
-                default: () => {
-                  return $gettext('Are you sure you want to stop process %{ name }?', {
-                    name: row.name
-                  })
-                },
-                trigger: () => {
-                  return h(
-                    NButton,
-                    {
-                      size: 'small',
-                      type: 'warning',
-                      style: 'margin-left: 15px'
-                    },
-                    {
-                      default: () => $gettext('Stop')
-                    }
-                  )
-                }
-              }
-            )
-          : null,
-        row.status == 'RUNNING'
-          ? h(
-              NPopconfirm,
-              {
-                onPositiveClick: () => handleProcessRestart(row.name)
-              },
-              {
-                default: () => {
-                  return $gettext('Are you sure you want to restart process %{ name }?', {
-                    name: row.name
-                  })
-                },
-                trigger: () => {
-                  return h(
-                    NButton,
-                    {
-                      size: 'small',
-                      type: 'primary',
-                      style: 'margin-left: 15px'
-                    },
-                    {
-                      default: () => $gettext('Restart')
-                    }
-                  )
-                }
-              }
-            )
-          : null,
-        h(
-          NPopconfirm,
-          {
-            onPositiveClick: () => handleProcessDelete(row.name)
-          },
-          {
-            default: () => {
-              return $gettext('Are you sure you want to delete process %{ name }?', {
-                name: row.name
-              })
-            },
-            trigger: () => {
-              return h(
-                NButton,
-                {
-                  size: 'small',
-                  type: 'error',
-                  style: 'margin-left: 15px'
-                },
-                {
-                  default: () => $gettext('Delete')
-                }
-              )
-            }
-          }
-        )
       ]
-    }
-  }
+      if (row.status != 'RUNNING') {
+        items.push(
+          h(
+            NButton,
+            {
+              size: 'small',
+              type: 'primary',
+              secondary: true,
+              onClick: () => handleProcessStart(row.name),
+            },
+            { default: () => $gettext('Start') },
+          ),
+        )
+      } else {
+        items.push(
+          h(
+            NButton,
+            {
+              size: 'small',
+              type: 'warning',
+              onClick: async () => {
+                const ok = await confirmAction({
+                  type: 'warning',
+                  title: $gettext('Confirm'),
+                  content: $gettext('Are you sure you want to stop process %{ name }?', {
+                    name: row.name,
+                  }),
+                })
+                if (ok) handleProcessStop(row.name)
+              },
+            },
+            { default: () => $gettext('Stop') },
+          ),
+          h(
+            NButton,
+            {
+              size: 'small',
+              type: 'primary',
+              onClick: async () => {
+                const ok = await confirmAction({
+                  type: 'warning',
+                  title: $gettext('Confirm'),
+                  content: $gettext('Are you sure you want to restart process %{ name }?', {
+                    name: row.name,
+                  }),
+                })
+                if (ok) handleProcessRestart(row.name)
+              },
+            },
+            { default: () => $gettext('Restart') },
+          ),
+        )
+      }
+      items.push(
+        h(
+          NButton,
+          {
+            size: 'small',
+            type: 'error',
+            onClick: async () => {
+              const ok = await confirmDelete({
+                content: $gettext('Are you sure you want to delete process %{ name }?', {
+                  name: row.name,
+                }),
+              })
+              if (ok) handleProcessDelete(row.name)
+            },
+          },
+          { default: () => $gettext('Delete') },
+        ),
+      )
+      return h(NFlex, { size: 'small', align: 'center' }, () => items)
+    },
+  },
 ]
 
 const { loading, data, page, total, pageSize, pageCount, refresh } = usePagination(
@@ -212,8 +189,8 @@ const { loading, data, page, total, pageSize, pageCount, refresh } = usePaginati
     initialData: { total: 0, list: [] },
     initialPageSize: 20,
     total: (res: any) => res.total,
-    data: (res: any) => res.items
-  }
+    data: (res: any) => res.items,
+  },
 )
 
 const handleSaveConfig = () => {
@@ -230,8 +207,9 @@ const handleSaveConfig = () => {
 
 const handleClearLog = () => {
   clearLogLoading.value = true
-  useRequest(supervisor.clearLog())
+  useRequest(file.truncate(daemonLogPath))
     .onSuccess(() => {
+      daemonLogRef.value?.clear()
       window.$message.success($gettext('Cleared successfully'))
     })
     .onComplete(() => {
@@ -285,6 +263,13 @@ const handleShowProcessLog = async (row: any) => {
   processLogModal.value = true
 }
 
+const handleClearProcessLog = () => {
+  useRequest(file.truncate(processLog.value)).onSuccess(() => {
+    processLogModalRef.value?.clear()
+    window.$message.success($gettext('Cleared successfully'))
+  })
+}
+
 const handleEditProcess = async (name: string) => {
   await getProcessConfig(name)
   editProcessModal.value = true
@@ -296,11 +281,18 @@ const getProcessConfig = async (name: string) => {
 }
 
 const handleSaveProcessConfig = () => {
+  saveProcessConfigLoading.value = true
   useRequest(
-    supervisor.saveProcessConfig(editProcessModel.value.process, editProcessModel.value.config)
-  ).onSuccess(() => {
-    window.$message.success($gettext('Saved successfully'))
-  })
+    supervisor.saveProcessConfig(editProcessModel.value.process, editProcessModel.value.config),
+  )
+    .onSuccess(() => {
+      editProcessModal.value = false
+      refresh()
+      window.$message.success($gettext('Saved successfully'))
+    })
+    .onComplete(() => {
+      saveProcessConfigLoading.value = false
+    })
 }
 
 const timer: any = null
@@ -311,7 +303,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <common-page show-footer>
+  <PageContainer :show-footer="true">
     <n-tabs v-model:value="currentTab" type="line" animated>
       <n-tab-pane name="status" :tab="$gettext('Running Status')">
         <service-status v-if="serviceName != ''" :service="serviceName" />
@@ -324,23 +316,22 @@ onUnmounted(() => {
             </n-button>
           </n-flex>
           <n-data-table
+            v-model:page="page"
+            v-model:pageSize="pageSize"
             striped
             remote
-            :scroll-x="1000"
+            :scroll-x="1100"
             :loading="loading"
             :columns="processColumns"
             :data="data"
             :row-key="(row: any) => row.name"
-            v-model:page="page"
-            v-model:pageSize="pageSize"
             :pagination="{
               page: page,
-              pageCount: pageCount,
               pageSize: pageSize,
               itemCount: total,
               showQuickJumper: true,
               showSizePicker: true,
-              pageSizes: [20, 50, 100, 200]
+              pageSizes: [20, 50, 100, 200],
             }"
           />
         </n-flex>
@@ -350,13 +341,18 @@ onUnmounted(() => {
           <n-alert type="warning">
             {{
               $gettext(
-                'This modifies the Supervisor main configuration file. If you do not understand the meaning of each parameter, please do not modify it randomly!'
+                'This modifies the Supervisor main configuration file. If you do not understand the meaning of each parameter, please do not modify it randomly!',
               )
             }}
           </n-alert>
           <common-editor v-model:value="config" height="60vh" />
           <n-flex>
-            <n-button type="primary" :loading="saveConfigLoading" :disabled="saveConfigLoading" @click="handleSaveConfig">
+            <n-button
+              type="primary"
+              :loading="saveConfigLoading"
+              :disabled="saveConfigLoading"
+              @click="handleSaveConfig"
+            >
               {{ $gettext('Save') }}
             </n-button>
           </n-flex>
@@ -368,15 +364,20 @@ onUnmounted(() => {
       <n-tab-pane name="log" :tab="$gettext('Daemon Logs')">
         <n-flex vertical>
           <n-flex>
-            <n-button type="primary" :loading="clearLogLoading" :disabled="clearLogLoading" @click="handleClearLog">
+            <n-button
+              type="primary"
+              :loading="clearLogLoading"
+              :disabled="clearLogLoading"
+              @click="handleClearLog"
+            >
               {{ $gettext('Clear Log') }}
             </n-button>
           </n-flex>
-          <realtime-log path="/var/log/supervisor/supervisord.log" />
+          <realtime-log ref="daemonLogRef" :path="daemonLogPath" />
         </n-flex>
       </n-tab-pane>
     </n-tabs>
-  </common-page>
+  </PageContainer>
   <n-modal
     v-model:show="createProcessModal"
     preset="card"
@@ -424,9 +425,23 @@ onUnmounted(() => {
         <n-input-number v-model:value="createProcessModel.num" :min="1" />
       </n-form-item>
     </n-form>
-    <n-button type="info" block :loading="createProcessLoading" :disabled="createProcessLoading" @click="handleCreateProcess">{{ $gettext('Submit') }}</n-button>
+    <n-button
+      type="info"
+      block
+      :loading="createProcessLoading"
+      :disabled="createProcessLoading"
+      @click="handleCreateProcess"
+    >
+      {{ $gettext('Submit') }}
+    </n-button>
   </n-modal>
-  <realtime-log-modal v-model:show="processLogModal" :path="processLog" />
+  <realtime-log-modal
+    ref="processLogModalRef"
+    v-model:show="processLogModal"
+    :path="processLog"
+    clearable
+    @clear="handleClearProcessLog"
+  />
   <n-modal
     v-model:show="editProcessModal"
     preset="card"
@@ -435,8 +450,17 @@ onUnmounted(() => {
     size="huge"
     :bordered="false"
     :segmented="false"
-    @close="handleSaveProcessConfig"
   >
     <common-editor v-model:value="editProcessModel.config" height="60vh" />
+    <n-button
+      class="mt-1"
+      type="info"
+      block
+      :loading="saveProcessConfigLoading"
+      :disabled="saveProcessConfigLoading"
+      @click="handleSaveProcessConfig"
+    >
+      {{ $gettext('Save') }}
+    </n-button>
   </n-modal>
 </template>

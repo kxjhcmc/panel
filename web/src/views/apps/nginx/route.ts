@@ -1,6 +1,6 @@
-import type { RouteType } from '~/types/router'
+import type { RouteType } from '@/types/router'
 
-const Layout = () => import('@/layout/IndexView.vue')
+const Layout = () => import('@/layouts/IndexView.vue')
 
 export default {
   name: 'nginx',
@@ -15,8 +15,8 @@ export default {
       meta: {
         title: 'Nginx',
         role: ['admin'],
-        requireAuth: true
-      }
-    }
-  ]
+        requireAuth: true,
+      },
+    },
+  ],
 } as RouteType

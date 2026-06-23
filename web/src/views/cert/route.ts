@@ -1,13 +1,13 @@
-import type { RouteType } from '~/types/router'
+import type { RouteType } from '@/types/router'
 
-const Layout = () => import('@/layout/IndexView.vue')
+const Layout = () => import('@/layouts/IndexView.vue')
 
 export default {
   name: 'cert',
   path: '/cert',
   component: Layout,
   meta: {
-    order: 10
+    order: 10,
   },
   children: [
     {
@@ -18,8 +18,8 @@ export default {
         title: 'Certificate',
         icon: 'mdi:certificate-outline',
         role: ['admin'],
-        requireAuth: true
-      }
-    }
-  ]
+        requireAuth: true,
+      },
+    },
+  ],
 } as RouteType

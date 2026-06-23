@@ -10,11 +10,13 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/leonelquinteros/gotext"
 	"github.com/libtnb/chix"
+	"github.com/samber/lo"
 	"github.com/spf13/cast"
 
 	"github.com/acepanel/panel/v3/internal/service"
 	"github.com/acepanel/panel/v3/pkg/io"
 	"github.com/acepanel/panel/v3/pkg/shell"
+	"github.com/acepanel/panel/v3/pkg/types"
 )
 
 type App struct {
@@ -31,6 +33,10 @@ func (s *App) Route(r chi.Router) {
 	r.Get("/mounts", s.List)
 	r.Post("/mounts", s.Create)
 	r.Delete("/mounts", s.Delete)
+}
+
+func (s *App) Status() string {
+	return types.AppStatusNA
 }
 
 // List 所有 S3fs 挂载
@@ -81,11 +87,9 @@ func (s *App) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	for _, item := range list {
-		if item.Path == req.Path {
-			service.Error(w, http.StatusUnprocessableEntity, s.t.Get("mount path already exists"))
-			return
-		}
+	if lo.ContainsBy(list, func(item Mount) bool { return item.Path == req.Path }) {
+		service.Error(w, http.StatusUnprocessableEntity, s.t.Get("mount path already exists"))
+		return
 	}
 
 	id := time.Now().UnixMicro()
@@ -128,14 +132,8 @@ func (s *App) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var mount Mount
-	for _, item := range list {
-		if item.ID == req.ID {
-			mount = item
-			break
-		}
-	}
-	if mount.ID == 0 {
+	mount, ok := lo.Find(list, func(item Mount) bool { return item.ID == req.ID })
+	if !ok {
 		service.Error(w, http.StatusUnprocessableEntity, s.t.Get("mount not found"))
 		return
 	}

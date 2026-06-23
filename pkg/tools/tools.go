@@ -197,13 +197,13 @@ func IsChina() bool {
 	client := resty.New()
 	defer func(client *resty.Client) { _ = client.Close() }(client)
 	client.SetLogger(NoopLogger{})
-	client.SetDisableWarn(true)
+	client.SetLoggerWarnLevel(true)
 	client.SetTimeout(3 * time.Second)
 	client.SetRetryCount(3)
 	client.SetTLSClientConfig(&tls.Config{InsecureSkipVerify: true})
 
 	resp, err := client.R().Get("https://perfops.cloudflareperf.com/cdn-cgi/trace")
-	if err != nil || !resp.IsSuccess() {
+	if err != nil || !resp.IsStatusSuccess() {
 		return false
 	}
 
@@ -219,7 +219,7 @@ func GetPublicIPv4() (string, error) {
 	client := resty.New()
 	defer func(client *resty.Client) { _ = client.Close() }(client)
 	client.SetLogger(NoopLogger{})
-	client.SetDisableWarn(true)
+	client.SetLoggerWarnLevel(true)
 	client.SetTimeout(3 * time.Second)
 	client.SetRetryCount(3)
 	client.SetTLSClientConfig(&tls.Config{InsecureSkipVerify: true})
@@ -230,7 +230,7 @@ func GetPublicIPv4() (string, error) {
 	})
 
 	resp, err := client.R().Get("https://perfops.cloudflareperf.com/cdn-cgi/trace")
-	if err != nil || !resp.IsSuccess() {
+	if err != nil || !resp.IsStatusSuccess() {
 		return "", errors.New("failed to get public ipv4 address")
 	}
 
@@ -242,7 +242,7 @@ func GetPublicIPv6() (string, error) {
 	client := resty.New()
 	defer func(client *resty.Client) { _ = client.Close() }(client)
 	client.SetLogger(NoopLogger{})
-	client.SetDisableWarn(true)
+	client.SetLoggerWarnLevel(true)
 	client.SetTimeout(3 * time.Second)
 	client.SetRetryCount(3)
 	client.SetTLSClientConfig(&tls.Config{InsecureSkipVerify: true})
@@ -253,7 +253,7 @@ func GetPublicIPv6() (string, error) {
 	})
 
 	resp, err := client.R().Get("https://perfops.cloudflareperf.com/cdn-cgi/trace")
-	if err != nil || !resp.IsSuccess() {
+	if err != nil || !resp.IsStatusSuccess() {
 		return "", errors.New("failed to get public ipv6 address")
 	}
 
@@ -282,6 +282,24 @@ func GetLocalIPv6() (string, error) {
 
 	local := conn.LocalAddr().(*stdnet.UDPAddr)
 	return local.IP.String(), nil
+}
+
+// CollectLocalNames 收集本机所有 IP 地址
+func CollectLocalNames() []string {
+	var names []string
+	if lv4, err := GetLocalIPv4(); err == nil && !slices.Contains(names, lv4) {
+		names = append(names, lv4)
+	}
+	if lv6, err := GetLocalIPv6(); err == nil && !slices.Contains(names, lv6) {
+		names = append(names, lv6)
+	}
+	if rv4, err := GetPublicIPv4(); err == nil && !slices.Contains(names, rv4) {
+		names = append(names, rv4)
+	}
+	if rv6, err := GetPublicIPv6(); err == nil && !slices.Contains(names, rv6) {
+		names = append(names, rv6)
+	}
+	return names
 }
 
 // FormatBytes 格式化bytes

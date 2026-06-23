@@ -1,17 +1,12 @@
 <script setup lang="ts">
-import {
-  NButton,
-  NDataTable,
-  NDynamicTags,
-  NInputGroup,
-  NInputNumber,
-  NPopconfirm,
-  NSelect
-} from 'naive-ui'
+import { NButton, NDataTable, NFlex } from 'naive-ui'
 import { useGettext } from 'vue3-gettext'
 
 import nginx from '@/api/apps/nginx'
+import systemctl from '@/api/panel/systemctl'
 import ServiceStatus from '@/components/common/ServiceStatus.vue'
+import { useConfirm } from '@/components/system/composables/useConfirm'
+
 import NginxConfigTuneView from './NginxConfigTuneView.vue'
 
 const props = defineProps<{
@@ -20,10 +15,12 @@ const props = defineProps<{
 }>()
 
 const { $gettext } = useGettext()
+const { confirmDelete } = useConfirm()
 const currentTab = ref('status')
 const streamTab = ref('server')
 const saveConfigLoading = ref(false)
 const clearErrorLogLoading = ref(false)
+const clearRunLogLoading = ref(false)
 const saveStreamServerLoading = ref(false)
 const saveStreamUpstreamLoading = ref(false)
 
@@ -32,69 +29,73 @@ const SECOND = 1000000000
 const MINUTE = 60 * SECOND
 const HOUR = 60 * MINUTE
 
-// 从纳秒解析为 {value, unit} 格式
-const parseDuration = (ns: number): { value: number; unit: string } => {
-  if (!ns || ns <= 0) return { value: 5, unit: 's' }
-
-  if (ns >= HOUR && ns % HOUR === 0) {
-    return { value: ns / HOUR, unit: 'h' }
-  }
-  if (ns >= MINUTE && ns % MINUTE === 0) {
-    return { value: ns / MINUTE, unit: 'm' }
-  }
-  return { value: Math.floor(ns / SECOND), unit: 's' }
-}
-
-// 构建纳秒时间
-const buildDuration = (value: number, unit: string): number => {
+// 时间单位换算因子（纳秒）
+const durationUnitFactor = (unit: string): number => {
   switch (unit) {
     case 'h':
-      return value * HOUR
+      return HOUR
     case 'm':
-      return value * MINUTE
+      return MINUTE
     default:
-      return value * SECOND
+      return SECOND
   }
 }
+
+// 从纳秒推断显示单位（仅用于编辑时初始化）
+const parseDurationUnit = (ns: number | null | undefined): string => {
+  if (!ns || ns <= 0) return 's'
+  if (ns >= HOUR && ns % HOUR === 0) return 'h'
+  if (ns >= MINUTE && ns % MINUTE === 0) return 'm'
+  return 's'
+}
+
+// 当前选中单位（独立 UI 状态，避免从纳秒反推导致单位跳变）
+const resolverTimeoutUnit = ref<string>('s')
+
+// 按当前单位把纳秒换算为显示值
+const resolverTimeoutDisplay = computed<number | null>(() => {
+  const ns = streamUpstreamModel.value.resolver_timeout
+  if (!ns || ns <= 0) return null
+  return ns / durationUnitFactor(resolverTimeoutUnit.value)
+})
 
 // 更新超时时间值
 const updateResolverTimeoutValue = (value: number) => {
-  const parsed = parseDuration(streamUpstreamModel.value.resolver_timeout)
-  streamUpstreamModel.value.resolver_timeout = buildDuration(value, parsed.unit)
+  streamUpstreamModel.value.resolver_timeout =
+    value > 0 ? value * durationUnitFactor(resolverTimeoutUnit.value) : 0
 }
 
-// 更新超时时间单位
+// 更新超时时间单位（仅改 UI 状态，纳秒值保持不变）
 const updateResolverTimeoutUnit = (unit: string) => {
-  const parsed = parseDuration(streamUpstreamModel.value.resolver_timeout)
-  streamUpstreamModel.value.resolver_timeout = buildDuration(parsed.value, unit)
+  resolverTimeoutUnit.value = unit
 }
 
 const { data: config, send: refreshConfig } = useRequest(props.api.config, {
-  initialData: ''
+  initialData: '',
 })
 const { data: errorLog } = useRequest(props.api.errorLog, {
-  initialData: ''
+  initialData: '',
 })
 const { data: load } = useRequest(props.api.load, {
-  initialData: []
+  initialData: [],
 })
 
 // Stream Server 数据
 const {
   data: streamServers,
   loading: streamServersLoading,
-  refresh: loadStreamServers
+  refresh: loadStreamServers,
 } = usePagination(props.api.stream.listServers, {
-  initialData: []
+  initialData: [],
 })
 
 // Stream Upstream 数据
 const {
   data: streamUpstreams,
   loading: streamUpstreamsLoading,
-  refresh: loadStreamUpstreams
+  refresh: loadStreamUpstreams,
 } = usePagination(props.api.stream.listUpstreams, {
-  initialData: []
+  initialData: [],
 })
 
 // 创建/编辑 Stream Server 模态框
@@ -111,7 +112,7 @@ const streamServerModel = ref({
   proxy_connect_timeout: 0,
   ssl: false,
   ssl_certificate: '',
-  ssl_certificate_key: ''
+  ssl_certificate_key: '',
 })
 
 // 创建/编辑 Stream Upstream 模态框
@@ -123,7 +124,7 @@ const streamUpstreamModel = ref({
   algo: '',
   servers: {} as Record<string, string>,
   resolver: [] as string[],
-  resolver_timeout: 5 * SECOND
+  resolver_timeout: 5 * SECOND,
 })
 
 // Upstream 服务器编辑
@@ -136,14 +137,14 @@ const columns: any = [
     key: 'name',
     minWidth: 200,
     resizable: true,
-    ellipsis: { tooltip: true }
+    ellipsis: { tooltip: true },
   },
   {
     title: $gettext('Current Value'),
     key: 'value',
     minWidth: 200,
-    ellipsis: { tooltip: true }
-  }
+    ellipsis: { tooltip: true },
+  },
 ]
 
 // Stream Server 列表列
@@ -153,14 +154,14 @@ const streamServerColumns: any = [
     key: 'name',
     minWidth: 150,
     resizable: true,
-    ellipsis: { tooltip: true }
+    ellipsis: { tooltip: true },
   },
   {
     title: $gettext('Listen'),
     key: 'listen',
     minWidth: 120,
     resizable: true,
-    ellipsis: { tooltip: true }
+    ellipsis: { tooltip: true },
   },
   {
     title: $gettext('Protocol'),
@@ -168,14 +169,14 @@ const streamServerColumns: any = [
     minWidth: 80,
     render(row: any) {
       return row.udp ? 'UDP' : 'TCP'
-    }
+    },
   },
   {
     title: $gettext('Proxy Pass'),
     key: 'proxy_pass',
     minWidth: 200,
     resizable: true,
-    ellipsis: { tooltip: true }
+    ellipsis: { tooltip: true },
   },
   {
     title: 'SSL',
@@ -183,52 +184,40 @@ const streamServerColumns: any = [
     minWidth: 60,
     render(row: any) {
       return row.ssl ? $gettext('Yes') : $gettext('No')
-    }
+    },
   },
   {
     title: $gettext('Actions'),
     key: 'actions',
     width: 200,
     render(row: any) {
-      return [
+      return h(NFlex, { size: 'small', align: 'center' }, () => [
         h(
           NButton,
           {
             size: 'small',
             type: 'info',
-            onClick: () => handleEditStreamServer(row)
+            onClick: () => handleEditStreamServer(row),
           },
-          {
-            default: () => $gettext('Edit')
-          }
+          { default: () => $gettext('Edit') },
         ),
         h(
-          NPopconfirm,
+          NButton,
           {
-            onPositiveClick: () => handleDeleteStreamServer(row.name)
-          },
-          {
-            default: () => {
-              return $gettext('Are you sure you want to delete %{ name }?', { name: row.name })
+            size: 'small',
+            type: 'error',
+            onClick: async () => {
+              const ok = await confirmDelete({
+                content: $gettext('Are you sure you want to delete %{ name }?', { name: row.name }),
+              })
+              if (ok) handleDeleteStreamServer(row.name)
             },
-            trigger: () => {
-              return h(
-                NButton,
-                {
-                  size: 'small',
-                  type: 'error',
-                  style: 'margin-left: 15px'
-                },
-                {
-                  default: () => $gettext('Delete')
-                }
-              )
-            }
-          }
-        )
-      ]
-    }
-  }
+          },
+          { default: () => $gettext('Delete') },
+        ),
+      ])
+    },
+  },
 ]
 
 // Stream Upstream 列表列
@@ -238,7 +227,7 @@ const streamUpstreamColumns: any = [
     key: 'name',
     minWidth: 150,
     resizable: true,
-    ellipsis: { tooltip: true }
+    ellipsis: { tooltip: true },
   },
   {
     title: $gettext('Algorithm'),
@@ -248,7 +237,7 @@ const streamUpstreamColumns: any = [
     ellipsis: { tooltip: true },
     render(row: any) {
       return row.algo || $gettext('Round Robin')
-    }
+    },
   },
   {
     title: $gettext('Servers'),
@@ -259,52 +248,40 @@ const streamUpstreamColumns: any = [
     render(row: any) {
       const servers = row.servers || {}
       return Object.keys(servers).length + $gettext(' server(s)')
-    }
+    },
   },
   {
     title: $gettext('Actions'),
     key: 'actions',
     width: 200,
     render(row: any) {
-      return [
+      return h(NFlex, { size: 'small', align: 'center' }, () => [
         h(
           NButton,
           {
             size: 'small',
             type: 'info',
-            onClick: () => handleEditStreamUpstream(row)
+            onClick: () => handleEditStreamUpstream(row),
           },
-          {
-            default: () => $gettext('Edit')
-          }
+          { default: () => $gettext('Edit') },
         ),
         h(
-          NPopconfirm,
+          NButton,
           {
-            onPositiveClick: () => handleDeleteStreamUpstream(row.name)
-          },
-          {
-            default: () => {
-              return $gettext('Are you sure you want to delete %{ name }?', { name: row.name })
+            size: 'small',
+            type: 'error',
+            onClick: async () => {
+              const ok = await confirmDelete({
+                content: $gettext('Are you sure you want to delete %{ name }?', { name: row.name }),
+              })
+              if (ok) handleDeleteStreamUpstream(row.name)
             },
-            trigger: () => {
-              return h(
-                NButton,
-                {
-                  size: 'small',
-                  type: 'error',
-                  style: 'margin-left: 15px'
-                },
-                {
-                  default: () => $gettext('Delete')
-                }
-              )
-            }
-          }
-        )
-      ]
-    }
-  }
+          },
+          { default: () => $gettext('Delete') },
+        ),
+      ])
+    },
+  },
 ]
 
 // 监听标签页切换
@@ -336,10 +313,26 @@ const handleSaveConfig = () => {
     })
 }
 
+const runLogRef = ref<{ clear: () => void } | null>(null)
+const errorLogRef = ref<{ clear: () => void } | null>(null)
+
+const handleClearRunLog = () => {
+  clearRunLogLoading.value = true
+  useRequest(systemctl.clearLog(props.service))
+    .onSuccess(() => {
+      runLogRef.value?.clear()
+      window.$message.success($gettext('Cleared successfully'))
+    })
+    .onComplete(() => {
+      clearRunLogLoading.value = false
+    })
+}
+
 const handleClearErrorLog = () => {
   clearErrorLogLoading.value = true
   useRequest(props.api.clearErrorLog())
     .onSuccess(() => {
+      errorLogRef.value?.clear()
       window.$message.success($gettext('Cleared successfully'))
     })
     .onComplete(() => {
@@ -361,7 +354,7 @@ const handleCreateStreamServer = () => {
     proxy_connect_timeout: 0,
     ssl: false,
     ssl_certificate: '',
-    ssl_certificate_key: ''
+    ssl_certificate_key: '',
   }
   streamServerModal.value = true
 }
@@ -379,7 +372,7 @@ const handleEditStreamServer = (row: any) => {
     proxy_connect_timeout: row.proxy_connect_timeout ? row.proxy_connect_timeout / 1000000000 : 0,
     ssl: row.ssl || false,
     ssl_certificate: row.ssl_certificate || '',
-    ssl_certificate_key: row.ssl_certificate_key || ''
+    ssl_certificate_key: row.ssl_certificate_key || '',
   }
   streamServerModal.value = true
 }
@@ -388,7 +381,7 @@ const handleSaveStreamServer = () => {
   const data = {
     ...streamServerModel.value,
     proxy_timeout: streamServerModel.value.proxy_timeout * 1000000000,
-    proxy_connect_timeout: streamServerModel.value.proxy_connect_timeout * 1000000000
+    proxy_connect_timeout: streamServerModel.value.proxy_connect_timeout * 1000000000,
   }
 
   const request = streamServerEditName.value
@@ -423,8 +416,9 @@ const handleCreateStreamUpstream = () => {
     algo: '',
     servers: {},
     resolver: [],
-    resolver_timeout: 5 * SECOND
+    resolver_timeout: 5 * SECOND,
   }
+  resolverTimeoutUnit.value = 's'
   upstreamServerAddr.value = ''
   upstreamServerOptions.value = ''
   streamUpstreamModal.value = true
@@ -438,8 +432,9 @@ const handleEditStreamUpstream = (row: any) => {
     algo: row.algo || '',
     servers: { ...row.servers },
     resolver: row.resolver,
-    resolver_timeout: row.resolver_timeout || 5 * SECOND
+    resolver_timeout: row.resolver_timeout || 5 * SECOND,
   }
+  resolverTimeoutUnit.value = parseDurationUnit(streamUpstreamModel.value.resolver_timeout)
   upstreamServerAddr.value = ''
   upstreamServerOptions.value = ''
   streamUpstreamModal.value = true
@@ -470,7 +465,7 @@ const handleSaveStreamUpstream = () => {
     algo: streamUpstreamModel.value.algo,
     servers: streamUpstreamModel.value.servers,
     resolver: streamUpstreamModel.value.resolver,
-    resolver_timeout: streamUpstreamModel.value.resolver_timeout
+    resolver_timeout: streamUpstreamModel.value.resolver_timeout,
   }
 
   const request = streamUpstreamEditName.value
@@ -498,7 +493,7 @@ const handleDeleteStreamUpstream = (name: string) => {
 </script>
 
 <template>
-  <common-page show-footer>
+  <PageContainer :show-footer="true">
     <n-tabs v-model:value="currentTab" type="line" animated>
       <n-tab-pane name="status" :tab="$gettext('Running Status')">
         <service-status service="nginx" show-reload />
@@ -509,13 +504,18 @@ const handleDeleteStreamUpstream = (name: string) => {
             {{
               $gettext(
                 'This modifies the %{name} main configuration file. If you do not understand the meaning of each parameter, please do not modify it randomly!',
-                { name: service === 'nginx' ? 'Nginx' : 'OpenResty' }
+                { name: service === 'nginx' ? 'Nginx' : 'OpenResty' },
               )
             }}
           </n-alert>
           <common-editor v-model:value="config" lang="nginx" height="60vh" />
           <n-flex>
-            <n-button type="primary" :loading="saveConfigLoading" :disabled="saveConfigLoading" @click="handleSaveConfig">
+            <n-button
+              type="primary"
+              :loading="saveConfigLoading"
+              :disabled="saveConfigLoading"
+              @click="handleSaveConfig"
+            >
               {{ $gettext('Save') }}
             </n-button>
           </n-flex>
@@ -535,7 +535,7 @@ const handleDeleteStreamUpstream = (name: string) => {
               </n-flex>
               <n-data-table
                 striped
-                :scroll-x="800"
+                :scroll-x="900"
                 :loading="streamServersLoading"
                 :columns="streamServerColumns"
                 :data="streamServers"
@@ -552,7 +552,7 @@ const handleDeleteStreamUpstream = (name: string) => {
               </n-flex>
               <n-data-table
                 striped
-                :scroll-x="600"
+                :scroll-x="700"
                 :loading="streamUpstreamsLoading"
                 :columns="streamUpstreamColumns"
                 :data="streamUpstreams"
@@ -573,20 +573,37 @@ const handleDeleteStreamUpstream = (name: string) => {
         />
       </n-tab-pane>
       <n-tab-pane name="run-log" :tab="$gettext('Runtime Logs')">
-        <realtime-log service="nginx" />
+        <n-flex vertical>
+          <n-flex>
+            <n-button
+              type="primary"
+              :loading="clearRunLogLoading"
+              :disabled="clearRunLogLoading"
+              @click="handleClearRunLog"
+            >
+              {{ $gettext('Clear Log') }}
+            </n-button>
+          </n-flex>
+          <realtime-log ref="runLogRef" :service="props.service" />
+        </n-flex>
       </n-tab-pane>
       <n-tab-pane name="error-log" :tab="$gettext('Error Logs')">
         <n-flex vertical>
           <n-flex>
-            <n-button type="primary" :loading="clearErrorLogLoading" :disabled="clearErrorLogLoading" @click="handleClearErrorLog">
+            <n-button
+              type="primary"
+              :loading="clearErrorLogLoading"
+              :disabled="clearErrorLogLoading"
+              @click="handleClearErrorLog"
+            >
               {{ $gettext('Clear Log') }}
             </n-button>
           </n-flex>
-          <realtime-log :path="errorLog" />
+          <realtime-log ref="errorLogRef" :path="errorLog" />
         </n-flex>
       </n-tab-pane>
     </n-tabs>
-  </common-page>
+  </PageContainer>
   <!-- Stream Server 模态框 -->
   <n-modal
     v-model:show="streamServerModal"
@@ -663,7 +680,15 @@ const handleDeleteStreamUpstream = (name: string) => {
         />
       </n-form-item>
     </n-form>
-    <n-button type="info" block :loading="saveStreamServerLoading" :disabled="saveStreamServerLoading" @click="handleSaveStreamServer">{{ $gettext('Submit') }}</n-button>
+    <n-button
+      type="info"
+      block
+      :loading="saveStreamServerLoading"
+      :disabled="saveStreamServerLoading"
+      @click="handleSaveStreamServer"
+    >
+      {{ $gettext('Submit') }}
+    </n-button>
   </n-modal>
   <!-- Stream Upstream 模态框 -->
   <n-modal
@@ -695,23 +720,23 @@ const handleDeleteStreamUpstream = (name: string) => {
             { label: 'hash $remote_addr', value: 'hash $remote_addr' },
             { label: 'random', value: 'random' },
             { label: 'least_time connect', value: 'least_time connect' },
-            { label: 'least_time first_byte', value: 'least_time first_byte' }
+            { label: 'least_time first_byte', value: 'least_time first_byte' },
           ]"
         />
       </n-form-item>
       <n-form-item :label="$gettext('Servers')">
-        <n-flex vertical wh-full>
+        <n-flex vertical class="wh-full">
           <n-flex>
             <n-input
               v-model:value="upstreamServerAddr"
               type="text"
-              flex-1
+              class="flex-1"
               :placeholder="$gettext('Server address, e.g. 127.0.0.1:3306')"
             />
             <n-input
               v-model:value="upstreamServerOptions"
               type="text"
-              flex-1
+              class="flex-1"
               :placeholder="$gettext('Options (optional), e.g. weight=5 backup')"
             />
             <n-button type="primary" @click="handleAddUpstreamServer">
@@ -723,7 +748,7 @@ const handleDeleteStreamUpstream = (name: string) => {
               <tr>
                 <th>{{ $gettext('Address') }}</th>
                 <th>{{ $gettext('Options') }}</th>
-                <th w-100>{{ $gettext('Actions') }}</th>
+                <th class="w-25">{{ $gettext('Actions') }}</th>
               </tr>
             </thead>
             <tbody>
@@ -741,7 +766,7 @@ const handleDeleteStreamUpstream = (name: string) => {
                 </td>
               </tr>
               <tr v-if="Object.keys(streamUpstreamModel.servers).length === 0">
-                <td colspan="3" text-center>
+                <td colspan="3" class="text-center">
                   {{ $gettext('No servers added yet') }}
                 </td>
               </tr>
@@ -762,26 +787,32 @@ const handleDeleteStreamUpstream = (name: string) => {
       >
         <n-input-group>
           <n-input-number
-            :value="parseDuration(streamUpstreamModel.resolver_timeout).value"
+            :value="resolverTimeoutDisplay"
             :min="1"
             :max="3600"
-            style="flex: 1"
-            @update:value="(v: number | null) => updateResolverTimeoutValue(v ?? 5)"
+            class="flex-1"
+            @update:value="(v: number | null) => updateResolverTimeoutValue(v ?? 0)"
           />
           <n-select
-            :value="parseDuration(streamUpstreamModel.resolver_timeout).unit"
+            :value="resolverTimeoutUnit"
             :options="[
               { label: $gettext('Seconds'), value: 's' },
               { label: $gettext('Minutes'), value: 'm' },
-              { label: $gettext('Hours'), value: 'h' }
+              { label: $gettext('Hours'), value: 'h' },
             ]"
-            style="width: 100px"
+            class="w-25"
             @update:value="(v: string) => updateResolverTimeoutUnit(v)"
           />
         </n-input-group>
       </n-form-item>
     </n-form>
-    <n-button type="info" block :loading="saveStreamUpstreamLoading" :disabled="saveStreamUpstreamLoading" @click="handleSaveStreamUpstream">
+    <n-button
+      type="info"
+      block
+      :loading="saveStreamUpstreamLoading"
+      :disabled="saveStreamUpstreamLoading"
+      @click="handleSaveStreamUpstream"
+    >
       {{ $gettext('Submit') }}
     </n-button>
   </n-modal>

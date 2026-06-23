@@ -8,6 +8,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/leonelquinteros/gotext"
+	"github.com/samber/lo"
 
 	"github.com/acepanel/panel/v3/internal/app"
 	"github.com/acepanel/panel/v3/internal/biz"
@@ -36,6 +37,11 @@ func (s *App) Route(r chi.Router) {
 	r.Post("/config", s.UpdateConfig)
 	r.Get("/config_tune", s.GetConfigTune)
 	r.Post("/config_tune", s.UpdateConfigTune)
+}
+
+func (s *App) Status() string {
+	ok, _ := systemctl.Status("valkey")
+	return types.AggregateAppStatus(ok)
 }
 
 func (s *App) Load(w http.ResponseWriter, r *http.Request) {
@@ -68,15 +74,13 @@ func (s *App) Load(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	infoLines := strings.Split(raw, "\n")
-	dataRaw := make(map[string]string)
-
-	for _, item := range infoLines {
+	dataRaw := lo.SliceToMap(strings.Split(raw, "\n"), func(item string) (string, string) {
 		parts := strings.Split(item, ":")
-		if len(parts) == 2 {
-			dataRaw[strings.TrimSpace(parts[0])] = strings.TrimSpace(parts[1])
+		if len(parts) != 2 {
+			return "", ""
 		}
-	}
+		return strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
+	})
 
 	data := []types.NV{
 		{Name: s.t.Get("TCP Port"), Value: dataRaw["tcp_port"]},

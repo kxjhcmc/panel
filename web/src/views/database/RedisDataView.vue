@@ -1,12 +1,14 @@
 <script setup lang="ts">
-import database from '@/api/panel/database'
-import { formatBytes } from '@/utils'
-import DeleteConfirm from '@/components/common/DeleteConfirm.vue'
-import RedisKeyModal from '@/views/database/RedisKeyModal.vue'
-import { NButton, NInputNumber, NPopconfirm, NTag } from 'naive-ui'
+import { NButton, NFlex, NTag } from 'naive-ui'
 import { useGettext } from 'vue3-gettext'
 
+import database from '@/api/panel/database'
+import { useConfirm } from '@/components/system/composables/useConfirm'
+import { formatBytes } from '@/utils'
+import RedisKeyModal from '@/views/database/RedisKeyModal.vue'
+
 const { $gettext } = useGettext()
+const { confirmDelete } = useConfirm()
 
 // 服务器选择
 const selectedServer = ref<number | null>(null)
@@ -38,13 +40,18 @@ const ttlModalShow = ref(false)
 const ttlKey = ref('')
 const ttlValue = ref(0)
 
+// Rename 弹窗
+const renameModalShow = ref(false)
+const renameOldKey = ref('')
+const renameNewKey = ref('')
+
 // 类型对应颜色
 const typeColorMap: Record<string, 'info' | 'success' | 'warning' | 'default' | 'error'> = {
   string: 'info',
   list: 'success',
   set: 'warning',
   hash: 'default',
-  zset: 'error'
+  zset: 'error',
 }
 
 // 加载服务器列表
@@ -54,7 +61,7 @@ const loadServers = () => {
     .onSuccess(({ data }: { data: any }) => {
       serverOptions.value = (data.items || []).map((s: any) => ({
         label: `${s.name} (${s.host}:${s.port})`,
-        value: s.id
+        value: s.id,
       }))
       if (serverOptions.value.length > 0 && !selectedServer.value) {
         selectedServer.value = serverOptions.value[0].value
@@ -81,7 +88,7 @@ const columns: any = [
     key: 'key',
     minWidth: 200,
     resizable: true,
-    ellipsis: { tooltip: true }
+    ellipsis: { tooltip: true },
   },
   {
     title: $gettext('Type'),
@@ -91,9 +98,9 @@ const columns: any = [
       return h(
         NTag,
         { type: typeColorMap[row.type] || 'default', size: 'small' },
-        { default: () => row.type }
+        { default: () => row.type },
       )
-    }
+    },
   },
   {
     title: 'TTL',
@@ -103,7 +110,7 @@ const columns: any = [
       if (row.ttl === -1) return $gettext('Permanent')
       if (row.ttl === -2) return $gettext('Expired')
       return `${row.ttl}s`
-    }
+    },
   },
   {
     title: $gettext('Size'),
@@ -111,15 +118,15 @@ const columns: any = [
     width: 100,
     render(row: any) {
       return formatBytes(row.size)
-    }
+    },
   },
   {
     title: $gettext('Actions'),
     key: 'actions',
-    width: 300,
+    width: 380,
     hideInExcel: true,
     render(row: any) {
-      return [
+      return h(NFlex, { size: 'small', align: 'center' }, () => [
         h(
           NButton,
           {
@@ -129,46 +136,54 @@ const columns: any = [
               keyModalMode.value = 'view'
               keyModalKeyName.value = row.key
               keyModalShow.value = true
-            }
+            },
           },
-          { default: () => $gettext('View') }
+          { default: () => $gettext('View') },
         ),
         h(
           NButton,
           {
             size: 'small',
             type: 'warning',
-            style: 'margin-left: 10px;',
             onClick: () => {
               ttlKey.value = row.key
               ttlValue.value = row.ttl > 0 ? row.ttl : 0
               ttlModalShow.value = true
-            }
+            },
           },
-          { default: () => 'TTL' }
+          { default: () => 'TTL' },
         ),
         h(
-          DeleteConfirm,
+          NButton,
           {
-            onPositiveClick: () => handleDelete(row.key)
+            size: 'small',
+            type: 'primary',
+            ghost: true,
+            onClick: () => {
+              renameOldKey.value = row.key
+              renameNewKey.value = row.key
+              renameModalShow.value = true
+            },
           },
+          { default: () => $gettext('Rename') },
+        ),
+        h(
+          NButton,
           {
-            default: () => $gettext('Are you sure you want to delete this key?'),
-            trigger: () =>
-              h(
-                NButton,
-                {
-                  size: 'small',
-                  type: 'error',
-                  style: 'margin-left: 10px;'
-                },
-                { default: () => $gettext('Delete') }
-              )
-          }
-        )
-      ]
-    }
-  }
+            size: 'small',
+            type: 'error',
+            onClick: async () => {
+              const ok = await confirmDelete({
+                content: $gettext('Are you sure you want to delete this key?'),
+              })
+              if (ok) handleDelete(row.key)
+            },
+          },
+          { default: () => $gettext('Delete') },
+        ),
+      ])
+    },
+  },
 ]
 
 const { loading, data, page, total, pageSize, pageCount, refresh } = usePagination(
@@ -180,8 +195,8 @@ const { loading, data, page, total, pageSize, pageCount, refresh } = usePaginati
     total: (res: any) => res.total,
     data: (res: any) => res.items,
     watchingStates: [selectedServer, selectedDB, search],
-    immediate: false
-  }
+    immediate: false,
+  },
 )
 
 const handleSearch = () => {
@@ -191,22 +206,36 @@ const handleSearch = () => {
 
 const handleDelete = (key: string) => {
   if (!selectedServer.value) return
-  useRequest(database.redisKeyDelete(selectedServer.value, selectedDB.value, key)).onSuccess(
-    () => {
-      refresh()
-      window.$message.success($gettext('Deleted successfully'))
-    }
-  )
+  useRequest(database.redisKeyDelete(selectedServer.value, selectedDB.value, key)).onSuccess(() => {
+    refresh()
+    window.$message.success($gettext('Deleted successfully'))
+  })
 }
 
 const handleSetTTL = () => {
   if (!selectedServer.value) return
   useRequest(
-    database.redisKeyTTL(selectedServer.value, selectedDB.value, ttlKey.value, ttlValue.value)
+    database.redisKeyTTL(selectedServer.value, selectedDB.value, ttlKey.value, ttlValue.value),
   ).onSuccess(() => {
     ttlModalShow.value = false
     refresh()
     window.$message.success($gettext('Modified successfully'))
+  })
+}
+
+const handleRename = () => {
+  if (!selectedServer.value) return
+  useRequest(
+    database.redisKeyRename(
+      selectedServer.value,
+      selectedDB.value,
+      renameOldKey.value,
+      renameNewKey.value,
+    ),
+  ).onSuccess(() => {
+    renameModalShow.value = false
+    refresh()
+    window.$message.success($gettext('Renamed successfully'))
   })
 }
 
@@ -243,13 +272,9 @@ onUnmounted(() => {
           :options="serverOptions"
           :loading="serverLoading"
           :placeholder="$gettext('Select Server')"
-          style="width: 250px"
+          class="w-62.5"
         />
-        <n-select
-          v-model:value="selectedDB"
-          :options="dbOptions"
-          style="width: 120px"
-        />
+        <n-select v-model:value="selectedDB" :options="dbOptions" class="w-30" />
       </n-flex>
       <n-flex :wrap="false">
         <n-input-group>
@@ -257,7 +282,7 @@ onUnmounted(() => {
             v-model:value="searchInput"
             :placeholder="$gettext('Search key pattern, e.g. user:*')"
             clearable
-            style="width: 250px"
+            class="!w-62.5"
             @keydown.enter="handleSearch"
           />
           <n-button type="primary" @click="handleSearch">
@@ -267,17 +292,22 @@ onUnmounted(() => {
         <n-button type="primary" @click="openCreate">
           {{ $gettext('Create Key') }}
         </n-button>
-        <n-popconfirm @positive-click="handleClear">
+        <ConfirmDialog
+          type="danger"
+          :content="$gettext('Are you sure you want to clear the current database?')"
+          @confirm="handleClear"
+        >
           <template #trigger>
             <n-button type="error">
               {{ $gettext('Clear DB') }}
             </n-button>
           </template>
-          {{ $gettext('Are you sure you want to clear the current database?') }}
-        </n-popconfirm>
+        </ConfirmDialog>
       </n-flex>
     </n-flex>
     <n-data-table
+      v-model:page="page"
+      v-model:pageSize="pageSize"
       striped
       remote
       :scroll-x="900"
@@ -285,16 +315,13 @@ onUnmounted(() => {
       :columns="columns"
       :data="data"
       :row-key="(row: any) => row.key"
-      v-model:page="page"
-      v-model:pageSize="pageSize"
       :pagination="{
         page: page,
-        pageCount: pageCount,
         pageSize: pageSize,
         itemCount: total,
         showQuickJumper: true,
         showSizePicker: true,
-        pageSizes: [20, 50, 100, 200]
+        pageSizes: [20, 50, 100, 200],
       }"
     />
   </n-flex>
@@ -311,7 +338,7 @@ onUnmounted(() => {
     v-model:show="ttlModalShow"
     preset="card"
     :title="$gettext('Set TTL')"
-    style="width: 400px"
+    class="w-100"
     :bordered="false"
   >
     <n-form>
@@ -328,6 +355,26 @@ onUnmounted(() => {
       </n-form-item>
     </n-form>
     <n-button type="info" block @click="handleSetTTL">
+      {{ $gettext('Submit') }}
+    </n-button>
+  </n-modal>
+  <!-- Rename 弹窗 -->
+  <n-modal
+    v-model:show="renameModalShow"
+    preset="card"
+    :title="$gettext('Rename Key')"
+    class="w-100"
+    :bordered="false"
+  >
+    <n-form>
+      <n-form-item :label="$gettext('Old Key')">
+        <n-input :value="renameOldKey" disabled />
+      </n-form-item>
+      <n-form-item :label="$gettext('New Key')">
+        <n-input v-model:value="renameNewKey" :placeholder="$gettext('Enter new key name')" />
+      </n-form-item>
+    </n-form>
+    <n-button type="info" block @click="handleRename">
       {{ $gettext('Submit') }}
     </n-button>
   </n-modal>

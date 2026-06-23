@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/leonelquinteros/gotext"
+	"github.com/samber/lo"
 	"gorm.io/gorm"
 
 	"github.com/acepanel/panel/v3/internal/app"
@@ -21,6 +22,7 @@ import (
 	"github.com/acepanel/panel/v3/pkg/io"
 	"github.com/acepanel/panel/v3/pkg/shell"
 	"github.com/acepanel/panel/v3/pkg/storage"
+	"github.com/acepanel/panel/v3/pkg/systemctl"
 	"github.com/acepanel/panel/v3/pkg/tools"
 	"github.com/acepanel/panel/v3/pkg/types"
 )
@@ -105,7 +107,11 @@ func (r *backupRepo) Create(ctx context.Context, typ biz.BackupType, target stri
 	}
 
 	start := time.Now()
-	name := fmt.Sprintf("%s_%s", target, start.Format("20060102150405"))
+	namePrefix := target
+	if typ == biz.BackupTypePath {
+		namePrefix = filepath.Base(target)
+	}
+	name := fmt.Sprintf("%s_%s", namePrefix, start.Format("20060102150405"))
 	if app.IsCli {
 		fmt.Println(r.hr)
 		fmt.Println(r.t.Get("★ Start backup [%s]", start.Format(time.DateTime)))
@@ -122,6 +128,14 @@ func (r *backupRepo) Create(ctx context.Context, typ biz.BackupType, target stri
 		err = r.createMySQL(name, client, target)
 	case biz.BackupTypePostgres:
 		err = r.createPostgres(name, client, target)
+	case biz.BackupTypeClickHouse:
+		err = r.createClickHouse(name, client, target)
+	case biz.BackupTypeRedis:
+		err = r.createRedisLike(name, client, "redis")
+	case biz.BackupTypeValkey:
+		err = r.createRedisLike(name, client, "valkey")
+	case biz.BackupTypePath:
+		err = r.createPath(name, client, target)
 	default:
 		return errors.New(r.t.Get("unknown backup type"))
 	}
@@ -164,7 +178,7 @@ func (r *backupRepo) Create(ctx context.Context, typ biz.BackupType, target stri
 func (r *backupRepo) CreatePanel() error {
 	start := time.Now()
 
-	backup := filepath.Join(r.GetDefaultPath(biz.BackupTypePanel), fmt.Sprintf("panel_%s.zip", time.Now().Format("20060102150405")))
+	backup := filepath.Join(r.GetDefaultPath(biz.BackupTypePanel), fmt.Sprintf("panel_%s%s", time.Now().Format("20060102150405"), r.backupExt()))
 
 	temp, err := os.MkdirTemp("", "ace-backup-*")
 	if err != nil {
@@ -230,6 +244,12 @@ func (r *backupRepo) Restore(ctx context.Context, typ biz.BackupType, backup, ta
 		err = r.restoreMySQL(backup, target)
 	case biz.BackupTypePostgres:
 		err = r.restorePostgres(backup, target)
+	case biz.BackupTypeClickHouse:
+		err = r.restoreClickHouse(backup, target)
+	case biz.BackupTypeRedis:
+		err = r.restoreRedisLike(backup, "redis")
+	case biz.BackupTypeValkey:
+		err = r.restoreRedisLike(backup, "valkey")
 	default:
 		return errors.New(r.t.Get("unknown backup type"))
 	}
@@ -253,9 +273,11 @@ func (r *backupRepo) Restore(ctx context.Context, typ biz.BackupType, backup, ta
 func (r *backupRepo) GetDefaultPath(typ biz.BackupType) string {
 	backupPath, err := r.setting.Get(biz.SettingKeyBackupPath)
 	if err != nil {
-		return filepath.Join(app.Root, "backup", string(typ))
+		backupPath = filepath.Join(app.Root, "backup")
 	}
-	return filepath.Join(backupPath, string(typ))
+	path := filepath.Join(backupPath, string(typ))
+	_ = os.MkdirAll(path, 0755)
+	return path
 }
 
 // CutoffLog 切割日志
@@ -267,7 +289,7 @@ func (r *backupRepo) CutoffLog(path, target string) (string, error) {
 	}
 
 	name := strings.TrimSuffix(filepath.Base(target), filepath.Ext(target))
-	to := filepath.Join(path, fmt.Sprintf("%s_%s.zip", name, time.Now().Format("20060102150405")))
+	to := filepath.Join(path, fmt.Sprintf("%s_%s%s", name, time.Now().Format("20060102150405"), r.backupExt()))
 	if err := io.Compress(filepath.Dir(target), []string{filepath.Base(target)}, to); err != nil {
 		return "", err
 	}
@@ -321,16 +343,16 @@ func (r *backupRepo) ClearExpired(path, prefix string, save uint) error {
 		return err
 	}
 
-	var filtered []os.FileInfo
-	for _, file := range files {
-		if strings.HasPrefix(file.Name(), prefix) && strings.HasSuffix(file.Name(), ".zip") {
-			info, err := os.Stat(filepath.Join(path, file.Name()))
-			if err != nil {
-				continue
-			}
-			filtered = append(filtered, info)
+	filtered := lo.FilterMap(files, func(file os.DirEntry, _ int) (os.FileInfo, bool) {
+		if !strings.HasPrefix(file.Name(), prefix) || !r.isBackupArchive(file.Name()) {
+			return nil, false
 		}
-	}
+		info, err := os.Stat(filepath.Join(path, file.Name()))
+		if err != nil {
+			return nil, false
+		}
+		return info, true
+	})
 
 	// 排序所有备份文件，从新到旧
 	slices.SortFunc(filtered, func(a, b os.FileInfo) int {
@@ -387,7 +409,7 @@ func (r *backupRepo) ClearStorageExpired(storage uint, typ biz.BackupType, prefi
 	}
 	var filtered []fileInfo
 	for _, file := range files {
-		if strings.HasPrefix(file, prefix) && strings.HasSuffix(file, ".zip") {
+		if strings.HasPrefix(file, prefix) && r.isBackupArchive(file) {
 			lastModified, modErr := client.LastModified(filepath.Join(string(typ), file))
 			if modErr != nil {
 				continue
@@ -481,7 +503,7 @@ func (r *backupRepo) createWebsite(name string, storage storage.Storage, target 
 	}
 
 	// 压缩网站
-	name = name + ".zip"
+	name = name + r.backupExt()
 	if err = io.Compress(website.Path, nil, filepath.Join(tmpDir, name)); err != nil {
 		return err
 	}
@@ -539,12 +561,12 @@ func (r *backupRepo) createMySQL(name string, storage storage.Storage, target st
 	_ = os.Unsetenv("MYSQL_PWD")
 
 	// 压缩备份文件
-	if err = io.Compress(tmpDir, []string{name}, filepath.Join(tmpDir, name+".zip")); err != nil {
+	if err = io.Compress(tmpDir, []string{name}, filepath.Join(tmpDir, name+r.backupExt())); err != nil {
 		return err
 	}
 
 	// 上传备份文件到存储器
-	name = name + ".zip"
+	name = name + r.backupExt()
 	file, err := os.Open(filepath.Join(tmpDir, name))
 	if err != nil {
 		return err
@@ -597,12 +619,12 @@ func (r *backupRepo) createPostgres(name string, storage storage.Storage, target
 	_ = os.Unsetenv("PGPASSWORD")
 
 	// 压缩备份文件
-	if err = io.Compress(tmpDir, []string{name}, filepath.Join(tmpDir, name+".zip")); err != nil {
+	if err = io.Compress(tmpDir, []string{name}, filepath.Join(tmpDir, name+r.backupExt())); err != nil {
 		return err
 	}
 
 	// 上传备份文件到存储器
-	name = name + ".zip"
+	name = name + r.backupExt()
 	file, err := os.Open(filepath.Join(tmpDir, name))
 	if err != nil {
 		return err
@@ -610,6 +632,163 @@ func (r *backupRepo) createPostgres(name string, storage storage.Storage, target
 	defer func(file *os.File) { _ = file.Close() }(file)
 
 	if err = storage.Put(filepath.Join(string(biz.BackupTypePostgres), name), file); err != nil {
+		return err
+	}
+
+	if app.IsCli {
+		fmt.Println(r.t.Get("|-Backup file: %s", name))
+	}
+
+	return nil
+}
+
+// createClickHouse 创建 ClickHouse 备份
+func (r *backupRepo) createClickHouse(name string, storage storage.Storage, target string) error {
+	password, err := r.setting.Get(biz.SettingKeyClickHouseDefaultPassword)
+	if err != nil {
+		return err
+	}
+	// clickhouse-client 走 native 9000 端口，本地 default 用户
+	conn := fmt.Sprintf("--host 127.0.0.1 --port 9000 --user default --password '%s'", password)
+
+	// 校验数据库是否存在
+	exist, err := shell.Execf("clickhouse-client %s --query \"SELECT count() FROM system.databases WHERE name = '%s'\"", conn, target)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(exist) == "0" {
+		return errors.New(r.t.Get("database does not exist: %s", target))
+	}
+
+	// 创建用于压缩的临时目录
+	tmpDir, err := os.MkdirTemp("", "ace-backup-*")
+	if err != nil {
+		return err
+	}
+	defer func(path string) { _ = os.RemoveAll(path) }(tmpDir)
+
+	if app.IsCli {
+		fmt.Println(r.t.Get("|-Temporary directory: %s", tmpDir))
+	}
+
+	// 数据表（含数据）在前，视图（仅结构）在后
+	dataTables, err := r.clickHouseTables(conn, target, false)
+	if err != nil {
+		return err
+	}
+	views, err := r.clickHouseTables(conn, target, true)
+	if err != nil {
+		return err
+	}
+
+	// 导出结构到 schema.sql，去掉库名限定（恢复时由 --database 指定目标库）
+	objects := make([]string, 0, len(dataTables)+len(views))
+	objects = append(objects, dataTables...)
+	objects = append(objects, views...)
+	var schema strings.Builder
+	for _, tbl := range objects {
+		create, err := shell.Execf("clickhouse-client %s --query \"SELECT create_table_query FROM system.tables WHERE database = '%s' AND name = '%s' FORMAT TabSeparatedRaw\"", conn, target, tbl)
+		if err != nil {
+			return err
+		}
+		stmt := strings.TrimSpace(create)
+		stmt = strings.ReplaceAll(stmt, fmt.Sprintf("`%s`.", target), "")
+		stmt = strings.ReplaceAll(stmt, fmt.Sprintf("%s.", target), "")
+		schema.WriteString(stmt)
+		schema.WriteString(";\n")
+	}
+	if err = io.Write(filepath.Join(tmpDir, "schema.sql"), schema.String(), 0644); err != nil {
+		return err
+	}
+
+	// 导出数据（仅数据表，Native 格式）
+	files := []string{"schema.sql"}
+	for _, tbl := range dataTables {
+		dataFile := tbl + ".native"
+		if _, err = shell.Execf("clickhouse-client %s --query 'SELECT * FROM `%s`.`%s` FORMAT Native' > '%s'", conn, target, tbl, filepath.Join(tmpDir, dataFile)); err != nil {
+			return err
+		}
+		files = append(files, dataFile)
+	}
+
+	// 压缩备份文件
+	name = name + r.backupExt()
+	if err = io.Compress(tmpDir, files, filepath.Join(tmpDir, name)); err != nil {
+		return err
+	}
+
+	// 上传备份文件到存储器
+	file, err := os.Open(filepath.Join(tmpDir, name))
+	if err != nil {
+		return err
+	}
+	defer func(file *os.File) { _ = file.Close() }(file)
+
+	if err = storage.Put(filepath.Join(string(biz.BackupTypeClickHouse), name), file); err != nil {
+		return err
+	}
+
+	if app.IsCli {
+		fmt.Println(r.t.Get("|-Backup file: %s", name))
+	}
+
+	return nil
+}
+
+// clickHouseTables 列出库中对象名，onlyView 为 true 时仅返回视图，否则返回非视图数据表
+func (r *backupRepo) clickHouseTables(conn, database string, onlyView bool) ([]string, error) {
+	op := "NOT LIKE"
+	if onlyView {
+		op = "LIKE"
+	}
+	out, err := shell.Execf("clickhouse-client %s --query \"SELECT name FROM system.tables WHERE database = '%s' AND NOT is_temporary AND engine %s '%%View%%' ORDER BY name FORMAT TabSeparated\"", conn, database, op)
+	if err != nil {
+		return nil, err
+	}
+
+	var tables []string
+	for line := range strings.SplitSeq(out, "\n") {
+		if l := strings.TrimSpace(line); l != "" {
+			tables = append(tables, l)
+		}
+	}
+	return tables, nil
+}
+
+// createPath 创建目录备份
+func (r *backupRepo) createPath(name string, storage storage.Storage, target string) error {
+	if !io.Exists(target) {
+		return errors.New(r.t.Get("path does not exist: %s", target))
+	}
+	if !io.IsDir(target) {
+		return errors.New(r.t.Get("path is not a directory: %s", target))
+	}
+
+	// 创建用于压缩的临时目录
+	tmpDir, err := os.MkdirTemp("", "ace-backup-*")
+	if err != nil {
+		return err
+	}
+	defer func(path string) { _ = os.RemoveAll(path) }(tmpDir)
+
+	if app.IsCli {
+		fmt.Println(r.t.Get("|-Temporary directory: %s", tmpDir))
+	}
+
+	// 压缩目录
+	name = name + r.backupExt()
+	if err = io.Compress(target, nil, filepath.Join(tmpDir, name)); err != nil {
+		return err
+	}
+
+	// 上传备份文件到存储器
+	file, err := os.Open(filepath.Join(tmpDir, name))
+	if err != nil {
+		return err
+	}
+	defer func(file *os.File) { _ = file.Close() }(file)
+
+	if err = storage.Put(filepath.Join(string(biz.BackupTypePath), name), file); err != nil {
 		return err
 	}
 
@@ -713,6 +892,276 @@ func (r *backupRepo) restorePostgres(backup, target string) error {
 	}
 
 	return nil
+}
+
+// restoreClickHouse 恢复 ClickHouse 备份
+func (r *backupRepo) restoreClickHouse(backup, target string) error {
+	password, err := r.setting.Get(biz.SettingKeyClickHouseDefaultPassword)
+	if err != nil {
+		return err
+	}
+	conn := fmt.Sprintf("--host 127.0.0.1 --port 9000 --user default --password '%s'", password)
+
+	// 校验目标数据库是否存在
+	exist, err := shell.Execf("clickhouse-client %s --query \"SELECT count() FROM system.databases WHERE name = '%s'\"", conn, target)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(exist) == "0" {
+		return errors.New(r.t.Get("database does not exist: %s", target))
+	}
+
+	// 纯 SQL 文件直接执行
+	if strings.HasSuffix(backup, ".sql") {
+		_, err = shell.Execf("clickhouse-client %s --database '%s' --multiquery < '%s'", conn, target, backup)
+		return err
+	}
+
+	// 解压到临时目录
+	tmpDir, err := os.MkdirTemp("", "acepanel-ch-*")
+	if err != nil {
+		return err
+	}
+	defer func(path string) { _ = os.RemoveAll(path) }(tmpDir)
+
+	if err = io.UnCompress(backup, tmpDir); err != nil {
+		return err
+	}
+
+	// 先恢复结构（视图已排在末尾，源表先建好，规避物化视图依赖顺序问题）
+	schemaPath := filepath.Join(tmpDir, "schema.sql")
+	if io.Exists(schemaPath) {
+		if _, err = shell.Execf("clickhouse-client %s --database '%s' --multiquery < '%s'", conn, target, schemaPath); err != nil {
+			return err
+		}
+	}
+
+	// 再导入数据
+	entries, err := os.ReadDir(tmpDir)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".native") {
+			continue
+		}
+		tbl := strings.TrimSuffix(entry.Name(), ".native")
+		if _, err = shell.Execf("clickhouse-client %s --database '%s' --query 'INSERT INTO `%s` FORMAT Native' < '%s'", conn, target, tbl, filepath.Join(tmpDir, entry.Name())); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+// redisLikeConf redis/valkey 的连接与持久化参数
+type redisLikeConf struct {
+	kind       string // redis / valkey
+	cli        string // redis-cli / valkey-cli
+	authEnv    string // REDISCLI_AUTH / VALKEYCLI_AUTH
+	dataDir    string // {app.Root}/server/{kind}
+	confPath   string
+	port       string
+	password   string
+	appendonly bool
+}
+
+// loadRedisLikeConf 从 {kind}.conf 读取连接与持久化参数
+func (r *backupRepo) loadRedisLikeConf(kind string) (*redisLikeConf, error) {
+	dataDir := fmt.Sprintf("%s/server/%s", app.Root, kind)
+	confPath := fmt.Sprintf("%s/%s.conf", dataDir, kind)
+	content, err := io.Read(confPath)
+	if err != nil {
+		return nil, err
+	}
+
+	port := redisLikeValue(content, "port")
+	if port == "" {
+		port = "6379"
+	}
+	authEnv := "REDISCLI_AUTH"
+	if kind == "valkey" {
+		authEnv = "VALKEYCLI_AUTH"
+	}
+
+	return &redisLikeConf{
+		kind:       kind,
+		cli:        kind + "-cli",
+		authEnv:    authEnv,
+		dataDir:    dataDir,
+		confPath:   confPath,
+		port:       port,
+		password:   redisLikeValue(content, "requirepass"),
+		appendonly: redisLikeValue(content, "appendonly") == "yes",
+	}, nil
+}
+
+// redisLikeValue 从 redis/valkey 配置内容中读取指定键的有效值（忽略注释行）
+func redisLikeValue(content, key string) string {
+	for line := range strings.SplitSeq(content, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		fields := strings.Fields(trimmed)
+		if len(fields) >= 2 && fields[0] == key {
+			return strings.Join(fields[1:], " ")
+		}
+	}
+	return ""
+}
+
+// createRedisLike 创建 Redis/Valkey 整实例备份（{kind}-cli --rdb 导出快照）
+// redis 与 valkey 共用本实现，kind 为 "redis" 或 "valkey"
+func (r *backupRepo) createRedisLike(name string, storage storage.Storage, kind string) error {
+	conf, err := r.loadRedisLikeConf(kind)
+	if err != nil {
+		return err
+	}
+	// 用环境变量传密码，避免密码出现在命令行/进程列表
+	if conf.password != "" {
+		_ = os.Setenv(conf.authEnv, conf.password)
+		defer func() { _ = os.Unsetenv(conf.authEnv) }()
+	}
+
+	// 创建用于压缩的临时目录
+	tmpDir, err := os.MkdirTemp("", "ace-backup-*")
+	if err != nil {
+		return err
+	}
+	defer func(path string) { _ = os.RemoveAll(path) }(tmpDir)
+
+	if app.IsCli {
+		fmt.Println(r.t.Get("|-Temporary directory: %s", tmpDir))
+	}
+
+	// 通过复制协议拉取整实例 RDB 快照到本地文件
+	rdb := filepath.Join(tmpDir, "dump.rdb")
+	if _, err = shell.Execf("%s -h 127.0.0.1 -p %s --rdb '%s'", conf.cli, conf.port, rdb); err != nil {
+		return err
+	}
+	if !io.Exists(rdb) {
+		return errors.New(r.t.Get("failed to export RDB snapshot"))
+	}
+
+	// 压缩备份文件
+	name = name + r.backupExt()
+	if err = io.Compress(tmpDir, []string{"dump.rdb"}, filepath.Join(tmpDir, name)); err != nil {
+		return err
+	}
+
+	// 上传备份文件到存储器
+	file, err := os.Open(filepath.Join(tmpDir, name))
+	if err != nil {
+		return err
+	}
+	defer func(file *os.File) { _ = file.Close() }(file)
+
+	if err = storage.Put(filepath.Join(kind, name), file); err != nil {
+		return err
+	}
+
+	if app.IsCli {
+		fmt.Println(r.t.Get("|-Backup file: %s", name))
+	}
+
+	return nil
+}
+
+// restoreRedisLike 恢复 Redis/Valkey 整实例备份
+// 停服务 → 替换 dump.rdb → 启动；妥善处理 AOF 优先级陷阱（appendonly=yes 时 AOF 会盖过 RDB）
+func (r *backupRepo) restoreRedisLike(backup, kind string) error {
+	conf, err := r.loadRedisLikeConf(kind)
+	if err != nil {
+		return err
+	}
+
+	// 准备 dump.rdb：裸 .rdb 直接用，否则解压取包内的 dump.rdb
+	rdb := backup
+	if !strings.HasSuffix(backup, ".rdb") {
+		tmpDir, err := os.MkdirTemp("", "acepanel-rdb-*")
+		if err != nil {
+			return err
+		}
+		defer func(path string) { _ = os.RemoveAll(path) }(tmpDir)
+		if err = io.UnCompress(backup, tmpDir); err != nil {
+			return err
+		}
+		rdb = filepath.Join(tmpDir, "dump.rdb")
+		if !io.Exists(rdb) {
+			return errors.New(r.t.Get("dump.rdb not found in backup file"))
+		}
+	}
+
+	// 停止服务
+	if err = systemctl.Stop(conf.kind); err != nil {
+		return err
+	}
+
+	// 清理旧 AOF（多部件目录与旧式单文件），避免 AOF 优先于 RDB 被加载
+	_ = io.Remove(filepath.Join(conf.dataDir, "appendonlydir"))
+	_ = io.Remove(filepath.Join(conf.dataDir, "appendonly.aof"))
+
+	// 覆盖 dump.rdb
+	target := filepath.Join(conf.dataDir, "dump.rdb")
+	if err = io.Cp(rdb, target); err != nil {
+		_ = systemctl.Start(conf.kind) // 尽力恢复服务
+		return err
+	}
+	_ = io.Chown(target, kind, kind)
+	_ = io.Chmod(target, 0640)
+
+	// 若原本开启 AOF，必须先以 appendonly no 启动加载 RDB，否则会建空 AOF 以空库覆盖
+	if conf.appendonly {
+		if err = r.disableAppendonly(conf.confPath); err != nil {
+			_ = systemctl.Start(conf.kind)
+			return err
+		}
+	}
+
+	// 启动服务（Type=notify，返回即已加载 RDB）
+	if err = systemctl.Start(conf.kind); err != nil {
+		return err
+	}
+
+	// 原本开启 AOF 的，在线转回并持久化配置
+	if conf.appendonly {
+		if conf.password != "" {
+			_ = os.Setenv(conf.authEnv, conf.password)
+			defer func() { _ = os.Unsetenv(conf.authEnv) }()
+		}
+		_, _ = shell.Execf("%s -h 127.0.0.1 -p %s config set appendonly yes", conf.cli, conf.port)
+		_, _ = shell.Execf("%s -h 127.0.0.1 -p %s config rewrite", conf.cli, conf.port)
+	}
+
+	return nil
+}
+
+// disableAppendonly 将 redis/valkey 配置中的 appendonly 临时改为 no
+func (r *backupRepo) disableAppendonly(confPath string) error {
+	content, err := io.Read(confPath)
+	if err != nil {
+		return err
+	}
+
+	lines := strings.Split(content, "\n")
+	found := false
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		if fields := strings.Fields(trimmed); len(fields) >= 1 && fields[0] == "appendonly" {
+			lines[i] = "appendonly no"
+			found = true
+			break
+		}
+	}
+	if !found {
+		lines = append(lines, "appendonly no")
+	}
+
+	return io.Write(confPath, strings.Join(lines, "\n"), 0644)
 }
 
 // autoUnCompressSQL 自动处理压缩文件
@@ -825,6 +1274,9 @@ func (r *backupRepo) FixPanel() error {
 	}
 	var list []os.FileInfo
 	for _, file := range files {
+		if !r.isBackupArchive(file.Name()) {
+			continue
+		}
 		info, infoErr := file.Info()
 		if infoErr != nil {
 			continue
@@ -1052,4 +1504,20 @@ func (r *backupRepo) UpdatePanel(version, url, checksum string) error {
 	tools.RestartPanel()
 
 	return nil
+}
+
+// backupExt 根据全局设置返回备份文件扩展名
+func (r *backupRepo) backupExt() string {
+	format, _ := r.setting.Get(biz.SettingKeyBackupFormat, "tar.xz")
+	return "." + format
+}
+
+// isBackupArchive 判断文件名是否是已知的备份压缩包后缀
+func (r *backupRepo) isBackupArchive(name string) bool {
+	for _, ext := range []string{".tar.xz", ".tar.gz", ".tar.zst", ".zip", ".7z"} {
+		if strings.HasSuffix(name, ext) {
+			return true
+		}
+	}
+	return false
 }

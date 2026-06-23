@@ -264,10 +264,10 @@ func (route *Http) Register(r *chi.Mux) {
 			r.Get("/{id}", route.website.Get)
 			r.Put("/{id}", route.website.Update)
 			r.Delete("/{id}", route.website.Delete)
-			r.Delete("/{id}/log", route.website.ClearLog)
 			r.Post("/{id}/update_remark", route.website.UpdateRemark)
 			r.Post("/{id}/reset_config", route.website.ResetConfig)
 			r.Post("/{id}/status", route.website.UpdateStatus)
+			r.Post("/{id}/expire_at", route.website.UpdateExpireAt)
 			r.Post("/{id}/obtain_cert", route.website.ObtainCert)
 
 			// 网站统计
@@ -431,8 +431,6 @@ func (route *Http) Register(r *chi.Mux) {
 				r.Get("/{version}/load", route.environmentPHP.Load)
 				r.Get("/{version}/log", route.environmentPHP.Log)
 				r.Get("/{version}/slow_log", route.environmentPHP.SlowLog)
-				r.Post("/{version}/clear_log", route.environmentPHP.ClearLog)
-				r.Post("/{version}/clear_slow_log", route.environmentPHP.ClearSlowLog)
 				r.Get("/{version}/modules", route.environmentPHP.ModuleList)
 				r.Post("/{version}/modules", route.environmentPHP.InstallModule)
 				r.Delete("/{version}/modules", route.environmentPHP.UninstallModule)
@@ -518,7 +516,6 @@ func (route *Http) Register(r *chi.Mux) {
 				r.Post("/{id}/unpause", route.container.Unpause)
 				r.Post("/{id}/kill", route.container.Kill)
 				r.Post("/{id}/rename", route.container.Rename)
-				r.Get("/{id}/logs", route.container.Logs)
 				r.Post("/prune", route.container.Prune)
 			})
 			r.Route("/compose", func(r chi.Router) {
@@ -554,7 +551,9 @@ func (route *Http) Register(r *chi.Mux) {
 		r.Route("/file", func(r chi.Router) {
 			r.Post("/create", route.file.Create)
 			r.Get("/content", route.file.Content)
+			r.Get("/tail", route.file.Tail)
 			r.Post("/save", route.file.Save)
+			r.Post("/truncate", route.file.Truncate)
 			r.Post("/delete", route.file.Delete)
 			r.Post("/upload", route.file.Upload)
 			r.Post("/exist", route.file.Exist)
@@ -605,6 +604,7 @@ func (route *Http) Register(r *chi.Mux) {
 			r.Post("/reload", route.systemctl.Reload)
 			r.Post("/start", route.systemctl.Start)
 			r.Post("/stop", route.systemctl.Stop)
+			r.Post("/clear_log", route.systemctl.ClearLog)
 		})
 
 		r.Route("/toolbox_network", func(r chi.Router) {

@@ -3,6 +3,7 @@ package service
 import (
 	"net/http"
 	"path/filepath"
+	"time"
 
 	"github.com/libtnb/chix"
 
@@ -176,21 +177,6 @@ func (s *WebsiteService) Delete(w http.ResponseWriter, r *http.Request) {
 	Success(w, nil)
 }
 
-func (s *WebsiteService) ClearLog(w http.ResponseWriter, r *http.Request) {
-	req, err := Bind[request.ID](r)
-	if err != nil {
-		Error(w, http.StatusUnprocessableEntity, "%v", err)
-		return
-	}
-
-	if err = s.websiteRepo.ClearLog(req.ID); err != nil {
-		Error(w, http.StatusInternalServerError, "%v", err)
-		return
-	}
-
-	Success(w, nil)
-}
-
 func (s *WebsiteService) UpdateRemark(w http.ResponseWriter, r *http.Request) {
 	req, err := Bind[request.WebsiteUpdateRemark](r)
 	if err != nil {
@@ -229,6 +215,31 @@ func (s *WebsiteService) UpdateStatus(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err = s.websiteRepo.UpdateStatus(req.ID, req.Status); err != nil {
+		Error(w, http.StatusInternalServerError, "%v", err)
+		return
+	}
+
+	Success(w, nil)
+}
+
+func (s *WebsiteService) UpdateExpireAt(w http.ResponseWriter, r *http.Request) {
+	req, err := Bind[request.WebsiteUpdateExpireAt](r)
+	if err != nil {
+		Error(w, http.StatusUnprocessableEntity, "%v", err)
+		return
+	}
+
+	var expireAt *time.Time
+	if req.ExpireAt != "" {
+		t, err := time.Parse(time.DateTime, req.ExpireAt)
+		if err != nil {
+			Error(w, http.StatusUnprocessableEntity, "%v", err)
+			return
+		}
+		expireAt = &t
+	}
+
+	if err = s.websiteRepo.UpdateExpireAt(req.ID, expireAt); err != nil {
 		Error(w, http.StatusInternalServerError, "%v", err)
 		return
 	}

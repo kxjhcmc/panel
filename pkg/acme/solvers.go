@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -22,6 +24,7 @@ import (
 	"github.com/libdns/tencentcloud"
 	"github.com/libdns/westcn"
 	"github.com/mholt/acmez/v3/acme"
+	"github.com/samber/lo"
 	"golang.org/x/net/publicsuffix"
 
 	pkgos "github.com/acepanel/panel/v3/pkg/os"
@@ -107,14 +110,27 @@ func (s *panelSolver) startServer() error {
 	case err := <-errChan:
 		s.server = nil
 		return fmt.Errorf("failed to start HTTP server: %w", err)
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(500 * time.Millisecond):
 		return nil
 	}
 }
 
 func (s *panelSolver) writeNginxConfig() error {
+	hasIPv6 := lo.SomeBy(s.ip, s.isIPv6)
+
 	var conf strings.Builder
-	_, _ = fmt.Fprintf(&conf, "server {\n    listen 80;\n    server_name %s;\n", strings.Join(s.ip, " "))
+	conf.WriteString("server {\n    listen 80;\n")
+	// 只有在包含 IPv6 地址时才监听 [::]:80，避免纯 IPv4 系统上 nginx 启动失败
+	if hasIPv6 {
+		conf.WriteString("    listen [::]:80;\n")
+	}
+	names := lo.Map(s.ip, func(ip string, _ int) string {
+		if s.isIPv6(ip) {
+			return "[" + ip + "]"
+		}
+		return ip
+	})
+	_, _ = fmt.Fprintf(&conf, "    server_name %s;\n", strings.Join(names, " "))
 	for path, token := range s.tokens {
 		_, _ = fmt.Fprintf(&conf, "    location = %s {\n        default_type text/plain;\n        return 200 %q;\n    }\n", path, token)
 	}
@@ -149,12 +165,14 @@ func (s *panelSolver) writeApacheConfig() error {
 	}
 
 	var conf strings.Builder
-	_, _ = fmt.Fprintf(&conf, "<VirtualHost *:80>\n    ServerName %s\n", s.ip[0])
-	if len(s.ip) > 1 {
-		for _, ip := range s.ip[1:] {
-			_, _ = fmt.Fprintf(&conf, "    ServerAlias %s\n", ip)
+	addrs := lo.Map(s.ip, func(ip string, _ int) string {
+		if s.isIPv6(ip) {
+			return "[" + ip + "]:80"
 		}
-	}
+		return ip + ":80"
+	})
+	_, _ = fmt.Fprintf(&conf, "<VirtualHost %s>\n", strings.Join(addrs, " "))
+	conf.WriteString("    ServerName acme-ip-validation\n")
 	_, _ = fmt.Fprintf(&conf, "    Alias /.well-known/acme-challenge %s\n", tokenDir)
 	_, _ = fmt.Fprintf(&conf, "    <Directory %s>\n", tokenDir)
 	conf.WriteString("        Require all granted\n")
@@ -216,6 +234,12 @@ func (s *panelSolver) CleanUp(ctx context.Context, _ acme.Challenge) error {
 	}
 
 	return nil
+}
+
+// isIPv6 判断 host 是否为 IPv6 地址
+func (s *panelSolver) isIPv6(host string) bool {
+	addr, err := netip.ParseAddr(host)
+	return err == nil && !addr.Is4()
 }
 
 type httpSolver struct {
@@ -366,43 +390,160 @@ func (s httpSolver) cleanUpApache(path, token string) error {
 	return nil
 }
 
+type DnsType string
+
+const (
+	AliYun     DnsType = "aliyun"
+	Tencent    DnsType = "tencent"
+	Huawei     DnsType = "huawei"
+	Westcn     DnsType = "westcn"
+	CloudFlare DnsType = "cloudflare"
+	Gcore      DnsType = "gcore"
+	Porkbun    DnsType = "porkbun"
+	NameSilo   DnsType = "namesilo"
+	ClouDNS    DnsType = "cloudns"
+)
+
+const defaultDNSServer = "8.8.8.8"
+
+type DNSParam struct {
+	AK         string `form:"ak" json:"ak"`
+	SK         string `form:"sk" json:"sk"`
+	DnsServer  string `form:"dns_server" json:"dns_server"`   // DNS 验证服务器
+	SkipVerify bool   `form:"skip_verify" json:"skip_verify"` // 跳过解析验证
+}
+
+type DNSProvider interface {
+	libdns.RecordSetter
+	libdns.RecordDeleter
+}
+
 type dnsSolver struct {
-	dns     DnsType
-	param   DNSParam
-	records []libdns.Record
+	mu               sync.Mutex
+	dns              DnsType
+	param            DNSParam
+	keyAuths         map[string][]string        // dnsName → keyAuth 列表
+	records          map[string][]libdns.Record // dnsName → 已设置的记录
+	alias            map[string]string          // DNS 验证别名映射 (domain → delegated domain)
+	dnsServer        string                     // DNS 验证服务器地址
+	skipVerify       bool                       // 跳过解析验证
+	progressCallback func(string)               // 进度回调
 }
 
 func (s *dnsSolver) Present(ctx context.Context, challenge acme.Challenge) error {
-	dnsName := challenge.DNS01TXTRecordName()
+	dnsName, zone, err := s.resolveAlias(challenge)
+	if err != nil {
+		return err
+	}
 	keyAuth := challenge.DNS01KeyAuthorization()
 	provider, err := s.getDNSProvider()
 	if err != nil {
 		return fmt.Errorf("failed to get DNS provider: %w", err)
 	}
-	zone, err := publicsuffix.EffectiveTLDPlusOne(dnsName)
-	if err != nil {
-		return fmt.Errorf("failed to get the effective TLD+1 for %q: %w", dnsName, err)
-	}
 
-	rec := libdns.TXT{
-		Name: libdns.RelativeName(dnsName+".", zone+"."),
-		Text: keyAuth,
-	}
+	s.report(fmt.Sprintf("setting DNS TXT record %s", dnsName))
 
-	results, err := provider.SetRecords(ctx, zone+".", []libdns.Record{rec})
+	// 同名 TXT 记录可能对应多个 challenge， SetRecords 以 (name, type) 为单位覆盖
+	// 因此需把该记录名下所有 keyAuth 一次性写入，避免后者覆盖前者
+	s.mu.Lock()
+	s.keyAuths[dnsName] = append(s.keyAuths[dnsName], keyAuth)
+	recs := make([]libdns.Record, 0, len(s.keyAuths[dnsName]))
+	for _, ka := range s.keyAuths[dnsName] {
+		recs = append(recs, libdns.TXT{
+			Name: libdns.RelativeName(dnsName+".", zone+"."),
+			Text: ka,
+		})
+	}
+	s.mu.Unlock()
+
+	results, err := provider.SetRecords(ctx, zone+".", recs)
 	if err != nil {
 		return fmt.Errorf("failed to set DNS record %q for %q: %w", dnsName, zone, err)
 	}
-	if len(results) != 1 {
-		return fmt.Errorf("expected to add 1 record, but actually added %d records", len(results))
+	if len(results) == 0 {
+		return fmt.Errorf("DNS provider returned no records after setting %q", dnsName)
 	}
 
-	s.records = results
+	s.mu.Lock()
+	s.records[dnsName] = results
+	s.mu.Unlock()
+
+	s.report(fmt.Sprintf("DNS TXT record %s set successfully", dnsName))
 	return nil
 }
 
+// Wait 实现 acmez.Waiter 接口，等待 DNS TXT 记录传播后再通知 CA 进行验证
+func (s *dnsSolver) Wait(ctx context.Context, challenge acme.Challenge) error {
+	if s.skipVerify {
+		s.report("skip DNS verification, waiting 60s for propagation")
+		timer := time.NewTimer(60 * time.Second)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+
+	dnsName, _, err := s.resolveAlias(challenge)
+	if err != nil {
+		return err
+	}
+	expected := challenge.DNS01KeyAuthorization()
+
+	// 确定 DNS 服务器
+	dnsServer := s.dnsServer
+	if dnsServer == "" {
+		dnsServer = defaultDNSServer
+	}
+
+	resolver := &net.Resolver{
+		PreferGo: true,
+		Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+			d := net.Dialer{Timeout: 10 * time.Second}
+			server := dnsServer
+			if _, _, err := net.SplitHostPort(server); err != nil {
+				server = net.JoinHostPort(server, "53")
+			}
+			return d.DialContext(ctx, network, server)
+		},
+	}
+
+	const maxAttempts = 120
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	s.report(fmt.Sprintf("verifying TXT record %s via DNS server %s", dnsName, dnsServer))
+
+	for i := 1; i <= maxAttempts; i++ {
+		txts, err := resolver.LookupTXT(ctx, dnsName)
+		if err == nil {
+			for _, txt := range txts {
+				if txt == expected {
+					s.report(fmt.Sprintf("DNS TXT record verified (attempt %d)", i))
+					return nil
+				}
+			}
+		}
+
+		s.report(fmt.Sprintf("polling DNS record (%d/%d)", i, maxAttempts))
+
+		select {
+		case <-ticker.C:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+
+	return fmt.Errorf("DNS propagation timeout after %d attempts", maxAttempts)
+}
+
 func (s *dnsSolver) CleanUp(ctx context.Context, challenge acme.Challenge) error {
-	dnsName := challenge.DNS01TXTRecordName()
+	dnsName, zone, err := s.resolveAlias(challenge)
+	if err != nil {
+		return err
+	}
 	provider, err := s.getDNSProvider()
 	if err != nil {
 		return fmt.Errorf("failed to get DNS provider: %w", err)
@@ -411,12 +552,18 @@ func (s *dnsSolver) CleanUp(ctx context.Context, challenge acme.Challenge) error
 	ctx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 
-	zone, err := publicsuffix.EffectiveTLDPlusOne(dnsName)
-	if err != nil {
-		return fmt.Errorf("failed to get the effective TLD+1 for %q: %w", dnsName, err)
-	}
+	s.report("cleaning up DNS TXT records")
 
-	_, _ = provider.DeleteRecords(ctx, zone+".", s.records)
+	// 同名 TXT 记录下的多条 challenge 记录由首次 CleanUp 一并删除
+	s.mu.Lock()
+	records := s.records[dnsName]
+	delete(s.records, dnsName)
+	delete(s.keyAuths, dnsName)
+	s.mu.Unlock()
+
+	if len(records) > 0 {
+		_, _ = provider.DeleteRecords(ctx, zone+".", records)
+	}
 	return nil
 }
 
@@ -482,26 +629,32 @@ func (s *dnsSolver) getDNSProvider() (DNSProvider, error) {
 	return dns, nil
 }
 
-type DnsType string
+// resolveAlias 根据别名映射解析实际的 DNS 记录名和 zone
+func (s *dnsSolver) resolveAlias(challenge acme.Challenge) (dnsName string, zone string, err error) {
+	dnsName = challenge.DNS01TXTRecordName()
 
-const (
-	AliYun     DnsType = "aliyun"
-	Tencent    DnsType = "tencent"
-	Huawei     DnsType = "huawei"
-	Westcn     DnsType = "westcn"
-	CloudFlare DnsType = "cloudflare"
-	Gcore      DnsType = "gcore"
-	Porkbun    DnsType = "porkbun"
-	NameSilo   DnsType = "namesilo"
-	ClouDNS    DnsType = "cloudns"
-)
+	// 先用原始域名查别名（如 *.example.com），再用裸域名兜底（如 example.com）
+	if s.alias != nil {
+		domain := challenge.Identifier.Value
+		if target, ok := s.alias[domain]; ok {
+			dnsName = target
+		} else if bare := strings.TrimPrefix(domain, "*."); bare != domain {
+			if target, ok := s.alias[bare]; ok {
+				dnsName = target
+			}
+		}
+	}
 
-type DNSParam struct {
-	AK string `form:"ak" json:"ak"`
-	SK string `form:"sk" json:"sk"`
+	zone, err = publicsuffix.EffectiveTLDPlusOne(dnsName)
+	if err != nil {
+		err = fmt.Errorf("failed to get the effective TLD+1 for %q: %w", dnsName, err)
+	}
+	return
 }
 
-type DNSProvider interface {
-	libdns.RecordSetter
-	libdns.RecordDeleter
+// report 安全地调用进度回调
+func (s *dnsSolver) report(msg string) {
+	if s.progressCallback != nil {
+		s.progressCallback(msg)
+	}
 }

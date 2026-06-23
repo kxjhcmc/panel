@@ -4,7 +4,7 @@
  * 用于编辑 Object<string, string> 类型的数据
  */
 defineOptions({
-  name: 'KeyValueEditor'
+  name: 'KeyValueEditor',
 })
 
 const props = withDefaults(
@@ -36,18 +36,19 @@ const props = withDefaults(
     defaultValue: '',
     separator: '=',
     valueType: 'text',
-    showPasswordToggle: false
-  }
+    showPasswordToggle: false,
+  },
 )
 
 const emit = defineEmits<{
   'update:modelValue': [value: Record<string, string>]
 }>()
 
-// 生成唯一键名
+// 生成唯一键名，优先使用前缀本身，仅在冲突时追加序号
 const generateUniqueKey = () => {
   const data = props.modelValue || {}
   const prefix = props.defaultKeyPrefix
+  if (data[prefix] === undefined) return prefix
   let i = 1
   while (data[`${prefix}${i}`] !== undefined) {
     i++
@@ -57,7 +58,7 @@ const generateUniqueKey = () => {
 
 // 添加新项
 const addItem = () => {
-  const data = { ...(props.modelValue || {}) }
+  const data = { ...props.modelValue }
   const key = generateUniqueKey()
   data[key] = props.defaultValue
   emit('update:modelValue', data)

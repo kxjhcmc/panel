@@ -17,6 +17,7 @@ const (
 	SettingKeyMonitorDays               SettingKey = "monitor_days"
 	SettingKeyMonitorInterval           SettingKey = "monitor_interval"
 	SettingKeyBackupPath                SettingKey = "backup_path"
+	SettingKeyBackupFormat              SettingKey = "backup_format" // tar.xz / tar.gz / tar.zst / zip / 7z
 	SettingKeyWebsitePath               SettingKey = "website_path"
 	SettingKeyProjectPath               SettingKey = "project_path"
 	SettingKeyContainerSock             SettingKey = "container_sock"
@@ -49,6 +50,7 @@ const (
 	SettingKeyIPDBType                  SettingKey = "ipdb_type" // "" / "custom" / "subscribe"
 	SettingKeyIPDBURL                   SettingKey = "ipdb_url"  // 订阅链接
 	SettingKeyIPDBPath                  SettingKey = "ipdb_path"
+	SettingKeyInfoRan                   SettingKey = "info_ran" // info 命令是否已运行过
 )
 
 type Setting struct {

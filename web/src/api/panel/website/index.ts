@@ -19,8 +19,6 @@ export default {
   config: (id: number): any => http.Get('/website/' + id),
   // 保存网站配置
   saveConfig: (id: number, data: any): any => http.Put(`/website/${id}`, data),
-  // 清空日志
-  clearLog: (id: number): any => http.Delete('/website/' + id + '/log'),
   // 更新备注
   updateRemark: (id: number, remark: string): any =>
     http.Post(`/website/${id}` + '/update_remark', { remark }),
@@ -28,6 +26,9 @@ export default {
   resetConfig: (id: number): any => http.Post(`/website/${id}/reset_config`),
   // 修改状态
   status: (id: number, status: boolean): any => http.Post(`/website/${id}/status`, { status }),
+  // 修改到期时间
+  updateExpireAt: (id: number, expire_at: string): any =>
+    http.Post(`/website/${id}/expire_at`, { expire_at }),
   // 签发证书
   obtainCert: (id: number, dns_id?: number): any =>
     http.Post(`/website/${id}/obtain_cert`, dns_id ? { dns_id } : {}),
@@ -55,7 +56,7 @@ export default {
     sites?: string,
     group_by?: string,
     country?: string,
-    limit?: number
+    limit?: number,
   ): any =>
     http.Get('/website/stat/geos', { params: { start, end, sites, group_by, country, limit } }),
   // URI 统计
@@ -68,7 +69,7 @@ export default {
     sites?: string,
     threshold?: number,
     page?: number,
-    limit?: number
+    limit?: number,
   ): any =>
     http.Get('/website/stat/slow_uris', { params: { start, end, sites, threshold, page, limit } }),
   // 错误统计
@@ -78,12 +79,13 @@ export default {
     sites?: string,
     status?: number,
     page?: number,
-    limit?: number
-  ): any => http.Get('/website/stat/errors', { params: { start, end, sites, status, page, limit } }),
+    limit?: number,
+  ): any =>
+    http.Get('/website/stat/errors', { params: { start, end, sites, status, page, limit } }),
   // 清空统计
   statClear: (): any => http.Post('/website/stat/clear'),
   // 统计设置
   statSetting: (): any => http.Get('/website/stat/setting'),
   // 保存统计设置
-  saveStatSetting: (data: any): any => http.Post('/website/stat/setting', data)
+  saveStatSetting: (data: any): any => http.Post('/website/stat/setting', data),
 }

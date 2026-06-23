@@ -25,7 +25,7 @@ func Exec(shell string) (string, error) {
 	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {
-		return strings.TrimSpace(stdout.String()), fmt.Errorf("run %s failed, err: %s", shell, strings.TrimSpace(stderr.String()))
+		return strings.TrimSpace(stdout.String()), fmt.Errorf("run %s failed, err: %w, stderr: %s", shell, err, strings.TrimSpace(stderr.String()))
 	}
 
 	return strings.TrimSpace(stdout.String()), nil
@@ -69,7 +69,7 @@ func Execf(shell string, args ...any) (string, error) {
 	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {
-		return strings.TrimSpace(stdout.String()), fmt.Errorf("run %s failed, err: %s", shell, strings.TrimSpace(stderr.String()))
+		return strings.TrimSpace(stdout.String()), fmt.Errorf("run %s failed, err: %w, stderr: %s", shell, err, strings.TrimSpace(stderr.String()))
 	}
 
 	return strings.TrimSpace(stdout.String()), nil
@@ -119,10 +119,10 @@ func ExecfWithTimeout(timeout time.Duration, shell string, args ...any) (string,
 
 	err := cmd.Start()
 	if err != nil {
-		return strings.TrimSpace(stdout.String()), fmt.Errorf("run %s failed, err: %s", shell, strings.TrimSpace(stderr.String()))
+		return strings.TrimSpace(stdout.String()), fmt.Errorf("run %s failed, err: %w, stderr: %s", shell, err, strings.TrimSpace(stderr.String()))
 	}
 
-	done := make(chan error)
+	done := make(chan error, 1)
 	go func() {
 		done <- cmd.Wait()
 	}()
@@ -133,7 +133,7 @@ func ExecfWithTimeout(timeout time.Duration, shell string, args ...any) (string,
 		return strings.TrimSpace(stdout.String()), fmt.Errorf("run %s failed, err: %s", shell, "timeout")
 	case err = <-done:
 		if err != nil {
-			return strings.TrimSpace(stdout.String()), fmt.Errorf("run %s failed, err: %s", shell, strings.TrimSpace(stderr.String()))
+			return strings.TrimSpace(stdout.String()), fmt.Errorf("run %s failed, err: %w, stderr: %s", shell, err, strings.TrimSpace(stderr.String()))
 		}
 	}
 
@@ -169,17 +169,24 @@ func ExecfWithPipe(ctx context.Context, shell string, args ...any) (io.ReadClose
 	_ = os.Setenv("LC_ALL", "C")
 	cmd := exec.CommandContext(ctx, "bash", "-c", shell)
 
-	out, err := cmd.StdoutPipe()
+	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return nil, err
 	}
-
 	cmd.Stderr = cmd.Stdout
-	err = cmd.Start()
 
-	go func() { _ = cmd.Wait() }()
+	if err = cmd.Start(); err != nil {
+		return nil, err
+	}
 
-	return out, err
+	pr, pw := io.Pipe()
+	go func() {
+		_, _ = io.Copy(pw, stdout)
+		_ = cmd.Wait()
+		_ = pw.Close()
+	}()
+
+	return pr, nil
 }
 
 // ExecfWithDir 在指定目录下执行 shell 命令
@@ -200,7 +207,7 @@ func ExecfWithDir(dir, shell string, args ...any) (string, error) {
 	cmd.Stderr = &stderr
 
 	if err := cmd.Run(); err != nil {
-		return strings.TrimSpace(stdout.String()), fmt.Errorf("run %s failed, err: %s", shell, strings.TrimSpace(stderr.String()))
+		return strings.TrimSpace(stdout.String()), fmt.Errorf("run %s failed, err: %w, stderr: %s", shell, err, strings.TrimSpace(stderr.String()))
 	}
 
 	return strings.TrimSpace(stdout.String()), nil
@@ -227,6 +234,7 @@ func ExecfWithTTY(shell string, args ...any) (string, error) {
 		return "", fmt.Errorf("run %s failed", shell)
 	}
 	defer func(f *os.File) { _ = f.Close() }(f)
+	defer func() { _ = cmd.Wait() }() // 回收进程
 
 	if _, err = io.Copy(&out, f); IsPTYError(err) != nil {
 		return "", fmt.Errorf("run %s failed, out: %s, err: %w", shell, strings.TrimSpace(out.String()), err)

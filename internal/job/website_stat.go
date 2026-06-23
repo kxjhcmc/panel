@@ -1,10 +1,13 @@
 package job
 
 import (
+	"context"
 	"log/slog"
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/samber/lo"
 
 	"github.com/acepanel/panel/v3/internal/app"
 	"github.com/acepanel/panel/v3/internal/biz"
@@ -34,9 +37,9 @@ func NewWebsiteStat(log *slog.Logger, setting biz.SettingRepo, statRepo biz.Webs
 	}
 }
 
-func (r *WebsiteStat) Run() {
+func (r *WebsiteStat) Run(_ context.Context) error {
 	if app.Status != app.StatusNormal {
-		return
+		return nil
 	}
 
 	r.ensureListener()
@@ -45,6 +48,7 @@ func (r *WebsiteStat) Run() {
 	r.flushErrors()
 	r.flushDetails()
 	r.cleanup()
+	return nil
 }
 
 // ensureListener 确保 listener goroutine 已启动
@@ -186,9 +190,8 @@ func (r *WebsiteStat) flushErrors() {
 	}
 
 	now := time.Now()
-	errors := make([]*biz.WebsiteErrorLog, 0, len(entries))
-	for _, e := range entries {
-		errors = append(errors, &biz.WebsiteErrorLog{
+	errors := lo.Map(entries, func(e *websitestat.ErrorEntry, _ int) *biz.WebsiteErrorLog {
+		return &biz.WebsiteErrorLog{
 			Site:      e.Site,
 			URI:       e.URI,
 			Method:    e.Method,
@@ -197,8 +200,8 @@ func (r *WebsiteStat) flushErrors() {
 			UA:        e.UA,
 			Body:      e.Body,
 			CreatedAt: now,
-		})
-	}
+		}
+	})
 
 	if err := r.statRepo.InsertErrors(errors); err != nil {
 		r.log.Warn("failed to insert website error logs", slog.Any("err", err))

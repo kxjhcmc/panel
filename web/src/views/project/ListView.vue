@@ -4,9 +4,9 @@ import { useGettext } from 'vue3-gettext'
 
 import project from '@/api/panel/project'
 import systemctl from '@/api/panel/systemctl'
-import DeleteConfirm from '@/components/common/DeleteConfirm.vue'
 import RealtimeLog from '@/components/common/RealtimeLog.vue'
-import { useFileStore } from '@/store'
+import { useConfirm } from '@/components/system/composables/useConfirm'
+import { useFileStore } from '@/stores'
 
 const type = defineModel<string>('type', { type: String, required: true })
 const createModal = defineModel<boolean>('createModal', { type: Boolean, required: true })
@@ -17,6 +17,7 @@ const logService = ref('')
 
 const fileStore = useFileStore()
 const { $gettext } = useGettext()
+const { confirmDelete } = useConfirm()
 const router = useRouter()
 const selectedRowKeys = ref<any>([])
 
@@ -27,7 +28,7 @@ const typeMap: Record<string, string> = {
   go: 'Go',
   python: 'Python',
   nodejs: 'Node.js',
-  dotnet: '.NET'
+  dotnet: '.NET',
 }
 
 const columns: any = [
@@ -37,14 +38,14 @@ const columns: any = [
     key: 'name',
     width: 160,
     resizable: true,
-    ellipsis: { tooltip: true }
+    ellipsis: { tooltip: true },
   },
   {
     title: $gettext('Description'),
     key: 'description',
     width: 300,
     resizable: true,
-    ellipsis: { tooltip: true }
+    ellipsis: { tooltip: true },
   },
   {
     title: $gettext('Type'),
@@ -52,7 +53,7 @@ const columns: any = [
     width: 120,
     render(row: any) {
       return h(NTag, { type: 'info' }, { default: () => typeMap[row.type] || row.type })
-    }
+    },
   },
   {
     title: $gettext('Status'),
@@ -74,10 +75,10 @@ const columns: any = [
               default:
                 return $gettext('Inactive')
             }
-          }
-        }
+          },
+        },
       )
-    }
+    },
   },
   {
     title: $gettext('Autostart'),
@@ -88,9 +89,9 @@ const columns: any = [
         size: 'small',
         rubberBand: false,
         value: row.enabled,
-        onUpdateValue: (value: boolean) => handleToggleAutostart(row, value)
+        onUpdateValue: (value: boolean) => handleToggleAutostart(row, value),
       })
-    }
+    },
   },
   {
     title: $gettext('Directory'),
@@ -104,13 +105,13 @@ const columns: any = [
           class: 'cursor-pointer hover:opacity-60',
           type: 'info',
           onClick: () => {
-            fileStore.activeTab && fileStore.updateTabPath(fileStore.activeTabId, row.root_dir)
+            if (fileStore.activeTab) fileStore.updateTabPath(fileStore.activeTabId, row.root_dir)
             router.push({ name: 'file-index' })
-          }
+          },
         },
-        { default: () => row.root_dir }
+        { default: () => row.root_dir },
       )
-    }
+    },
   },
   {
     title: $gettext('Actions'),
@@ -124,10 +125,10 @@ const columns: any = [
           {
             size: 'small',
             type: row.status === 'active' ? 'warning' : 'success',
-            onClick: () => handleToggleStatus(row)
+            onClick: () => handleToggleStatus(row),
           },
-          { default: () => (row.status === 'active' ? $gettext('Stop') : $gettext('Start')) }
-        )
+          { default: () => (row.status === 'active' ? $gettext('Stop') : $gettext('Start')) },
+        ),
       ]
 
       // 仅为运行中的项目显示重启和重载按钮
@@ -139,10 +140,9 @@ const columns: any = [
               size: 'small',
               type: 'warning',
               secondary: true,
-              style: 'margin-left: 10px;',
-              onClick: () => handleRestart(row)
+              onClick: () => handleRestart(row),
             },
-            { default: () => $gettext('Restart') }
+            { default: () => $gettext('Restart') },
           ),
           h(
             NButton,
@@ -150,11 +150,10 @@ const columns: any = [
               size: 'small',
               type: 'info',
               secondary: true,
-              style: 'margin-left: 10px;',
-              onClick: () => handleReload(row)
+              onClick: () => handleReload(row),
             },
-            { default: () => $gettext('Reload') }
-          )
+            { default: () => $gettext('Reload') },
+          ),
         )
       }
 
@@ -164,47 +163,41 @@ const columns: any = [
           {
             size: 'small',
             type: 'info',
-            style: 'margin-left: 10px;',
-            onClick: () => handleShowLog(row)
+            onClick: () => handleShowLog(row),
           },
-          { default: () => $gettext('Logs') }
+          { default: () => $gettext('Logs') },
         ),
         h(
           NButton,
           {
             size: 'small',
             type: 'primary',
-            style: 'margin-left: 10px;',
-            onClick: () => handleEdit(row)
+            onClick: () => handleEdit(row),
           },
-          { default: () => $gettext('Edit') }
+          { default: () => $gettext('Edit') },
         ),
         h(
-          DeleteConfirm,
+          NButton,
           {
-            showIcon: false,
-            onPositiveClick: () => handleDelete(row.id)
+            size: 'small',
+            type: 'error',
+            onClick: async () => {
+              const ok = await confirmDelete({
+                content: $gettext('Are you sure you want to delete project %{ name }?', {
+                  name: row.name,
+                }),
+                countdown: 5,
+              })
+              if (ok) handleDelete(row.id)
+            },
           },
-          {
-            default: () =>
-              $gettext('Are you sure you want to delete project %{ name }?', { name: row.name }),
-            trigger: () =>
-              h(
-                NButton,
-                {
-                  size: 'small',
-                  type: 'error',
-                  style: 'margin-left: 10px;'
-                },
-                { default: () => $gettext('Delete') }
-              )
-          }
-        )
+          { default: () => $gettext('Delete') },
+        ),
       )
 
-      return buttons
-    }
-  }
+      return h(NFlex, { size: 'small', align: 'center' }, () => buttons)
+    },
+  },
 ]
 
 const { loading, data, page, total, pageSize, pageCount, refresh } = usePagination(
@@ -213,8 +206,8 @@ const { loading, data, page, total, pageSize, pageCount, refresh } = usePaginati
     initialData: { total: 0, list: [] },
     initialPageSize: 20,
     total: (res: any) => res.total,
-    data: (res: any) => res.items
-  }
+    data: (res: any) => res.items,
+  },
 )
 
 const handleToggleStatus = (row: any) => {
@@ -301,20 +294,24 @@ watch(type, () => {
       <n-button type="primary" @click="createModal = true">
         {{ $gettext('Create Project') }}
       </n-button>
-      <delete-confirm @positive-click="bulkDelete">
+      <ConfirmDialog
+        type="delete"
+        :countdown="5"
+        :content="$gettext('Are you sure you want to delete the selected projects?')"
+        @confirm="bulkDelete"
+      >
         <template #trigger>
           <n-button type="error" :disabled="selectedRowKeys.length === 0" ghost>
             {{ $gettext('Delete') }}
           </n-button>
         </template>
-        {{ $gettext('Are you sure you want to delete the selected projects?') }}
-      </delete-confirm>
+      </ConfirmDialog>
     </n-flex>
     <n-data-table
       striped
       remote
       :loading="loading"
-      :scroll-x="1300"
+      :scroll-x="1500"
       :columns="columns"
       :data="data"
       :row-key="(row: any) => row.id"
@@ -323,12 +320,11 @@ watch(type, () => {
       v-model:pageSize="pageSize"
       :pagination="{
         page: page,
-        pageCount: pageCount,
         pageSize: pageSize,
         itemCount: total,
         showQuickJumper: true,
         showSizePicker: true,
-        pageSizes: [20, 50, 100, 200]
+        pageSizes: [20, 50, 100, 200],
       }"
     />
   </n-flex>

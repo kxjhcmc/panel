@@ -23,8 +23,6 @@ export default {
   // 重命名容器
   containerRename: (id: string, name: string): any =>
     http.Post(`/container/container/${id}/rename`, { name }),
-  // 获取容器日志
-  containerLogs: (id: string): any => http.Get(`/container/container/${id}/logs`),
   // 清理容器
   containerPrune: (): any => http.Post(`/container/container/prune`),
   // 获取编排列表
@@ -71,5 +69,5 @@ export default {
   // 删除卷
   volumeRemove: (id: string): any => http.Delete(`/container/volume/${id}`),
   // 清理卷
-  volumePrune: (): any => http.Post(`/container/volume/prune`)
+  volumePrune: (): any => http.Post(`/container/volume/prune`),
 }

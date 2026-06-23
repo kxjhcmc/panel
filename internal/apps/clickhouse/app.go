@@ -45,6 +45,11 @@ func (s *App) Route(r chi.Router) {
 	r.Post("/default_password", s.SetDefaultPassword)
 }
 
+func (s *App) Status() string {
+	ok, _ := systemctl.Status("clickhouse-server")
+	return types.AggregateAppStatus(ok)
+}
+
 // Load 获取 ClickHouse 运行状态
 func (s *App) Load(w http.ResponseWriter, r *http.Request) {
 	status, _ := systemctl.Status("clickhouse-server")
@@ -61,7 +66,7 @@ func (s *App) Load(w http.ResponseWriter, r *http.Request) {
 
 	// 获取版本
 	versionResp, err := client.R().Get(fmt.Sprintf("http://127.0.0.1:%s/?query=SELECT+version()&user=default&password=%s", port, password))
-	if err != nil || !versionResp.IsSuccess() {
+	if err != nil || !versionResp.IsStatusSuccess() {
 		service.Success(w, []types.NV{})
 		return
 	}

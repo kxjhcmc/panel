@@ -50,6 +50,11 @@ func (s *App) Route(r chi.Router) {
 	r.Delete("/stream/upstreams/{name}", s.DeleteStreamUpstream)
 }
 
+func (s *App) Status() string {
+	ok, _ := systemctl.Status("nginx")
+	return types.AggregateAppStatus(ok)
+}
+
 func (s *App) GetConfig(w http.ResponseWriter, r *http.Request) {
 	config, err := io.Read(fmt.Sprintf("%s/server/nginx/conf/nginx.conf", app.Root))
 	if err != nil {
@@ -98,7 +103,7 @@ func (s *App) Load(w http.ResponseWriter, r *http.Request) {
 	client := resty.New().SetTimeout(10 * time.Second)
 	defer func(client *resty.Client) { _ = client.Close() }(client)
 	resp, err := client.R().Get("http://127.0.0.1/nginx_status")
-	if err != nil || !resp.IsSuccess() {
+	if err != nil || !resp.IsStatusSuccess() {
 		service.Success(w, []types.NV{})
 		return
 	}

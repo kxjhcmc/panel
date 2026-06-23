@@ -37,6 +37,11 @@ func (s *App) Route(r chi.Router) {
 	r.Post("/config_tune", s.UpdateConfigTune)
 }
 
+func (s *App) Status() string {
+	ok, _ := systemctl.Status("elasticsearch")
+	return types.AggregateAppStatus(ok)
+}
+
 func (s *App) Load(w http.ResponseWriter, r *http.Request) {
 	status, err := systemctl.Status("elasticsearch")
 	if err != nil {
@@ -52,7 +57,7 @@ func (s *App) Load(w http.ResponseWriter, r *http.Request) {
 	client := resty.New().SetTimeout(10 * time.Second)
 	defer func(client *resty.Client) { _ = client.Close() }(client)
 	resp, err := client.R().Get(fmt.Sprintf("http://127.0.0.1:%s/_cluster/health", port))
-	if err != nil || !resp.IsSuccess() {
+	if err != nil || !resp.IsStatusSuccess() {
 		service.Success(w, []types.NV{})
 		return
 	}

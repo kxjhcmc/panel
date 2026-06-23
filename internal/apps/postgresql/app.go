@@ -4,11 +4,12 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
-	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/leonelquinteros/gotext"
+	"github.com/spf13/cast"
 
 	"github.com/acepanel/panel/v3/internal/app"
 	"github.com/acepanel/panel/v3/internal/biz"
@@ -41,17 +42,21 @@ func (s *App) Route(r chi.Router) {
 	r.Post("/user_config", s.UpdateUserConfig)
 	r.Get("/load", s.Load)
 	r.Get("/log", s.Log)
-	r.Post("/clear_log", s.ClearLog)
 	r.Get("/postgres_password", s.GetPostgresPassword)
 	r.Post("/postgres_password", s.SetPostgresPassword)
 	r.Get("/config_tune", s.GetConfigTune)
 	r.Post("/config_tune", s.UpdateConfigTune)
 }
 
+func (s *App) Status() string {
+	ok, _ := systemctl.Status("postgresql")
+	return types.AggregateAppStatus(ok)
+}
+
 // GetConfig 获取配置
 func (s *App) GetConfig(w http.ResponseWriter, r *http.Request) {
 	// 获取配置
-	config, err := io.Read(fmt.Sprintf("%s/server/postgresql/data/postgresql.conf", app.Root))
+	config, err := io.Read(s.configPath())
 	if err != nil {
 		service.Error(w, http.StatusInternalServerError, "%v", err)
 		return
@@ -68,13 +73,14 @@ func (s *App) UpdateConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err = io.Write(fmt.Sprintf("%s/server/postgresql/data/postgresql.conf", app.Root), req.Config, 0644); err != nil {
+	oldPort := s.getPort()
+	if err = io.Write(s.configPath(), req.Config, 0644); err != nil {
 		service.Error(w, http.StatusInternalServerError, "%v", err)
 		return
 	}
 
-	if err = systemctl.Reload("postgresql"); err != nil {
-		service.Error(w, http.StatusInternalServerError, s.t.Get("failed to reload PostgreSQL: %v", err))
+	if err = s.applyConfig(req.Config, oldPort); err != nil {
+		service.Error(w, http.StatusInternalServerError, s.t.Get("failed to apply PostgreSQL config: %v", err))
 		return
 	}
 
@@ -132,13 +138,15 @@ func (s *App) Load(w http.ResponseWriter, r *http.Request) {
 		service.Error(w, http.StatusInternalServerError, s.t.Get("failed to set PGPASSWORD env: %v", err))
 		return
 	}
+	defer func() { _ = os.Unsetenv("PGPASSWORD") }()
 
-	start, err := shell.Execf(`psql -h 127.0.0.1 -U postgres -t -c "select pg_postmaster_start_time();" | head -1 | cut -d'.' -f1`)
+	port := s.getPort()
+	start, err := shell.Execf(`psql -h 127.0.0.1 -p %d -U postgres -t -c "select pg_postmaster_start_time();" | head -1 | cut -d'.' -f1`, port)
 	if err != nil {
 		service.Error(w, http.StatusInternalServerError, s.t.Get("failed to get PostgreSQL start time: %v", err))
 		return
 	}
-	pid, err := shell.Execf(`psql -h 127.0.0.1 -U postgres -t -c "select pg_backend_pid();"`)
+	pid, err := shell.Execf(`psql -h 127.0.0.1 -p %d -U postgres -t -c "select pg_backend_pid();"`, port)
 	if err != nil {
 		service.Error(w, http.StatusInternalServerError, s.t.Get("failed to get PostgreSQL backend pid: %v", err))
 		return
@@ -148,19 +156,14 @@ func (s *App) Load(w http.ResponseWriter, r *http.Request) {
 		service.Error(w, http.StatusInternalServerError, s.t.Get("failed to get PostgreSQL process: %v", err))
 		return
 	}
-	connections, err := shell.Execf(`psql -h 127.0.0.1 -U postgres -t -c "SELECT count(*) FROM pg_stat_activity WHERE NOT pid=pg_backend_pid();"`)
+	connections, err := shell.Execf(`psql -h 127.0.0.1 -p %d -U postgres -t -c "SELECT count(*) FROM pg_stat_activity WHERE NOT pid=pg_backend_pid();"`, port)
 	if err != nil {
 		service.Error(w, http.StatusInternalServerError, s.t.Get("failed to get PostgreSQL connections: %v", err))
 		return
 	}
-	storage, err := shell.Execf(`psql -h 127.0.0.1 -U postgres -t -c "select pg_size_pretty(pg_database_size('postgres'));"`)
+	storage, err := shell.Execf(`psql -h 127.0.0.1 -p %d -U postgres -t -c "select pg_size_pretty(pg_database_size('postgres'));"`, port)
 	if err != nil {
 		service.Error(w, http.StatusInternalServerError, s.t.Get("failed to get PostgreSQL database size: %v", err))
-		return
-	}
-
-	if err = os.Unsetenv("PGPASSWORD"); err != nil {
-		service.Error(w, http.StatusInternalServerError, s.t.Get("failed to unset PGPASSWORD env: %v", err))
 		return
 	}
 
@@ -175,19 +178,15 @@ func (s *App) Load(w http.ResponseWriter, r *http.Request) {
 	service.Success(w, data)
 }
 
-// Log 获取日志
+// Log 获取应用日志路径列表
 func (s *App) Log(w http.ResponseWriter, r *http.Request) {
-	service.Success(w, fmt.Sprintf("%s/server/postgresql/logs/postgresql-%s.log", app.Root, time.Now().Format(time.DateOnly)))
-}
-
-// ClearLog 清空日志
-func (s *App) ClearLog(w http.ResponseWriter, r *http.Request) {
-	if _, err := shell.Execf("rm -rf %s/server/postgresql/logs/postgresql-*.log", app.Root); err != nil {
+	paths, err := filepath.Glob(fmt.Sprintf("%s/server/postgresql/logs/postgresql-*.log", app.Root))
+	if err != nil {
 		service.Error(w, http.StatusInternalServerError, "%v", err)
 		return
 	}
 
-	service.Success(w, nil)
+	service.Success(w, paths)
 }
 
 // GetPostgresPassword 获取 postgres 用户密码
@@ -210,10 +209,11 @@ func (s *App) SetPostgresPassword(w http.ResponseWriter, r *http.Request) {
 	}
 
 	oldPassword, _ := s.settingRepo.Get(biz.SettingKeyPostgresPassword)
-	postgres, err := db.NewPostgres("postgres", oldPassword, "127.0.0.1", 5432)
+	port := s.getPort()
+	postgres, err := db.NewPostgres("postgres", oldPassword, "127.0.0.1", port)
 	if err != nil {
 		// 直接修改密码
-		if _, err = shell.Execf(`su - postgres -c "psql -c \"ALTER USER postgres WITH PASSWORD '%s';\""`, req.Password); err != nil {
+		if _, err = shell.Execf(`su - postgres -c "psql -p %d -c \"ALTER USER postgres WITH PASSWORD '%s';\""`, port, req.Password); err != nil {
 			service.Error(w, http.StatusInternalServerError, s.t.Get("failed to set postgres password: %v", err))
 			return
 		}
@@ -237,7 +237,7 @@ func (s *App) SetPostgresPassword(w http.ResponseWriter, r *http.Request) {
 
 // GetConfigTune 获取 PostgreSQL 配置调整参数
 func (s *App) GetConfigTune(w http.ResponseWriter, r *http.Request) {
-	config, err := io.Read(fmt.Sprintf("%s/server/postgresql/data/postgresql.conf", app.Root))
+	config, err := io.Read(s.configPath())
 	if err != nil {
 		service.Error(w, http.StatusInternalServerError, "%v", err)
 		return
@@ -284,7 +284,8 @@ func (s *App) UpdateConfigTune(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	confPath := fmt.Sprintf("%s/server/postgresql/data/postgresql.conf", app.Root)
+	confPath := s.configPath()
+	oldPort := s.getPort()
 	config, err := io.Read(confPath)
 	if err != nil {
 		service.Error(w, http.StatusInternalServerError, "%v", err)
@@ -324,12 +325,46 @@ func (s *App) UpdateConfigTune(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err = systemctl.Reload("postgresql"); err != nil {
-		service.Error(w, http.StatusInternalServerError, s.t.Get("failed to reload PostgreSQL: %v", err))
+	if err = s.applyConfig(config, oldPort); err != nil {
+		service.Error(w, http.StatusInternalServerError, s.t.Get("failed to apply PostgreSQL config: %v", err))
 		return
 	}
 
 	service.Success(w, nil)
+}
+
+func (s *App) configPath() string {
+	return fmt.Sprintf("%s/server/postgresql/data/postgresql.conf", app.Root)
+}
+
+// getPort 读取 PostgreSQL 端口
+func (s *App) getPort() uint {
+	config, err := io.Read(s.configPath())
+	if err != nil {
+		return 5432
+	}
+	return s.parsePort(config)
+}
+
+// parsePort 从 config 内容解析端口，未配置时返回默认值
+func (s *App) parsePort(config string) uint {
+	port := cast.ToUint(s.getPGValue(config, "port"))
+	if port == 0 {
+		return 5432
+	}
+	return port
+}
+
+// applyConfig 让 PostgreSQL 配置生效
+func (s *App) applyConfig(newConfig string, oldPort uint) error {
+	newPort := s.parsePort(newConfig)
+	if oldPort == newPort {
+		return systemctl.Reload("postgresql")
+	}
+	if err := systemctl.Restart("postgresql"); err != nil {
+		return err
+	}
+	return s.databaseServerRepo.UpdatePort("local_postgresql", newPort)
 }
 
 // getPGValue 从 PostgreSQL 配置内容中获取指定键的值
@@ -397,13 +432,13 @@ func (s *App) setPGValue(content string, key string, value string) string {
 				}
 				continue
 			}
-			result = append(result, key+" = "+value)
+			result = append(result, key+" = '"+value+"'")
 		} else {
 			result = append(result, line)
 		}
 	}
 	if !found && value != "" {
-		result = append(result, key+" = "+value)
+		result = append(result, key+" = '"+value+"'")
 	}
 	return strings.Join(result, "\n")
 }

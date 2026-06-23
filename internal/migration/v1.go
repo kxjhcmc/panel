@@ -104,4 +104,22 @@ func init() {
 			return tx.Migrator().DropTable(&biz.UserPasskey{})
 		},
 	})
+	Migrations = append(Migrations, &gormigrate.Migration{
+		ID: "20260406-add-cert-alias",
+		Migrate: func(tx *gorm.DB) error {
+			return tx.AutoMigrate(&biz.Cert{})
+		},
+		Rollback: func(tx *gorm.DB) error {
+			return nil
+		},
+	})
+	Migrations = append(Migrations, &gormigrate.Migration{
+		ID: "20260416-add-website-expire-at",
+		Migrate: func(tx *gorm.DB) error {
+			return tx.AutoMigrate(&biz.Website{})
+		},
+		Rollback: func(tx *gorm.DB) error {
+			return nil
+		},
+	})
 }

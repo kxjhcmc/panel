@@ -14,6 +14,7 @@ import (
 	"github.com/leonelquinteros/gotext"
 	"github.com/libtnb/chix"
 	"github.com/libtnb/utils/collect"
+	"github.com/samber/lo"
 	"github.com/shirou/gopsutil/v4/disk"
 	"github.com/shirou/gopsutil/v4/host"
 	"github.com/spf13/cast"
@@ -30,34 +31,36 @@ import (
 )
 
 type HomeService struct {
-	t               *gotext.Locale
-	api             *api.API
-	conf            *config.Config
-	taskRepo        biz.TaskRepo
-	websiteRepo     biz.WebsiteRepo
-	projectRepo     biz.ProjectRepo
-	appRepo         biz.AppRepo
-	environmentRepo biz.EnvironmentRepo
-	settingRepo     biz.SettingRepo
-	cronRepo        biz.CronRepo
-	backupRepo      biz.BackupRepo
-	containerRepo   biz.ContainerRepo
+	t                  *gotext.Locale
+	api                *api.API
+	conf               *config.Config
+	taskRepo           biz.TaskRepo
+	websiteRepo        biz.WebsiteRepo
+	projectRepo        biz.ProjectRepo
+	appRepo            biz.AppRepo
+	environmentRepo    biz.EnvironmentRepo
+	settingRepo        biz.SettingRepo
+	databaseServerRepo biz.DatabaseServerRepo
+	cronRepo           biz.CronRepo
+	backupRepo         biz.BackupRepo
+	containerRepo      biz.ContainerRepo
 }
 
-func NewHomeService(t *gotext.Locale, conf *config.Config, task biz.TaskRepo, website biz.WebsiteRepo, project biz.ProjectRepo, appRepo biz.AppRepo, environment biz.EnvironmentRepo, setting biz.SettingRepo, cron biz.CronRepo, backupRepo biz.BackupRepo, container biz.ContainerRepo) *HomeService {
+func NewHomeService(t *gotext.Locale, conf *config.Config, task biz.TaskRepo, website biz.WebsiteRepo, project biz.ProjectRepo, appRepo biz.AppRepo, environment biz.EnvironmentRepo, setting biz.SettingRepo, databaseServer biz.DatabaseServerRepo, cron biz.CronRepo, backupRepo biz.BackupRepo, container biz.ContainerRepo) *HomeService {
 	return &HomeService{
-		t:               t,
-		api:             api.NewAPI(app.Version, app.Locale),
-		conf:            conf,
-		taskRepo:        task,
-		websiteRepo:     website,
-		projectRepo:     project,
-		appRepo:         appRepo,
-		environmentRepo: environment,
-		settingRepo:     setting,
-		cronRepo:        cron,
-		backupRepo:      backupRepo,
-		containerRepo:   container,
+		t:                  t,
+		api:                api.NewAPI(app.Version, app.Locale),
+		conf:               conf,
+		taskRepo:           task,
+		websiteRepo:        website,
+		projectRepo:        project,
+		appRepo:            appRepo,
+		environmentRepo:    environment,
+		settingRepo:        setting,
+		databaseServerRepo: databaseServer,
+		cronRepo:           cron,
+		backupRepo:         backupRepo,
+		containerRepo:      container,
 	}
 }
 
@@ -105,23 +108,15 @@ func (s *HomeService) SystemInfo(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 所有网卡名称
-	var nets []types.LV
 	netInterfaces, _ := net.Interfaces()
-	for _, v := range netInterfaces {
-		nets = append(nets, types.LV{
-			Value: v.Name,
-			Label: v.Name,
-		})
-	}
+	nets := lo.Map(netInterfaces, func(v net.Interface, _ int) types.LV {
+		return types.LV{Value: v.Name, Label: v.Name}
+	})
 	// 所有硬盘名称
-	var disks []types.LV
 	partitions, _ := disk.Partitions(false)
-	for _, v := range partitions {
-		disks = append(disks, types.LV{
-			Value: v.Device,
-			Label: fmt.Sprintf("%s (%s)", v.Device, v.Mountpoint),
-		})
-	}
+	disks := lo.Map(partitions, func(v disk.PartitionStat, _ int) types.LV {
+		return types.LV{Value: v.Device, Label: fmt.Sprintf("%s (%s)", v.Device, v.Mountpoint)}
+	})
 
 	// 系统是否支持
 	osSupported := true
@@ -194,13 +189,12 @@ func (s *HomeService) CountInfo(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if postgresqlInstalled {
-		postgresPassword, _ := s.settingRepo.Get(biz.SettingKeyPostgresPassword)
-		postgres, err := db.NewPostgres("postgres", postgresPassword, "127.0.0.1", 5432)
-		if err == nil {
-			defer postgres.Close()
-			databases, err := postgres.Databases()
-			if err == nil {
-				databaseCount += len(databases)
+		if server, err := s.databaseServerRepo.GetByName("local_postgresql"); err == nil {
+			if postgres, err := db.NewPostgres(server.Username, server.Password, server.Host, server.Port); err == nil {
+				defer postgres.Close()
+				if databases, err := postgres.Databases(); err == nil {
+					databaseCount += len(databases)
+				}
 			}
 		}
 	}
@@ -233,49 +227,38 @@ func (s *HomeService) CountInfo(w http.ResponseWriter, r *http.Request) {
 func (s *HomeService) InstalledEnvironment(w http.ResponseWriter, r *http.Request) {
 	mysqlInstalled, _ := s.appRepo.IsInstalled("slug IN ?", []string{"mysql", "mariadb", "percona"})
 	postgresqlInstalled, _ := s.appRepo.IsInstalled("slug = ?", "postgresql")
+	clickhouseInstalled, _ := s.appRepo.IsInstalled("slug = ?", "clickhouse")
 	rsyncInstalled, _ := s.appRepo.IsInstalled("slug = ?", "rsync")
 
 	// Go 版本
-	var goData []types.LV
-	for _, slug := range s.environmentRepo.InstalledSlugs("go") {
-		ver := s.environmentRepo.InstalledVersion("go", slug)
-		goData = append(goData, types.LV{Value: slug, Label: fmt.Sprintf("Go %s", ver)})
-	}
+	goData := lo.Map(s.environmentRepo.InstalledSlugs("go"), func(slug string, _ int) types.LV {
+		return types.LV{Value: slug, Label: fmt.Sprintf("Go %s", s.environmentRepo.InstalledVersion("go", slug))}
+	})
 
 	// Java 版本
-	var javaData []types.LV
-	for _, slug := range s.environmentRepo.InstalledSlugs("java") {
-		ver := s.environmentRepo.InstalledVersion("java", slug)
-		javaData = append(javaData, types.LV{Value: slug, Label: fmt.Sprintf("Java %s", ver)})
-	}
+	javaData := lo.Map(s.environmentRepo.InstalledSlugs("java"), func(slug string, _ int) types.LV {
+		return types.LV{Value: slug, Label: fmt.Sprintf("Java %s", s.environmentRepo.InstalledVersion("java", slug))}
+	})
 
 	// Node.js 版本
-	var nodejsData []types.LV
-	for _, slug := range s.environmentRepo.InstalledSlugs("nodejs") {
-		ver := s.environmentRepo.InstalledVersion("nodejs", slug)
-		nodejsData = append(nodejsData, types.LV{Value: slug, Label: fmt.Sprintf("Node.js %s", ver)})
-	}
+	nodejsData := lo.Map(s.environmentRepo.InstalledSlugs("nodejs"), func(slug string, _ int) types.LV {
+		return types.LV{Value: slug, Label: fmt.Sprintf("Node.js %s", s.environmentRepo.InstalledVersion("nodejs", slug))}
+	})
 
 	// PHP 版本
-	var phpData []types.LVInt
-	for _, slug := range s.environmentRepo.InstalledSlugs("php") {
-		ver := s.environmentRepo.InstalledVersion("php", slug)
-		phpData = append(phpData, types.LVInt{Value: cast.ToInt(slug), Label: fmt.Sprintf("PHP %s", ver)})
-	}
+	phpData := lo.Map(s.environmentRepo.InstalledSlugs("php"), func(slug string, _ int) types.LVInt {
+		return types.LVInt{Value: cast.ToInt(slug), Label: fmt.Sprintf("PHP %s", s.environmentRepo.InstalledVersion("php", slug))}
+	})
 
 	// Python 版本
-	var pythonData []types.LV
-	for _, slug := range s.environmentRepo.InstalledSlugs("python") {
-		ver := s.environmentRepo.InstalledVersion("python", slug)
-		pythonData = append(pythonData, types.LV{Value: slug, Label: fmt.Sprintf("Python %s", ver)})
-	}
+	pythonData := lo.Map(s.environmentRepo.InstalledSlugs("python"), func(slug string, _ int) types.LV {
+		return types.LV{Value: slug, Label: fmt.Sprintf("Python %s", s.environmentRepo.InstalledVersion("python", slug))}
+	})
 
 	// .NET 版本
-	var dotnetData []types.LV
-	for _, slug := range s.environmentRepo.InstalledSlugs("dotnet") {
-		ver := s.environmentRepo.InstalledVersion("dotnet", slug)
-		dotnetData = append(dotnetData, types.LV{Value: slug, Label: fmt.Sprintf(".NET %s", ver)})
-	}
+	dotnetData := lo.Map(s.environmentRepo.InstalledSlugs("dotnet"), func(slug string, _ int) types.LV {
+		return types.LV{Value: slug, Label: fmt.Sprintf(".NET %s", s.environmentRepo.InstalledVersion("dotnet", slug))}
+	})
 
 	// 数据库
 	var dbData []types.LV
@@ -285,6 +268,9 @@ func (s *HomeService) InstalledEnvironment(w http.ResponseWriter, r *http.Reques
 	}
 	if postgresqlInstalled {
 		dbData = append(dbData, types.LV{Value: "postgresql", Label: "PostgreSQL"})
+	}
+	if clickhouseInstalled {
+		dbData = append(dbData, types.LV{Value: "clickhouse", Label: "ClickHouse"})
 	}
 
 	webserver, _ := s.settingRepo.Get(biz.SettingKeyWebserver)
@@ -518,34 +504,23 @@ func (s *HomeService) Goroutines(w http.ResponseWriter, r *http.Request) {
 	}
 
 	raw := string(buf)
-	blocks := strings.Split(raw, "\n\n")
-
-	var goroutines []GoroutineInfo
-	for _, block := range blocks {
+	goroutines := lo.FilterMap(strings.Split(raw, "\n\n"), func(block string, _ int) (GoroutineInfo, bool) {
 		block = strings.TrimSpace(block)
 		if block == "" {
-			continue
+			return GoroutineInfo{}, false
 		}
-
 		lines := strings.SplitN(block, "\n", 2)
 		matches := goroutineHeaderRe.FindStringSubmatch(lines[0])
 		if matches == nil {
-			continue
+			return GoroutineInfo{}, false
 		}
-
 		id, _ := strconv.Atoi(matches[1])
-		state := matches[2]
 		stack := ""
 		if len(lines) > 1 {
 			stack = lines[1]
 		}
-
-		goroutines = append(goroutines, GoroutineInfo{
-			ID:    id,
-			State: state,
-			Stack: stack,
-		})
-	}
+		return GoroutineInfo{ID: id, State: matches[2], Stack: stack}, true
+	})
 
 	Success(w, goroutines)
 }

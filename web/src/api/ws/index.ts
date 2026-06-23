@@ -24,6 +24,18 @@ export default {
       ws.onerror = (e) => reject(e)
     })
   },
+  // 文件或 systemd 服务实时跟踪
+  follow: (params: { path?: string; service?: string; container?: string }): Promise<WebSocket> => {
+    return new Promise((resolve, reject) => {
+      const qs = new URLSearchParams()
+      if (params.path) qs.set('path', params.path)
+      if (params.service) qs.set('service', params.service)
+      if (params.container) qs.set('container', params.container)
+      const ws = new WebSocket(`${base}/follow?${qs.toString()}`)
+      ws.onopen = () => resolve(ws)
+      ws.onerror = (e) => reject(e)
+    })
+  },
   // 连接SSH
   ssh: (id: number): Promise<WebSocket> => {
     return new Promise((resolve, reject) => {
@@ -46,7 +58,12 @@ export default {
       const ws = new WebSocket(`${base}/container/image/pull`)
       ws.onopen = () => {
         ws.send(
-          JSON.stringify({ name, auth: !!auth, username: auth?.username, password: auth?.password })
+          JSON.stringify({
+            name,
+            auth: !!auth,
+            username: auth?.username,
+            password: auth?.password,
+          }),
         )
         resolve(ws)
       }
@@ -60,5 +77,27 @@ export default {
       ws.onopen = () => resolve(ws)
       ws.onerror = (e) => reject(e)
     })
-  }
+  },
+  // 证书签发进度
+  certObtain: (id: number): Promise<WebSocket> => {
+    return new Promise((resolve, reject) => {
+      const ws = new WebSocket(`${base}/cert/obtain`)
+      ws.onopen = () => {
+        ws.send(JSON.stringify({ id }))
+        resolve(ws)
+      }
+      ws.onerror = (e) => reject(e)
+    })
+  },
+  // 证书续签进度
+  certRenew: (id: number): Promise<WebSocket> => {
+    return new Promise((resolve, reject) => {
+      const ws = new WebSocket(`${base}/cert/renew`)
+      ws.onopen = () => {
+        ws.send(JSON.stringify({ id }))
+        resolve(ws)
+      }
+      ws.onerror = (e) => reject(e)
+    })
+  },
 }

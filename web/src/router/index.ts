@@ -1,7 +1,9 @@
-import { usePermissionStore } from '@/store'
 import type { App } from 'vue'
 import { createRouter, createWebHashHistory, createWebHistory } from 'vue-router'
-import type { RoutesType, RouteType } from '~/types/router'
+
+import { usePermissionStore } from '@/stores'
+import type { RoutesType, RouteType } from '@/types/router'
+
 import { setupRouterGuard } from './guard'
 import { basicRoutes, EMPTY_ROUTE, NOT_FOUND_ROUTE } from './routes'
 
@@ -11,7 +13,7 @@ export const router = createRouter({
     ? createWebHashHistory(import.meta.env.VITE_PUBLIC_PATH || '/')
     : createWebHistory(import.meta.env.VITE_PUBLIC_PATH || '/'),
   routes: basicRoutes,
-  scrollBehavior: () => ({ left: 0, top: 0 })
+  scrollBehavior: () => ({ left: 0, top: 0 }),
 })
 
 export async function setupRouter(app: App) {
@@ -25,9 +27,9 @@ export async function addDynamicRoutes() {
     const permissionStore = usePermissionStore()
     const accessRoutes = permissionStore.generateRoutes(['admin'])
     accessRoutes.forEach((route: RouteType) => {
-      !router.hasRoute(route.name) && router.addRoute(route)
+      if (!router.hasRoute(route.name)) router.addRoute(route)
     })
-    router.hasRoute(EMPTY_ROUTE.name) && router.removeRoute(EMPTY_ROUTE.name)
+    if (router.hasRoute(EMPTY_ROUTE.name)) router.removeRoute(EMPTY_ROUTE.name)
     router.addRoute(NOT_FOUND_ROUTE)
   } catch (error) {
     console.error(error)

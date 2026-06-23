@@ -58,8 +58,15 @@ func (route *Cli) Commands() []*cli.Command {
 		},
 		{
 			Name:   "info",
-			Usage:  route.t.Get("Output AcePanel basic information and generate new password"),
+			Usage:  route.t.Get("Output AcePanel basic information"),
 			Action: route.cli.Info,
+			Flags: []cli.Flag{
+				&cli.BoolFlag{
+					Name:    "force",
+					Aliases: []string{"f"},
+					Usage:   route.t.Get("Force reset password"),
+				},
+			},
 		},
 		{
 			Name:  "user",
@@ -333,6 +340,24 @@ func (route *Cli) Commands() []*cli.Command {
 							Name:     "name",
 							Aliases:  []string{"n"},
 							Usage:    route.t.Get("Database name"),
+							Required: true,
+						},
+						&cli.UintFlag{
+							Name:    "storage",
+							Aliases: []string{"s"},
+							Usage:   route.t.Get("Storage ID (local storage if not filled)"),
+						},
+					},
+				},
+				{
+					Name:   "path",
+					Usage:  route.t.Get("Backup directory"),
+					Action: route.cli.BackupPath,
+					Flags: []cli.Flag{
+						&cli.StringFlag{
+							Name:     "path",
+							Aliases:  []string{"p"},
+							Usage:    route.t.Get("Directory path"),
 							Required: true,
 						},
 						&cli.UintFlag{

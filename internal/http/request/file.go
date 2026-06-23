@@ -22,6 +22,20 @@ type FilePath struct {
 	Path string `json:"path" form:"path" validate:"required|isUnixPath"`
 }
 
+type FileTail struct {
+	Path      string `json:"path" form:"path"`
+	Service   string `json:"service" form:"service"`
+	Container string `json:"container" form:"container"`
+	Offset    int    `json:"offset" form:"offset"`
+	Limit     int    `json:"limit" form:"limit"`
+}
+
+type FileFollow struct {
+	Path      string `json:"path" form:"path"`
+	Service   string `json:"service" form:"service"`
+	Container string `json:"container" form:"container"`
+}
+
 type FileCreate struct {
 	Dir  bool   `json:"dir" form:"dir"`
 	Path string `json:"path" form:"path" validate:"required|isUnixPath"`

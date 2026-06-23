@@ -21,6 +21,7 @@ import (
 	"github.com/leonelquinteros/gotext"
 	"github.com/libtnb/chix"
 	"github.com/libtnb/utils/file"
+	"github.com/samber/lo"
 	"github.com/spf13/cast"
 
 	"github.com/acepanel/panel/v3/internal/app"
@@ -34,14 +35,16 @@ import (
 )
 
 type FileService struct {
-	t        *gotext.Locale
-	taskRepo biz.TaskRepo
+	t             *gotext.Locale
+	taskRepo      biz.TaskRepo
+	containerRepo biz.ContainerRepo
 }
 
-func NewFileService(t *gotext.Locale, task biz.TaskRepo) *FileService {
+func NewFileService(t *gotext.Locale, task biz.TaskRepo, container biz.ContainerRepo) *FileService {
 	return &FileService{
-		t:        t,
-		taskRepo: task,
+		t:             t,
+		taskRepo:      task,
+		containerRepo: container,
 	}
 }
 
@@ -104,6 +107,132 @@ func (s *FileService) Content(w http.ResponseWriter, r *http.Request) {
 		"mime":    mime,
 		"content": base64.StdEncoding.EncodeToString(content),
 	})
+}
+
+// Tail 反向分页读取文件或 systemd 服务日志
+// offset: 从末尾起跳过的行数（0 表示从最末尾开始）
+// limit: 读取的行数（最多 5000）
+// 返回: lines 当前块的行（按文件正序），has_more 是否还有更早的内容，size 文件总字节
+func (s *FileService) Tail(w http.ResponseWriter, r *http.Request) {
+	req, err := Bind[request.FileTail](r)
+	if err != nil {
+		Error(w, http.StatusUnprocessableEntity, "%v", err)
+		return
+	}
+	if req.Limit <= 0 {
+		req.Limit = 500
+	}
+	if req.Limit > 5000 {
+		req.Limit = 5000
+	}
+	if req.Offset < 0 {
+		req.Offset = 0
+	}
+
+	if req.Path == "" && req.Service == "" && req.Container == "" {
+		Error(w, http.StatusUnprocessableEntity, s.t.Get("path, service or container is required"))
+		return
+	}
+
+	if req.Service != "" {
+		s.tailService(w, req)
+		return
+	}
+
+	if req.Container != "" {
+		s.tailContainer(w, req)
+		return
+	}
+
+	f, err := stdos.Open(req.Path)
+	if err != nil {
+		Error(w, http.StatusInternalServerError, "%v", err)
+		return
+	}
+	defer func(f *stdos.File) { _ = f.Close() }(f)
+
+	stat, err := f.Stat()
+	if err != nil {
+		Error(w, http.StatusInternalServerError, "%v", err)
+		return
+	}
+	size := stat.Size()
+	if size == 0 {
+		Success(w, chix.M{"lines": []string{}, "has_more": false, "size": size})
+		return
+	}
+
+	// 从尾部反向读取，直到攒够 offset+limit+1 个换行符（多 1 是为了避免读到不完整的首行）
+	const chunkSize = int64(8192)
+	pos := size
+	var data []byte
+	needLines := req.Offset + req.Limit + 1
+	newlineCount := 0
+	for pos > 0 && newlineCount < needLines {
+		readSize := chunkSize
+		if pos < chunkSize {
+			readSize = pos
+		}
+		pos -= readSize
+		buf := make([]byte, readSize)
+		if _, rerr := f.ReadAt(buf, pos); rerr != nil && rerr != stdio.EOF {
+			Error(w, http.StatusInternalServerError, "%v", rerr)
+			return
+		}
+		data = append(buf, data...)
+		newlineCount = strings.Count(string(data), "\n")
+	}
+
+	// 切分行
+	all := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	totalLoaded := len(all)
+
+	// 当 pos > 0 时第一行可能不完整，丢弃以避免半行被显示
+	startBoundary := 0
+	if pos > 0 {
+		startBoundary = 1
+	}
+
+	endIdx := totalLoaded - req.Offset
+	startIdx := endIdx - req.Limit
+	if startIdx < startBoundary {
+		startIdx = startBoundary
+	}
+	if endIdx < startIdx {
+		endIdx = startIdx
+	}
+	if endIdx > totalLoaded {
+		endIdx = totalLoaded
+	}
+
+	hasMore := pos > 0 || startIdx > startBoundary
+
+	result := []string{}
+	if startIdx < endIdx {
+		result = all[startIdx:endIdx]
+	}
+
+	Success(w, chix.M{
+		"lines":    result,
+		"has_more": hasMore,
+		"size":     size,
+	})
+}
+
+// Truncate 截断文件至 0 长度（保留文件本身和元数据）
+func (s *FileService) Truncate(w http.ResponseWriter, r *http.Request) {
+	req, err := Bind[request.FilePath](r)
+	if err != nil {
+		Error(w, http.StatusUnprocessableEntity, "%v", err)
+		return
+	}
+
+	if err = stdos.Truncate(req.Path, 0); err != nil {
+		Error(w, http.StatusInternalServerError, "%v", err)
+		return
+	}
+
+	Success(w, nil)
 }
 
 func (s *FileService) Save(w http.ResponseWriter, r *http.Request) {
@@ -501,14 +630,13 @@ func (s *FileService) List(w http.ResponseWriter, r *http.Request) {
 		entry stdos.DirEntry
 		info  stdos.FileInfo
 	}
-	entriesWithInfo := make([]entryWithInfo, 0, len(list))
-	for _, entry := range list {
+	entriesWithInfo := lo.FilterMap(list, func(entry stdos.DirEntry, _ int) (entryWithInfo, bool) {
 		info, err := entry.Info()
 		if err != nil {
-			continue
+			return entryWithInfo{}, false
 		}
-		entriesWithInfo = append(entriesWithInfo, entryWithInfo{entry: entry, info: info})
-	}
+		return entryWithInfo{entry: entry, info: info}, true
+	})
 
 	// 排序
 	slices.SortFunc(entriesWithInfo, func(a, b entryWithInfo) int {
@@ -811,4 +939,72 @@ func (s *FileService) getChunkTempFilePrefix(fileName, fileHash string) string {
 		hashPrefix = hashPrefix[:16]
 	}
 	return fmt.Sprintf(".%s.%s.chunk.", fileName, hashPrefix)
+}
+
+// tailService 用 journalctl 反向读取 systemd 服务日志
+func (s *FileService) tailService(w http.ResponseWriter, req *request.FileTail) {
+	total := req.Offset + req.Limit
+	out, err := shell.Execf("journalctl --no-pager -n %d -u %s", total, req.Service)
+	if err != nil {
+		Error(w, http.StatusInternalServerError, "%v", err)
+		return
+	}
+	all := strings.Split(strings.TrimRight(out, "\n"), "\n")
+	totalLoaded := len(all)
+	endIdx := totalLoaded - req.Offset
+	startIdx := endIdx - req.Limit
+	if startIdx < 0 {
+		startIdx = 0
+	}
+	if endIdx < startIdx {
+		endIdx = startIdx
+	}
+	if endIdx > totalLoaded {
+		endIdx = totalLoaded
+	}
+	result := []string{}
+	if startIdx < endIdx {
+		result = all[startIdx:endIdx]
+	}
+	// journalctl -n 拿到的就是末尾,如果 totalLoaded == total 说明可能还有更早
+	hasMore := totalLoaded >= total
+	Success(w, chix.M{
+		"lines":    result,
+		"has_more": hasMore,
+		"size":     0,
+	})
+}
+
+// tailContainer 反向读取容器末尾日志
+func (s *FileService) tailContainer(w http.ResponseWriter, req *request.FileTail) {
+	total := req.Offset + req.Limit
+	out, err := s.containerRepo.Logs(req.Container, total)
+	if err != nil {
+		Error(w, http.StatusInternalServerError, "%v", err)
+		return
+	}
+	all := strings.Split(strings.TrimRight(out, "\n"), "\n")
+	totalLoaded := len(all)
+	endIdx := totalLoaded - req.Offset
+	startIdx := endIdx - req.Limit
+	if startIdx < 0 {
+		startIdx = 0
+	}
+	if endIdx < startIdx {
+		endIdx = startIdx
+	}
+	if endIdx > totalLoaded {
+		endIdx = totalLoaded
+	}
+	result := []string{}
+	if startIdx < endIdx {
+		result = all[startIdx:endIdx]
+	}
+	// 取到的行数达到请求总数，说明可能还有更早的日志
+	hasMore := totalLoaded >= total
+	Success(w, chix.M{
+		"lines":    result,
+		"has_more": hasMore,
+		"size":     0,
+	})
 }

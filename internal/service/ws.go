@@ -8,7 +8,9 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/coder/websocket"
 	"github.com/leonelquinteros/gotext"
@@ -30,15 +32,17 @@ type WsService struct {
 	log         *slog.Logger
 	sshRepo     biz.SSHRepo
 	settingRepo biz.SettingRepo
+	certRepo    biz.CertRepo
 }
 
-func NewWsService(t *gotext.Locale, conf *config.Config, log *slog.Logger, ssh biz.SSHRepo, settingRepo biz.SettingRepo) *WsService {
+func NewWsService(t *gotext.Locale, conf *config.Config, log *slog.Logger, ssh biz.SSHRepo, settingRepo biz.SettingRepo, certRepo biz.CertRepo) *WsService {
 	return &WsService{
 		t:           t,
 		conf:        conf,
 		log:         log,
 		sshRepo:     ssh,
 		settingRepo: settingRepo,
+		certRepo:    certRepo,
 	}
 }
 
@@ -78,6 +82,83 @@ func (s *WsService) Exec(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	s.readLoop(ctx, ws)
+}
+
+// Follow 文件或 systemd 服务实时跟踪
+// path 给定时用 tail -F；service 给定时用 journalctl -f
+func (s *WsService) Follow(w http.ResponseWriter, r *http.Request) {
+	req, err := Bind[request.FileFollow](r)
+	if err != nil {
+		Error(w, http.StatusUnprocessableEntity, "%v", err)
+		return
+	}
+	if req.Path == "" && req.Service == "" && req.Container == "" {
+		Error(w, http.StatusUnprocessableEntity, s.t.Get("path, service or container is required"))
+		return
+	}
+
+	ws, err := s.upgrade(w, r)
+	if err != nil {
+		s.log.Warn("upgrade follow ws error", slog.Any("err", err))
+		return
+	}
+	defer func(ws *websocket.Conn) { _ = ws.CloseNow() }(ws)
+
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+
+	if req.Container != "" {
+		s.followContainer(ctx, ws, req.Container)
+		return
+	}
+
+	var cmd *exec.Cmd
+	if req.Service != "" {
+		cmd = exec.CommandContext(ctx, "journalctl", "--no-pager", "-n", "0", "-f", "-u", req.Service)
+	} else {
+		cmd = exec.CommandContext(ctx, "tail", "-n", "0", "-F", req.Path)
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		_ = ws.Close(websocket.StatusNormalClosure, err.Error())
+		return
+	}
+	if err := cmd.Start(); err != nil {
+		_ = ws.Close(websocket.StatusNormalClosure, err.Error())
+		return
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		defer cancel() // 进程输出结束时取消，促使下方读取循环退出
+		buf := make([]byte, 4096)
+		for {
+			n, rerr := stdout.Read(buf)
+			if n > 0 {
+				if werr := ws.Write(ctx, websocket.MessageBinary, buf[:n]); werr != nil {
+					return
+				}
+			}
+			if rerr != nil {
+				return
+			}
+		}
+	}()
+
+	// 连接结束时取消 ctx 杀掉进程，待输出读取完成后 Wait 回收，避免残留僵尸进程
+	defer func() {
+		cancel()
+		<-done
+		_ = cmd.Wait()
+	}()
+
+	for {
+		_, _, rerr := ws.Read(ctx)
+		if rerr != nil {
+			return
+		}
+	}
 }
 
 // PTY 通用 PTY 命令执行
@@ -291,6 +372,82 @@ func (s *WsService) ContainerImagePull(w http.ResponseWriter, r *http.Request) {
 	_ = ws.Close(websocket.StatusNormalClosure, "")
 }
 
+// CertObtain 通过 WebSocket 签发证书并实时推送进度
+func (s *WsService) CertObtain(w http.ResponseWriter, r *http.Request) {
+	s.handleCertWs(w, r, "obtain", func(ctx context.Context, id uint, cb func(string)) error {
+		_, err := s.certRepo.ObtainAutoWithProgressCallback(ctx, id, cb)
+		return err
+	})
+}
+
+// CertRenew 通过 WebSocket 续签证书并实时推送进度
+func (s *WsService) CertRenew(w http.ResponseWriter, r *http.Request) {
+	s.handleCertWs(w, r, "renew", func(ctx context.Context, id uint, cb func(string)) error {
+		_, err := s.certRepo.RenewWithProgressCallback(ctx, id, cb)
+		return err
+	})
+}
+
+// handleCertWs 证书操作的公共 WebSocket 处理逻辑
+func (s *WsService) handleCertWs(w http.ResponseWriter, r *http.Request, action string, fn func(ctx context.Context, id uint, cb func(string)) error) {
+	ws, err := s.upgrade(w, r)
+	if err != nil {
+		s.log.Warn(fmt.Sprintf("upgrade cert %s ws error", action), slog.Any("err", err))
+		return
+	}
+	defer func() { _ = ws.CloseNow() }()
+
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+
+	// 读取参数，10 秒超时防止连接后不发消息
+	readCtx, readCancel := context.WithTimeout(ctx, 10*time.Second)
+	_, message, err := ws.Read(readCtx)
+	readCancel()
+	if err != nil {
+		_ = ws.Close(websocket.StatusNormalClosure, s.t.Get("failed to read params: %v", err))
+		return
+	}
+	var req struct {
+		ID uint `json:"id"`
+	}
+	if err = json.Unmarshal(message, &req); err != nil {
+		_ = ws.Close(websocket.StatusNormalClosure, s.t.Get("invalid params: %v", err))
+		return
+	}
+
+	progressCallback := func(msg string) {
+		if ctx.Err() != nil {
+			return
+		}
+		data, _ := json.Marshal(map[string]any{
+			"status": "progress",
+			"msg":    msg,
+		})
+		if err = ws.Write(ctx, websocket.MessageText, data); err != nil {
+			s.log.Warn("write cert progress error", slog.Any("err", err), slog.String("action", action))
+		}
+	}
+
+	if err = fn(ctx, req.ID, progressCallback); err != nil {
+		errMsg, _ := json.Marshal(map[string]any{
+			"status": "error",
+			"msg":    err.Error(),
+		})
+		_ = ws.Write(ctx, websocket.MessageText, errMsg)
+		_ = ws.Close(websocket.StatusNormalClosure, "")
+		return
+	}
+
+	completeMsg, _ := json.Marshal(map[string]any{
+		"status": "success",
+		"msg":    "success",
+		"data":   nil,
+	})
+	_ = ws.Write(ctx, websocket.MessageText, completeMsg)
+	_ = ws.Close(websocket.StatusNormalClosure, "")
+}
+
 // getContainerSock 获取容器 socket 路径
 func (s *WsService) getContainerSock() string {
 	sock, _ := s.settingRepo.Get(biz.SettingKeyContainerSock)
@@ -301,6 +458,72 @@ func (s *WsService) getContainerSock() string {
 		sock = fmt.Sprintf("unix://%s", sock)
 	}
 	return sock
+}
+
+// wsBinaryWriter 将写入转发为 WebSocket 二进制帧
+type wsBinaryWriter struct {
+	ctx context.Context
+	ws  *websocket.Conn
+}
+
+func (w *wsBinaryWriter) Write(p []byte) (int, error) {
+	if err := w.ws.Write(w.ctx, websocket.MessageBinary, p); err != nil {
+		return 0, err
+	}
+	return len(p), nil
+}
+
+// followContainer 通过 Docker SDK 实时跟踪容器日志并转发到 WebSocket
+func (s *WsService) followContainer(ctx context.Context, ws *websocket.Conn, id string) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	apiClient, err := client.New(client.WithHost(s.getContainerSock()))
+	if err != nil {
+		_ = ws.Close(websocket.StatusNormalClosure, err.Error())
+		return
+	}
+	defer func(apiClient *client.Client) { _ = apiClient.Close() }(apiClient)
+
+	// 非 TTY 容器日志为多路复用流，需按 TTY 设置决定是否解复用
+	inspect, err := apiClient.ContainerInspect(ctx, id, client.ContainerInspectOptions{})
+	if err != nil {
+		_ = ws.Close(websocket.StatusNormalClosure, err.Error())
+		return
+	}
+	tty := inspect.Container.Config != nil && inspect.Container.Config.Tty
+
+	// Tail "0" 表示只推送新增日志，历史由 HTTP /file/tail 反向分页加载
+	reader, err := apiClient.ContainerLogs(ctx, id, client.ContainerLogsOptions{
+		ShowStdout: true,
+		ShowStderr: true,
+		Follow:     true,
+		Tail:       "0",
+	})
+	if err != nil {
+		_ = ws.Close(websocket.StatusNormalClosure, err.Error())
+		return
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		defer cancel() // 日志流结束(如容器停止)时取消，促使下方读取循环退出
+		_ = docker.CopyLogs(&wsBinaryWriter{ctx: ctx, ws: ws}, reader, tty)
+	}()
+
+	// 连接结束时取消 ctx 并关闭日志流，待拷贝协程退出后返回，避免泄漏
+	defer func() {
+		cancel()
+		_ = reader.Close()
+		<-done
+	}()
+
+	for {
+		if _, _, rerr := ws.Read(ctx); rerr != nil {
+			return
+		}
+	}
 }
 
 func (s *WsService) upgrade(w http.ResponseWriter, r *http.Request) (*websocket.Conn, error) {

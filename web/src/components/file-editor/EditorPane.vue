@@ -1,10 +1,13 @@
 <script setup lang="ts">
-import { useEditorStore, useThemeStore } from '@/store'
+import type * as Monaco from 'monaco-editor'
+import { NButton, NFlex, useThemeVars } from 'naive-ui'
+import { h } from 'vue'
+import { useGettext } from 'vue3-gettext'
+
+import file from '@/api/panel/file'
+import { useEditorStore, useThemeStore } from '@/stores'
 import { languageByPath } from '@/utils/file'
 import { getMonaco } from '@/utils/monaco'
-import type * as Monaco from 'monaco-editor'
-import { useThemeVars } from 'naive-ui'
-import { useGettext } from 'vue3-gettext'
 
 const { $gettext } = useGettext()
 const editorStore = useEditorStore()
@@ -59,7 +62,7 @@ async function initEditor() {
     bracketPairColorization: { enabled: settings.bracketPairColorization },
     guides: {
       indentation: settings.guides,
-      bracketPairs: settings.guides
+      bracketPairs: settings.guides,
     },
     folding: settings.folding,
     // Cursor settings
@@ -69,7 +72,7 @@ async function initEditor() {
     // Behavior settings
     mouseWheelZoom: settings.mouseWheelZoom,
     formatOnPaste: settings.formatOnPaste,
-    formatOnType: settings.formatOnType
+    formatOnType: settings.formatOnType,
   })
 
   // 监听内容变化
@@ -119,14 +122,54 @@ function handleCloseTab(path: string, e: MouseEvent) {
   e.stopPropagation()
   const tab = editorStore.tabs.find((t) => t.path === path)
   if (tab?.modified) {
-    window.$dialog.warning({
+    const d = window.$dialog.warning({
       title: $gettext('Unsaved Changes'),
       content: $gettext('This file has unsaved changes. Are you sure you want to close it?'),
-      positiveText: $gettext('Close'),
-      negativeText: $gettext('Cancel'),
-      onPositiveClick: () => {
-        editorStore.closeTab(path)
-      }
+      closable: false,
+      maskClosable: false,
+      action: () =>
+        h(NFlex, { justify: 'end' }, () => [
+          h(
+            NButton,
+            {
+              onClick: () => {
+                d.destroy() // 返回，不关闭标签页
+              },
+            },
+            () => $gettext('Go Back'),
+          ),
+          h(
+            NButton,
+            {
+              type: 'warning',
+              onClick: () => {
+                d.destroy()
+                editorStore.closeTab(path) // 放弃更改，关闭标签页
+              },
+            },
+            () => $gettext('Discard'),
+          ),
+          h(
+            NButton,
+            {
+              type: 'primary',
+              onClick: () => {
+                useRequest(file.save(tab.path, tab.content))
+                  .onSuccess(() => {
+                    editorStore.markSaved(tab.path)
+                    window.$message.success($gettext('Saved successfully'))
+                    d.destroy()
+                    editorStore.closeTab(path) // 保存成功，关闭标签页
+                  })
+                  .onError(() => {
+                    window.$message.error($gettext('Failed to save file'))
+                    d.destroy() // 保存失败，不关闭标签页
+                  })
+              },
+            },
+            () => $gettext('Save'),
+          ),
+        ]),
     })
   } else {
     editorStore.closeTab(path)
@@ -209,20 +252,20 @@ function handleDropEnd(e: DragEvent) {
 const contextMenuOptions = computed(() => [
   {
     label: $gettext('Close'),
-    key: 'close'
+    key: 'close',
   },
   {
     label: $gettext('Close Others'),
-    key: 'closeOthers'
+    key: 'closeOthers',
   },
   {
     label: $gettext('Close All'),
-    key: 'closeAll'
+    key: 'closeAll',
   },
   {
     label: $gettext('Close Saved'),
-    key: 'closeSaved'
-  }
+    key: 'closeSaved',
+  },
 ])
 
 const contextMenuX = ref(0)
@@ -267,7 +310,7 @@ watch(
     if (editorReady.value) {
       updateEditorContent()
     }
-  }
+  },
 )
 
 // 监听语言变化（用户手动切换语言时更新 Monaco 高亮）
@@ -280,7 +323,7 @@ watch(
       monacoRef.value.editor.setModelLanguage(model, newLanguage)
       monacoRef.value.editor.setTheme(getEditorTheme(newLanguage))
     }
-  }
+  },
 )
 
 // 监听行分隔符变化（用户手动切换行分隔符时更新 Monaco）
@@ -296,7 +339,7 @@ watch(
           : monacoRef.value.editor.EndOfLineSequence.LF
       model.setEOL(eol)
     }
-  }
+  },
 )
 
 // 监听当前标签页内容变化（外部更新）
@@ -308,7 +351,7 @@ watch(
     if (newContent !== undefined && currentValue !== newContent) {
       editorRef.value.setValue(newContent)
     }
-  }
+  },
 )
 
 // 监听主题变化
@@ -318,7 +361,7 @@ watch(
     if (!monacoRef.value || !editorStore.activeTab) return
     const language = languageByPath(editorStore.activeTab.path)
     monacoRef.value.editor.setTheme(getEditorTheme(language))
-  }
+  },
 )
 
 // 监听编辑器设置变化
@@ -339,7 +382,7 @@ watch(
       bracketPairColorization: { enabled: settings.bracketPairColorization },
       guides: {
         indentation: settings.guides,
-        bracketPairs: settings.guides
+        bracketPairs: settings.guides,
       },
       folding: settings.folding,
       // Cursor settings
@@ -349,10 +392,10 @@ watch(
       // Behavior settings
       mouseWheelZoom: settings.mouseWheelZoom,
       formatOnPaste: settings.formatOnPaste,
-      formatOnType: settings.formatOnType
+      formatOnType: settings.formatOnType,
     })
   },
-  { deep: true }
+  { deep: true },
 )
 
 onMounted(() => {
@@ -366,7 +409,7 @@ onBeforeUnmount(() => {
 // 暴露方法
 defineExpose({
   getEditor: () => editorRef.value,
-  focus: () => editorRef.value?.focus()
+  focus: () => editorRef.value?.focus(),
 })
 </script>
 
@@ -382,7 +425,7 @@ defineExpose({
           :class="{
             active: tab.path === editorStore.activeTabPath,
             dragging: dragIndex === index,
-            'drag-over': dragOverIndex === index && dragIndex !== index
+            'drag-over': dragOverIndex === index && dragIndex !== index,
           }"
           draggable="true"
           @click="handleSwitchTab(tab.path)"

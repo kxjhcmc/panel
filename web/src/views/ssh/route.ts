@@ -1,13 +1,13 @@
-import type { RouteType } from '~/types/router'
+import type { RouteType } from '@/types/router'
 
-const Layout = () => import('@/layout/IndexView.vue')
+const Layout = () => import('@/layouts/IndexView.vue')
 
 export default {
   name: 'ssh',
   path: '/ssh',
   component: Layout,
   meta: {
-    order: 70
+    order: 70,
   },
   children: [
     {
@@ -18,8 +18,8 @@ export default {
         title: 'Terminal',
         icon: 'mdi:console',
         role: ['admin'],
-        requireAuth: true
-      }
-    }
-  ]
+        requireAuth: true,
+      },
+    },
+  ],
 } as RouteType

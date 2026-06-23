@@ -9,7 +9,6 @@ import (
 	"math/rand/v2"
 	stdos "os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"time"
 
@@ -165,20 +164,33 @@ func (s *CliService) Info(ctx context.Context, cmd *cli.Command) error {
 		return errors.New(s.t.Get("Failed to get user info: %v", err))
 	}
 
-	password := str.Random(16)
-	hashed, err := s.hash.Make(password)
-	if err != nil {
-		return errors.New(s.t.Get("Failed to generate password: %v", err))
-	}
-	user.Username = str.Random(8)
-	user.Password = hashed
+	// 判断是否首次运行或使用了 -f 参数
+	force := cmd.Bool("force")
+	infoRan, _ := s.settingRepo.Get(biz.SettingKeyInfoRan)
+	isFirstRun := infoRan == ""
 
-	if err = s.db.Save(user).Error; err != nil {
-		return errors.New(s.t.Get("Failed to save user info: %v", err))
+	var password string
+	if isFirstRun || force {
+		password = str.Random(16)
+		hashed, err := s.hash.Make(password)
+		if err != nil {
+			return errors.New(s.t.Get("Failed to generate password: %v", err))
+		}
+		user.Username = str.Random(8)
+		user.Password = hashed
+
+		if err = s.db.Save(user).Error; err != nil {
+			return errors.New(s.t.Get("Failed to save user info: %v", err))
+		}
+
+		// 标记 info 命令已运行过
+		if err = s.settingRepo.Set(biz.SettingKeyInfoRan, "1"); err != nil {
+			return errors.New(s.t.Get("Failed to save setting: %v", err))
+		}
 	}
 
 	protocol := "http"
-	if s.conf.HTTP.TLS {
+	if s.conf.HTTP.IsHTTPS() {
 		protocol = "https"
 	}
 
@@ -192,7 +204,11 @@ func (s *CliService) Info(ctx context.Context, cmd *cli.Command) error {
 	}
 
 	fmt.Println(s.t.Get("Username: %s", user.Username))
-	fmt.Println(s.t.Get("Password: %s", password))
+	if isFirstRun || force {
+		fmt.Println(s.t.Get("Password: %s", password))
+	} else {
+		fmt.Println(s.t.Get("Password: ******* (use -f to force reset)"))
+	}
 	fmt.Println(s.t.Get("Port: %d", port))
 	fmt.Println(s.t.Get("Entrance: %s", entrance))
 
@@ -362,7 +378,7 @@ func (s *CliService) HTTPSOn(ctx context.Context, cmd *cli.Command) error {
 		return err
 	}
 
-	conf.HTTP.TLS = true
+	conf.HTTP.TLS = "acme"
 
 	if err = config.Save(conf); err != nil {
 		return err
@@ -378,7 +394,7 @@ func (s *CliService) HTTPSOff(ctx context.Context, cmd *cli.Command) error {
 		return err
 	}
 
-	conf.HTTP.TLS = false
+	conf.HTTP.TLS = "off"
 
 	if err = config.Save(conf); err != nil {
 		return err
@@ -389,32 +405,26 @@ func (s *CliService) HTTPSOff(ctx context.Context, cmd *cli.Command) error {
 }
 
 func (s *CliService) HTTPSGenerate(ctx context.Context, cmd *cli.Command) error {
-	var names []string
-	if lv4, err := tools.GetLocalIPv4(); err == nil {
-		if !slices.Contains(names, lv4) {
-			names = append(names, lv4)
-		}
-	}
-	if lv6, err := tools.GetLocalIPv6(); err == nil {
-		if !slices.Contains(names, lv6) {
-			names = append(names, lv6)
-		}
-	}
-	if rv4, err := tools.GetPublicIPv4(); err == nil {
-		if !slices.Contains(names, rv4) {
-			names = append(names, rv4)
-		}
-	}
-	if rv6, err := tools.GetPublicIPv6(); err == nil {
-		if !slices.Contains(names, rv6) {
-			names = append(names, rv6)
-		}
-	}
+	names := tools.CollectLocalNames()
 
 	var crt, key []byte
 	var err error
 
-	if s.conf.HTTP.ACME {
+	switch s.conf.HTTP.TLS {
+	case "self-signed":
+		// 自签模式
+		crt, key, err = cert.GenerateSelfSigned(names)
+		if err != nil {
+			return err
+		}
+	case "off", "custom":
+		// off/custom 不需要自动生成，回退到自签
+		crt, key, err = cert.GenerateSelfSigned(names)
+		if err != nil {
+			return err
+		}
+	default:
+		// ACME 模式
 		ip, err := s.settingRepo.Get(biz.SettingKeyPublicIPs)
 		if err != nil {
 			return err
@@ -440,6 +450,7 @@ func (s *CliService) HTTPSGenerate(ctx context.Context, cmd *cli.Command) error 
 		}
 	}
 
+	// ACME 失败回退到自签
 	if crt == nil || key == nil {
 		crt, key, err = cert.GenerateSelfSigned(names)
 		if err != nil {
@@ -682,6 +693,11 @@ func (s *CliService) BackupWebsite(ctx context.Context, cmd *cli.Command) error 
 
 func (s *CliService) BackupDatabase(ctx context.Context, cmd *cli.Command) error {
 	_ = s.backupRepo.Create(ctx, biz.BackupType(cmd.String("type")), cmd.String("name"), cmd.Uint("storage"))
+	return nil
+}
+
+func (s *CliService) BackupPath(ctx context.Context, cmd *cli.Command) error {
+	_ = s.backupRepo.Create(ctx, biz.BackupTypePath, cmd.String("path"), cmd.Uint("storage"))
 	return nil
 }
 
@@ -1041,6 +1057,7 @@ func (s *CliService) Init(ctx context.Context, cmd *cli.Command) error {
 		{Key: biz.SettingKeyMonitorDays, Value: "30"},
 		{Key: biz.SettingKeyMonitorInterval, Value: "1"},
 		{Key: biz.SettingKeyBackupPath, Value: filepath.Join(app.Root, "backup")},
+		{Key: biz.SettingKeyBackupFormat, Value: "tar.xz"},
 		{Key: biz.SettingKeyWebsitePath, Value: filepath.Join(app.Root, "sites")},
 		{Key: biz.SettingKeyProjectPath, Value: filepath.Join(app.Root, "projects")},
 		{Key: biz.SettingKeyContainerSock, Value: "/var/run/docker.sock"},
@@ -1080,7 +1097,9 @@ func (s *CliService) Init(ctx context.Context, cmd *cli.Command) error {
 	conf.App.APIEndpoint = "api.acepanel.net"
 	conf.App.DownloadEndpoint = "dl.acepanel.net"
 	conf.HTTP.Entrance = "/" + str.Random(6)
-	conf.HTTP.ACME = acme
+	if acme {
+		conf.HTTP.TLS = "acme"
+	}
 
 	// 随机默认端口
 checkPort:

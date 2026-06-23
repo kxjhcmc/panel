@@ -13,6 +13,7 @@ import (
 	"github.com/libtnb/cache"
 	"github.com/spf13/cast"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"github.com/acepanel/panel/v3/internal/app"
 	"github.com/acepanel/panel/v3/internal/biz"
@@ -22,6 +23,7 @@ import (
 	"github.com/acepanel/panel/v3/pkg/firewall"
 	"github.com/acepanel/panel/v3/pkg/io"
 	"github.com/acepanel/panel/v3/pkg/os"
+	"github.com/acepanel/panel/v3/pkg/tools"
 )
 
 const settingCacheTTL = 5 * time.Minute
@@ -111,16 +113,10 @@ func (r *settingRepo) GetSlice(key biz.SettingKey, defaultValue ...[]string) ([]
 }
 
 func (r *settingRepo) Set(key biz.SettingKey, value string) error {
-	setting := new(biz.Setting)
-	if err := r.db.Where("key = ?", key).First(setting).Error; err != nil {
-		if !errors.Is(err, gorm.ErrRecordNotFound) {
-			return err
-		}
-	}
-
-	setting.Key = key
-	setting.Value = value
-	if err := r.db.Save(setting).Error; err != nil {
+	if err := r.db.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "key"}},
+		DoUpdates: clause.AssignmentColumns([]string{"value"}),
+	}).Create(&biz.Setting{Key: key, Value: value}).Error; err != nil {
 		return err
 	}
 
@@ -129,30 +125,16 @@ func (r *settingRepo) Set(key biz.SettingKey, value string) error {
 }
 
 func (r *settingRepo) SetSlice(key biz.SettingKey, value []string) error {
-	setting := new(biz.Setting)
-	if err := r.db.Where("key = ?", key).First(setting).Error; err != nil {
-		if !errors.Is(err, gorm.ErrRecordNotFound) {
-			return err
-		}
-	}
-
-	setting.Key = key
-	if len(value) == 0 {
-		setting.Value = "[]"
-	} else {
+	v := "[]"
+	if len(value) > 0 {
 		b, err := json.Marshal(value)
 		if err != nil {
 			return err
 		}
-		setting.Value = string(b)
+		v = string(b)
 	}
 
-	if err := r.db.Save(setting).Error; err != nil {
-		return err
-	}
-
-	r.cache.Forget(r.cacheKey(key))
-	return nil
+	return r.Set(key, v)
 }
 
 func (r *settingRepo) Delete(key biz.SettingKey) error {
@@ -187,6 +169,10 @@ func (r *settingRepo) GetPanel() (*request.SettingPanel, error) {
 		return nil, err
 	}
 	backupPath, err := r.Get(biz.SettingKeyBackupPath)
+	if err != nil {
+		return nil, err
+	}
+	backupFormat, err := r.Get(biz.SettingKeyBackupFormat, "tar.xz")
 	if err != nil {
 		return nil, err
 	}
@@ -246,6 +232,7 @@ func (r *settingRepo) GetPanel() (*request.SettingPanel, error) {
 		BindUA:        r.conf.HTTP.BindUA,
 		WebsitePath:   websitePath,
 		BackupPath:    backupPath,
+		BackupFormat:  backupFormat,
 		ProjectPath:   projectPath,
 		ContainerSock: containerSock,
 		HiddenMenu:    hiddenMenu,
@@ -254,8 +241,7 @@ func (r *settingRepo) GetPanel() (*request.SettingPanel, error) {
 		IPDBURL:       ipdbURL,
 		IPDBPath:      ipdbPath,
 		Port:          r.conf.HTTP.Port,
-		HTTPS:         r.conf.HTTP.TLS,
-		ACME:          r.conf.HTTP.ACME,
+		TLS:           r.conf.HTTP.TLS,
 		PublicIP:      publicIP,
 		Cert:          crt,
 		Key:           key,
@@ -279,6 +265,9 @@ func (r *settingRepo) UpdatePanel(ctx context.Context, req *request.SettingPanel
 		return false, err
 	}
 	if err := r.Set(biz.SettingKeyBackupPath, req.BackupPath); err != nil {
+		return false, err
+	}
+	if err := r.Set(biz.SettingKeyBackupFormat, req.BackupFormat); err != nil {
 		return false, err
 	}
 	if err := r.Set(biz.SettingKeyProjectPath, req.ProjectPath); err != nil {
@@ -326,6 +315,25 @@ func (r *settingRepo) UpdatePanel(ctx context.Context, req *request.SettingPanel
 	// 下面是需要需要重启的设置
 	// 面板HTTPS
 	restartFlag := false
+
+	// 自签模式
+	if req.TLS == "self-signed" {
+		needGen := req.Cert == "" || req.Key == ""
+		if !needGen {
+			if _, err := cert.ParseCert([]byte(req.Cert)); err != nil {
+				needGen = true
+			}
+		}
+		if needGen {
+			crt, key, err := cert.GenerateSelfSigned(tools.CollectLocalNames())
+			if err != nil {
+				return false, errors.New(r.t.Get("failed to generate self-signed certificate: %v", err))
+			}
+			req.Cert = string(crt)
+			req.Key = string(key)
+		}
+	}
+
 	oldCert, _ := io.Read(filepath.Join(app.Root, "panel/storage/cert.pem"))
 	oldKey, _ := io.Read(filepath.Join(app.Root, "panel/storage/cert.key"))
 	if oldCert != req.Cert || oldKey != req.Key {
@@ -334,11 +342,14 @@ func (r *settingRepo) UpdatePanel(ctx context.Context, req *request.SettingPanel
 		}
 		restartFlag = true
 	}
-	if _, err := cert.ParseCert([]byte(req.Cert)); err != nil && req.HTTPS {
-		return false, errors.New(r.t.Get("failed to parse certificate: %v", err))
-	}
-	if _, err := cert.ParseKey([]byte(req.Key)); err != nil && req.HTTPS {
-		return false, errors.New(r.t.Get("failed to parse private key: %v", err))
+	// custom 模式需要验证证书格式
+	if req.TLS == "custom" {
+		if _, err := cert.ParseCert([]byte(req.Cert)); err != nil {
+			return false, errors.New(r.t.Get("failed to parse certificate: %v", err))
+		}
+		if _, err := cert.ParseKey([]byte(req.Key)); err != nil {
+			return false, errors.New(r.t.Get("failed to parse private key: %v", err))
+		}
 	}
 	if err := io.Write(filepath.Join(app.Root, "panel/storage/cert.pem"), req.Cert, 0600); err != nil {
 		return false, err
@@ -379,8 +390,7 @@ func (r *settingRepo) UpdatePanel(ctx context.Context, req *request.SettingPanel
 	conf.HTTP.Entrance = req.Entrance
 	conf.HTTP.EntranceError = req.EntranceError
 	conf.HTTP.LoginCaptcha = req.LoginCaptcha
-	conf.HTTP.TLS = req.HTTPS
-	conf.HTTP.ACME = req.ACME
+	conf.HTTP.TLS = req.TLS
 	conf.HTTP.IPHeader = req.IPHeader
 	conf.HTTP.BindDomain = req.BindDomain
 	conf.HTTP.BindIP = req.BindIP

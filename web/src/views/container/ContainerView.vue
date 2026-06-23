@@ -7,6 +7,7 @@ import { Unicode11Addon } from '@xterm/addon-unicode11'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import { WebglAddon } from '@xterm/addon-webgl'
 import { Terminal } from '@xterm/xterm'
+
 import '@xterm/xterm/css/xterm.css'
 import { NButton, NDataTable, NDropdown, NFlex, NInput, NSwitch, NTag } from 'naive-ui'
 import { useGettext } from 'vue3-gettext'
@@ -18,12 +19,12 @@ import ContainerCreate from '@/views/container/ContainerCreate.vue'
 const { $gettext } = useGettext()
 
 const logModal = ref(false)
-const logs = ref('')
+const logId = ref('')
 const renameModal = ref(false)
 const renameLoading = ref(false)
 const renameModel = ref({
   id: '',
-  name: ''
+  name: '',
 })
 
 // 终端相关状态
@@ -46,7 +47,7 @@ const columns: any = [
     key: 'name',
     minWidth: 150,
     resizable: true,
-    ellipsis: { tooltip: true }
+    ellipsis: { tooltip: true },
   },
   {
     title: $gettext('Status'),
@@ -64,20 +65,16 @@ const columns: any = [
           } else {
             handleStop(row.id)
           }
-        }
+        },
       })
-    }
+    },
   },
   {
     title: $gettext('Image'),
     key: 'image',
     minWidth: 300,
     resizable: true,
-    render(row: any): any {
-      return h(NTag, null, {
-        default: () => row.image
-      })
-    }
+    ellipsis: { tooltip: true },
   },
   {
     title: $gettext('Ports (Host->Container)'),
@@ -94,18 +91,18 @@ const columns: any = [
                   return `${port.host ? port.host + ':' : ''}${port.host_start}->${port.container_start}/${port.protocol}`
                 }
                 return `${port.host ? port.host + ':' : ''}${port.host_start}-${port.host_end}->${port.container_start}-${port.container_end}/${port.protocol}`
-              }
-            })
-          )
+              },
+            }),
+          ),
       })
-    }
+    },
   },
   {
     title: $gettext('Running Status'),
     key: 'status',
     width: 300,
     resizable: true,
-    ellipsis: { tooltip: true }
+    ellipsis: { tooltip: true },
   },
   {
     title: $gettext('Actions'),
@@ -113,18 +110,18 @@ const columns: any = [
     width: 320,
     hideInExcel: true,
     render(row: any) {
-      return [
+      return h(NFlex, { size: 'small', align: 'center' }, () => [
         h(
           NButton,
           {
             size: 'small',
             type: 'info',
             onClick: () => handleOpenTerminal(row),
-            disabled: row.state !== 'running'
+            disabled: row.state !== 'running',
           },
           {
-            default: () => $gettext('Terminal')
-          }
+            default: () => $gettext('Terminal'),
+          },
         ),
         h(
           NButton,
@@ -132,28 +129,26 @@ const columns: any = [
             size: 'small',
             type: 'warning',
             secondary: true,
-            style: 'margin-left: 10px;',
-            onClick: () => handleShowLog(row)
+            onClick: () => handleShowLog(row),
           },
           {
-            default: () => $gettext('Logs')
-          }
+            default: () => $gettext('Logs'),
+          },
         ),
         h(
           NButton,
           {
             size: 'small',
             type: 'success',
-            style: 'margin-left: 10px;',
             onClick: () => {
               renameModel.value.id = row.id
               renameModel.value.name = row.name
               renameModal.value = true
-            }
+            },
           },
           {
-            default: () => $gettext('Rename')
-          }
+            default: () => $gettext('Rename'),
+          },
         ),
         h(
           NDropdown,
@@ -162,37 +157,37 @@ const columns: any = [
               {
                 label: $gettext('Start'),
                 key: 'start',
-                disabled: row.state === 'running'
+                disabled: row.state === 'running',
               },
               {
                 label: $gettext('Stop'),
                 key: 'stop',
-                disabled: row.state !== 'running'
+                disabled: row.state !== 'running',
               },
               {
                 label: $gettext('Restart'),
                 key: 'restart',
-                disabled: row.state !== 'running'
+                disabled: row.state !== 'running',
               },
               {
                 label: $gettext('Force Stop'),
                 key: 'forceStop',
-                disabled: row.state !== 'running'
+                disabled: row.state !== 'running',
               },
               {
                 label: $gettext('Pause'),
                 key: 'pause',
-                disabled: row.state !== 'running'
+                disabled: row.state !== 'running',
               },
               {
                 label: $gettext('Resume'),
                 key: 'unpause',
-                disabled: row.state === 'running'
+                disabled: row.state === 'running',
               },
               {
                 label: $gettext('Delete'),
-                key: 'delete'
-              }
+                key: 'delete',
+              },
             ],
             onSelect: (key: string) => {
               switch (key) {
@@ -218,7 +213,7 @@ const columns: any = [
                   handleDelete(row.id)
                   break
               }
-            }
+            },
           },
           {
             default: () => {
@@ -227,18 +222,17 @@ const columns: any = [
                 {
                   size: 'small',
                   type: 'primary',
-                  style: 'margin-left: 10px;'
                 },
                 {
-                  default: () => $gettext('More')
-                }
+                  default: () => $gettext('More'),
+                },
               )
-            }
-          }
-        )
-      ]
-    }
-  }
+            },
+          },
+        ),
+      ])
+    },
+  },
 ]
 
 const { loading, data, page, total, pageSize, pageCount, refresh } = usePagination(
@@ -247,15 +241,13 @@ const { loading, data, page, total, pageSize, pageCount, refresh } = usePaginati
     initialData: { total: 0, list: [] },
     initialPageSize: 20,
     total: (res: any) => res.total,
-    data: (res: any) => res.items
-  }
+    data: (res: any) => res.items,
+  },
 )
 
-const handleShowLog = async (row: any) => {
-  useRequest(container.containerLogs(row.id)).onSuccess(({ data }) => {
-    logs.value = data
-    logModal.value = true
-  })
+const handleShowLog = (row: any) => {
+  logId.value = row.id
+  logModal.value = true
 }
 
 const handleRename = () => {
@@ -424,7 +416,7 @@ const handleOpenTerminal = async (row: any) => {
       cursorBlink: true,
       cursorStyle: 'underline',
       tabStopWidth: 4,
-      theme: { background: '#111', foreground: '#fff' }
+      theme: { background: '#111', foreground: '#fff' },
     })
 
     fitAddon = new FitAddon()
@@ -465,8 +457,8 @@ const handleOpenTerminal = async (row: any) => {
           JSON.stringify({
             resize: true,
             columns: cols,
-            rows: rows
-          })
+            rows: rows,
+          }),
         )
       }
     })
@@ -560,7 +552,13 @@ onUnmounted(() => {
       <n-button type="primary" @click="containerCreateModal = true">
         {{ $gettext('Create Container') }}
       </n-button>
-      <n-button type="primary" :loading="pruneLoading" :disabled="pruneLoading" @click="handlePrune" ghost>
+      <n-button
+        type="primary"
+        :loading="pruneLoading"
+        :disabled="pruneLoading"
+        @click="handlePrune"
+        ghost
+      >
         {{ $gettext('Cleanup Containers') }}
       </n-button>
       <n-button-group>
@@ -591,7 +589,7 @@ onUnmounted(() => {
       striped
       remote
       :loading="loading"
-      :scroll-x="1000"
+      :scroll-x="1500"
       :data="data"
       :columns="columns"
       :row-key="(row: any) => row.id"
@@ -600,26 +598,15 @@ onUnmounted(() => {
       v-model:pageSize="pageSize"
       :pagination="{
         page: page,
-        pageCount: pageCount,
         pageSize: pageSize,
         itemCount: total,
         showQuickJumper: true,
         showSizePicker: true,
-        pageSizes: [20, 50, 100, 200]
+        pageSizes: [20, 50, 100, 200],
       }"
     />
   </n-flex>
-  <n-modal
-    v-model:show="logModal"
-    preset="card"
-    :title="$gettext('Logs')"
-    style="width: 80vw"
-    size="huge"
-    :bordered="false"
-    :segmented="false"
-  >
-    <common-editor v-model:value="logs" height="60vh" read-only />
-  </n-modal>
+  <realtime-log-modal v-model:show="logModal" :container="logId" />
   <n-modal
     v-model:show="renameModal"
     preset="card"
@@ -639,7 +626,15 @@ onUnmounted(() => {
         />
       </n-form-item>
     </n-form>
-    <n-button type="info" block :loading="renameLoading" :disabled="renameLoading" @click="handleRename">{{ $gettext('Submit') }}</n-button>
+    <n-button
+      type="info"
+      block
+      :loading="renameLoading"
+      :disabled="renameLoading"
+      @click="handleRename"
+    >
+      {{ $gettext('Submit') }}
+    </n-button>
   </n-modal>
   <n-modal
     v-model:show="terminalModal"

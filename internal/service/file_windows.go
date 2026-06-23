@@ -13,20 +13,24 @@ import (
 )
 
 type FileService struct {
-	t        *gotext.Locale
-	taskRepo biz.TaskRepo
+	t             *gotext.Locale
+	taskRepo      biz.TaskRepo
+	containerRepo biz.ContainerRepo
 }
 
-func NewFileService(t *gotext.Locale, task biz.TaskRepo) *FileService {
+func NewFileService(t *gotext.Locale, task biz.TaskRepo, container biz.ContainerRepo) *FileService {
 	return &FileService{
-		t:        t,
-		taskRepo: task,
+		t:             t,
+		taskRepo:      task,
+		containerRepo: container,
 	}
 }
 
 func (s *FileService) Create(w http.ResponseWriter, r *http.Request) {}
 
 func (s *FileService) Content(w http.ResponseWriter, r *http.Request) {}
+
+func (s *FileService) Tail(w http.ResponseWriter, r *http.Request) {}
 
 func (s *FileService) Save(w http.ResponseWriter, r *http.Request) {}
 

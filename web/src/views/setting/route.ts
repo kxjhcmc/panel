@@ -1,13 +1,13 @@
-import type { RouteType } from '~/types/router'
+import type { RouteType } from '@/types/router'
 
-const Layout = () => import('@/layout/IndexView.vue')
+const Layout = () => import('@/layouts/IndexView.vue')
 
 export default {
   name: 'setting',
   path: '/setting',
   component: Layout,
   meta: {
-    order: 999
+    order: 999,
   },
   children: [
     {
@@ -18,8 +18,8 @@ export default {
         title: 'Setting',
         icon: 'mdi:settings-outline',
         role: ['admin'],
-        requireAuth: true
-      }
-    }
-  ]
+        requireAuth: true,
+      },
+    },
+  ],
 } as RouteType

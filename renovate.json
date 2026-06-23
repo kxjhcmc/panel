@@ -27,9 +27,17 @@
         "minor"
       ],
       "automerge": true
+    },
+    {
+      "groupName": "major dependencies",
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "minimumReleaseAge": "3 days",
+      "automerge": false
     }
   ],
   "ignoreDeps": [
-    "eslint"
+    "vite"
   ]
 }

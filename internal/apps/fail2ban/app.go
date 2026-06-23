@@ -10,6 +10,7 @@ import (
 	"github.com/leonelquinteros/gotext"
 	"github.com/libtnb/chix"
 	"github.com/libtnb/utils/str"
+	"github.com/samber/lo"
 	"github.com/spf13/cast"
 
 	"github.com/acepanel/panel/v3/internal/app"
@@ -17,6 +18,8 @@ import (
 	"github.com/acepanel/panel/v3/internal/service"
 	"github.com/acepanel/panel/v3/pkg/io"
 	"github.com/acepanel/panel/v3/pkg/shell"
+	"github.com/acepanel/panel/v3/pkg/systemctl"
+	"github.com/acepanel/panel/v3/pkg/types"
 )
 
 type App struct {
@@ -39,6 +42,11 @@ func (s *App) Route(r chi.Router) {
 	r.Post("/unban", s.Unban)
 	r.Post("/white_list", s.SetWhiteList)
 	r.Get("/white_list", s.GetWhiteList)
+}
+
+func (s *App) Status() string {
+	ok, _ := systemctl.Status("fail2ban")
+	return types.AggregateAppStatus(ok)
 }
 
 // List 所有规则
@@ -169,7 +177,7 @@ ignoreregex =
 		switch jailName {
 		case "ssh":
 			filter = "sshd"
-			port, err = shell.Execf("cat /etc/ssh/sshd_config | grep 'Port ' | awk '{print $2}'")
+			port, err = shell.Execf("cat /etc/ssh/sshd_config | grep 'Port ' | awk '{print $2}' | paste -sd ','")
 		case "mysql":
 			filter = "mysqld-auth"
 			port, err = shell.Execf("cat %s/server/mysql/conf/my.cnf | grep 'port' | head -n 1 | awk '{print $3}'", app.Root)
@@ -270,18 +278,15 @@ func (s *App) BanList(w http.ResponseWriter, r *http.Request) {
 	}
 	bannedIpList := strings.Split(bannedIp, " ")
 
-	var list []map[string]string
-	for _, ip := range bannedIpList {
-		if len(ip) > 0 {
-			list = append(list, map[string]string{
-				"name": req.Name,
-				"ip":   ip,
-			})
+	list := lo.FilterMap(bannedIpList, func(ip string, _ int) (map[string]string, bool) {
+		if len(ip) == 0 {
+			return nil, false
 		}
-	}
-	if list == nil {
-		list = []map[string]string{}
-	}
+		return map[string]string{
+			"name": req.Name,
+			"ip":   ip,
+		}, true
+	})
 
 	service.Success(w, chix.M{
 		"currently_ban": currentlyBan,

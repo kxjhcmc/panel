@@ -19,6 +19,7 @@ const (
 	TGz      FormatArchive = "tgz"
 	Xz       FormatArchive = "xz"
 	SevenZip FormatArchive = "7z"
+	Zst      FormatArchive = "zst"
 )
 
 // Compress 压缩文件
@@ -52,6 +53,8 @@ func Compress(dir string, src []string, dst string) error {
 		_, err = shell.ExecfWithDir(dir, "tar -cJf %s %s", dst, strings.Join(src, " "))
 	case SevenZip:
 		_, err = shell.ExecfWithDir(dir, "7z a -y %s %s", dst, strings.Join(src, " "))
+	case Zst:
+		_, err = shell.ExecfWithDir(dir, "tar --zstd -cf %s %s", dst, strings.Join(src, " "))
 	default:
 		return errors.New("unsupported format")
 	}
@@ -75,7 +78,8 @@ func UnCompress(src string, dst string) error {
 
 	switch format {
 	case Zip:
-		_, err = shell.Execf("unzip -qo '%s' -d '%s'", src, dst)
+		// 用 7z 解压 zip,自动检测文件名编码,避免中文文件名变成 #Uxxxx
+		_, err = shell.Execf("7z x -y '%s' -o'%s'", src, dst)
 	case Gz:
 		// 单独的 gzip 文件（如 .sql.gz），解压到目标目录
 		// gunzip -k 保留原文件，-c 输出到标准输出，重定向到目标文件
@@ -91,6 +95,8 @@ func UnCompress(src string, dst string) error {
 		_, err = shell.Execf("tar -xJf '%s' -C '%s'", src, dst)
 	case SevenZip:
 		_, err = shell.Execf("7z x -y '%s' -o'%s'", src, dst)
+	case Zst:
+		_, err = shell.Execf("tar --zstd -xf '%s' -C '%s'", src, dst)
 	default:
 		return errors.New("unsupported format")
 	}
@@ -107,16 +113,16 @@ func ListCompress(src string) ([]string, error) {
 
 	var out string
 	switch format {
-	case Zip:
-		out, err = shell.Execf("unzip -Z1 '%s'", src)
+	case Zip, SevenZip:
+		out, err = shell.Execf(`7z l -ba -slt '%s' | grep "^Path = " | sed 's/^Path = //'`, src)
 	case Gz:
 		// 单独的 gzip 文件只包含一个文件，返回去除 .gz 后缀的文件名
 		baseName := strings.TrimSuffix(filepath.Base(src), ".gz")
 		return []string{baseName}, nil
 	case TGz, Bz2, Tar, Xz:
 		out, err = shell.Execf("tar -tf '%s'", src)
-	case SevenZip:
-		out, err = shell.Execf(`7z l -ba -slt '%s' | grep "^Path = " | sed 's/^Path = //'`, src)
+	case Zst:
+		out, err = shell.Execf("tar --zstd -tf '%s'", src)
 	default:
 		return nil, errors.New("unsupported format")
 	}
@@ -150,6 +156,9 @@ func formatArchiveByPath(path string) (FormatArchive, error) {
 		return Xz, nil
 	case ".7z":
 		return SevenZip, nil
+	case ".zst":
+		// .zst 后缀使用 tar --zstd 解压，适用于 .tar.zst 格式
+		return Zst, nil
 	}
 
 	return "", errors.New("unknown format")

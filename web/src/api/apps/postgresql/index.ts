@@ -13,8 +13,6 @@ export default {
   saveUserConfig: (config: string): any => http.Post('/apps/postgresql/user_config', { config }),
   // 获取日志
   log: (): any => http.Get('/apps/postgresql/log'),
-  // 清空错误日志
-  clearLog: (): any => http.Post('/apps/postgresql/clear_log'),
   // 获取 postgres 密码
   postgresPassword: (): any => http.Get('/apps/postgresql/postgres_password'),
   // 设置 postgres 密码
@@ -23,5 +21,5 @@ export default {
   // 获取配置调整参数
   configTune: (): any => http.Get('/apps/postgresql/config_tune'),
   // 保存配置调整参数
-  saveConfigTune: (data: any): any => http.Post('/apps/postgresql/config_tune', data)
+  saveConfigTune: (data: any): any => http.Post('/apps/postgresql/config_tune', data),
 }

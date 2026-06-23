@@ -14,6 +14,7 @@ import (
 	"github.com/acepanel/panel/v3/pkg/os"
 	"github.com/acepanel/panel/v3/pkg/shell"
 	"github.com/acepanel/panel/v3/pkg/systemctl"
+	"github.com/acepanel/panel/v3/pkg/types"
 )
 
 type App struct {
@@ -37,7 +38,6 @@ func NewApp(t *gotext.Locale) *App {
 
 func (s *App) Route(r chi.Router) {
 	r.Get("/service", s.Service)
-	r.Post("/clear_log", s.ClearLog)
 	r.Get("/config", s.GetConfig)
 	r.Post("/config", s.UpdateConfig)
 	r.Get("/processes", s.Processes)
@@ -45,7 +45,6 @@ func (s *App) Route(r chi.Router) {
 	r.Post("/processes/{process}/stop", s.StopProcess)
 	r.Post("/processes/{process}/restart", s.RestartProcess)
 	r.Get("/processes/{process}/log", s.ProcessLog)
-	r.Post("/processes/{process}/clear_log", s.ClearProcessLog)
 	r.Get("/processes/{process}", s.ProcessConfig)
 	r.Post("/processes/{process}", s.UpdateProcessConfig)
 	r.Delete("/processes/{process}", s.DeleteProcess)
@@ -57,14 +56,9 @@ func (s *App) Service(w http.ResponseWriter, r *http.Request) {
 	service.Success(w, s.name)
 }
 
-// ClearLog 清空日志
-func (s *App) ClearLog(w http.ResponseWriter, r *http.Request) {
-	if _, err := shell.Execf(`cat /dev/null > /var/log/supervisor/supervisord.log`); err != nil {
-		service.Error(w, http.StatusInternalServerError, "%v", err)
-		return
-	}
-
-	service.Success(w, nil)
+func (s *App) Status() string {
+	ok, _ := systemctl.Status(s.name)
+	return types.AggregateAppStatus(ok)
 }
 
 // GetConfig 获取配置
@@ -114,31 +108,35 @@ func (s *App) UpdateConfig(w http.ResponseWriter, r *http.Request) {
 
 // Processes 进程列表
 func (s *App) Processes(w http.ResponseWriter, r *http.Request) {
-	out, err := shell.Execf(`supervisorctl status | awk '{print $1}'`)
-	if err != nil {
+	out, err := shell.Execf(`supervisorctl status`)
+	if err != nil && out == "" {
 		service.Error(w, http.StatusInternalServerError, "%v", err)
 		return
 	}
 
 	var processes []Process
 	for line := range strings.SplitSeq(out, "\n") {
-		if len(line) == 0 {
+		fields := strings.Fields(line)
+		if len(fields) < 2 {
 			continue
 		}
 
-		var p Process
-		p.Name = line
-		if status, err := shell.Execf(`supervisorctl status '%s' | awk '{print $2}'`, line); err == nil {
-			p.Status = status
+		p := Process{
+			Name:   fields[0],
+			Status: fields[1],
+			Pid:    "-",
+			Uptime: "-",
 		}
+		// RUNNING 行格式：name RUNNING pid 1234, uptime 1:23:45 （超过 1 天为 "1 day, 1:23:45"）
 		if p.Status == "RUNNING" {
-			pid, _ := shell.Execf(`supervisorctl status '%s' | awk '{print $4}'`, line)
-			p.Pid = strings.ReplaceAll(pid, ",", "")
-			uptime, _ := shell.Execf(`supervisorctl status '%s' | awk '{print $6}'`, line)
-			p.Uptime = uptime
-		} else {
-			p.Pid = "-"
-			p.Uptime = "-"
+			if _, rest, ok := strings.Cut(line, "pid "); ok {
+				if pid, _, ok := strings.Cut(rest, ","); ok {
+					p.Pid = pid
+				}
+			}
+			if _, uptime, ok := strings.Cut(line, "uptime "); ok {
+				p.Uptime = uptime
+			}
 		}
 		processes = append(processes, p)
 	}
@@ -159,7 +157,7 @@ func (s *App) StartProcess(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if out, err := shell.Execf(`supervisorctl start %s`, req.Process); err != nil {
+	if out, err := shell.Execf(`supervisorctl start '%s'`, req.Process); err != nil {
 		service.Error(w, http.StatusInternalServerError, "%v %s", err, out)
 		return
 	}
@@ -175,7 +173,7 @@ func (s *App) StopProcess(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if out, err := shell.Execf(`supervisorctl stop %s`, req.Process); err != nil {
+	if out, err := shell.Execf(`supervisorctl stop '%s'`, req.Process); err != nil {
 		service.Error(w, http.StatusInternalServerError, "%v %s", err, out)
 		return
 	}
@@ -191,7 +189,7 @@ func (s *App) RestartProcess(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if out, err := shell.Execf(`supervisorctl restart %s`, req.Process); err != nil {
+	if out, err := shell.Execf(`supervisorctl restart '%s'`, req.Process); err != nil {
 		service.Error(w, http.StatusInternalServerError, "%v %s", err, out)
 		return
 	}
@@ -207,11 +205,12 @@ func (s *App) ProcessLog(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	name := programName(req.Process)
 	var logPath string
 	if os.IsRHEL() {
-		logPath, err = shell.Execf(`cat '/etc/supervisord.d/%s.conf' | grep stdout_logfile= | awk -F "=" '{print $2}'`, req.Process)
+		logPath, err = shell.Execf(`cat '/etc/supervisord.d/%s.conf' | grep stdout_logfile= | awk -F "=" '{print $2}'`, name)
 	} else {
-		logPath, err = shell.Execf(`cat '/etc/supervisor/conf.d/%s.conf' | grep stdout_logfile= | awk -F "=" '{print $2}'`, req.Process)
+		logPath, err = shell.Execf(`cat '/etc/supervisor/conf.d/%s.conf' | grep stdout_logfile= | awk -F "=" '{print $2}'`, name)
 	}
 
 	if err != nil {
@@ -222,34 +221,6 @@ func (s *App) ProcessLog(w http.ResponseWriter, r *http.Request) {
 	service.Success(w, logPath)
 }
 
-// ClearProcessLog 清空进程日志
-func (s *App) ClearProcessLog(w http.ResponseWriter, r *http.Request) {
-	req, err := service.Bind[ProcessName](r)
-	if err != nil {
-		service.Error(w, http.StatusUnprocessableEntity, "%v", err)
-		return
-	}
-
-	var logPath string
-	if os.IsRHEL() {
-		logPath, err = shell.Execf(`cat '/etc/supervisord.d/%s.conf' | grep stdout_logfile= | awk -F "=" '{print $2}'`, req.Process)
-	} else {
-		logPath, err = shell.Execf(`cat '/etc/supervisor/conf.d/%s.conf' | grep stdout_logfile= | awk -F "=" '{print $2}'`, req.Process)
-	}
-
-	if err != nil {
-		service.Error(w, http.StatusInternalServerError, s.t.Get("failed to get log path for process %s: %v", req.Process, err))
-		return
-	}
-
-	if _, err = shell.Execf(`cat /dev/null > '%s'`, logPath); err != nil {
-		service.Error(w, http.StatusInternalServerError, "%v", err)
-		return
-	}
-
-	service.Success(w, nil)
-}
-
 // ProcessConfig 获取进程配置
 func (s *App) ProcessConfig(w http.ResponseWriter, r *http.Request) {
 	req, err := service.Bind[ProcessName](r)
@@ -258,11 +229,12 @@ func (s *App) ProcessConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	name := programName(req.Process)
 	var config string
 	if os.IsRHEL() {
-		config, err = io.Read(`/etc/supervisord.d/` + req.Process + `.conf`)
+		config, err = io.Read(`/etc/supervisord.d/` + name + `.conf`)
 	} else {
-		config, err = io.Read(`/etc/supervisor/conf.d/` + req.Process + `.conf`)
+		config, err = io.Read(`/etc/supervisor/conf.d/` + name + `.conf`)
 	}
 
 	if err != nil {
@@ -281,10 +253,11 @@ func (s *App) UpdateProcessConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	name := programName(req.Process)
 	if os.IsRHEL() {
-		err = io.Write(`/etc/supervisord.d/`+req.Process+`.conf`, req.Config, 0644)
+		err = io.Write(`/etc/supervisord.d/`+name+`.conf`, req.Config, 0644)
 	} else {
-		err = io.Write(`/etc/supervisor/conf.d/`+req.Process+`.conf`, req.Config, 0644)
+		err = io.Write(`/etc/supervisor/conf.d/`+name+`.conf`, req.Config, 0644)
 	}
 
 	if err != nil {
@@ -294,7 +267,7 @@ func (s *App) UpdateProcessConfig(w http.ResponseWriter, r *http.Request) {
 
 	_, _ = shell.Execf(`supervisorctl reread`)
 	_, _ = shell.Execf(`supervisorctl update`)
-	_, _ = shell.Execf(`supervisorctl restart '%s'`, req.Process)
+	_, _ = shell.Execf(`supervisorctl restart '%s:'`, name)
 
 	service.Success(w, nil)
 }
@@ -307,9 +280,14 @@ func (s *App) CreateProcess(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	processName := `%(program_name)s`
+	if req.Num > 1 {
+		processName = `%(program_name)s_%(process_num)02d`
+	}
+
 	config := `[program:` + req.Name + `]
 command=` + req.Command + `
-process_name=%(program_name)s
+process_name=` + processName + `
 directory=` + req.Path + `
 autostart=true
 autorestart=true
@@ -320,20 +298,26 @@ stdout_logfile=/var/log/supervisor/` + req.Name + `.log
 stdout_logfile_maxbytes=2MB
 `
 
+	var confPath string
 	if os.IsRHEL() {
-		err = io.Write(`/etc/supervisord.d/`+req.Name+`.conf`, config, 0644)
+		confPath = `/etc/supervisord.d/` + req.Name + `.conf`
 	} else {
-		err = io.Write(`/etc/supervisor/conf.d/`+req.Name+`.conf`, config, 0644)
+		confPath = `/etc/supervisor/conf.d/` + req.Name + `.conf`
 	}
 
-	if err != nil {
+	if io.Exists(confPath) {
+		service.Error(w, http.StatusConflict, s.t.Get("process %s already exists", req.Name))
+		return
+	}
+
+	if err = io.Write(confPath, config, 0644); err != nil {
 		service.Error(w, http.StatusUnprocessableEntity, "%v", err)
 		return
 	}
 
 	_, _ = shell.Execf(`supervisorctl reread`)
 	_, _ = shell.Execf(`supervisorctl update`)
-	_, _ = shell.Execf(`supervisorctl start '%s'`, req.Name)
+	_, _ = shell.Execf(`supervisorctl start '%s:'`, req.Name)
 
 	service.Success(w, nil)
 }
@@ -346,29 +330,30 @@ func (s *App) DeleteProcess(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if out, err := shell.Execf(`supervisorctl stop '%s'`, req.Process); err != nil {
+	name := programName(req.Process)
+	if out, err := shell.Execf(`supervisorctl stop '%s:'`, name); err != nil {
 		service.Error(w, http.StatusInternalServerError, "%v %s", err, out)
 		return
 	}
 
 	var logPath string
 	if os.IsRHEL() {
-		logPath, err = shell.Execf(`cat '/etc/supervisord.d/%s.conf' | grep stdout_logfile= | awk -F "=" '{print $2}'`, req.Process)
+		logPath, err = shell.Execf(`cat '/etc/supervisord.d/%s.conf' | grep stdout_logfile= | awk -F "=" '{print $2}'`, name)
 		if err != nil {
 			service.Error(w, http.StatusInternalServerError, s.t.Get("failed to get log path for process %s: %v", req.Process, err))
 			return
 		}
-		if err = io.Remove(`/etc/supervisord.d/` + req.Process + `.conf`); err != nil {
+		if err = io.Remove(`/etc/supervisord.d/` + name + `.conf`); err != nil {
 			service.Error(w, http.StatusInternalServerError, "%v", err)
 			return
 		}
 	} else {
-		logPath, err = shell.Execf(`cat '/etc/supervisor/conf.d/%s.conf' | grep stdout_logfile= | awk -F "=" '{print $2}'`, req.Process)
+		logPath, err = shell.Execf(`cat '/etc/supervisor/conf.d/%s.conf' | grep stdout_logfile= | awk -F "=" '{print $2}'`, name)
 		if err != nil {
 			service.Error(w, http.StatusInternalServerError, s.t.Get("failed to get log path for process %s: %v", req.Process, err))
 			return
 		}
-		if err = io.Remove(`/etc/supervisor/conf.d/` + req.Process + `.conf`); err != nil {
+		if err = io.Remove(`/etc/supervisor/conf.d/` + name + `.conf`); err != nil {
 			service.Error(w, http.StatusInternalServerError, "%v", err)
 			return
 		}
@@ -382,4 +367,9 @@ func (s *App) DeleteProcess(w http.ResponseWriter, r *http.Request) {
 	_, _ = shell.Execf(`supervisorctl update`)
 
 	service.Success(w, nil)
+}
+
+func programName(process string) string {
+	name, _, _ := strings.Cut(process, ":")
+	return name
 }

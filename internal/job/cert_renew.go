@@ -1,6 +1,7 @@
 package job
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"github.com/acepanel/panel/v3/internal/http/request"
 	pkgcert "github.com/acepanel/panel/v3/pkg/cert"
 	"github.com/acepanel/panel/v3/pkg/config"
+	"github.com/acepanel/panel/v3/pkg/tools"
 )
 
 // CertRenew 证书续签
@@ -37,15 +39,15 @@ func NewCertRenew(conf *config.Config, db *gorm.DB, log *slog.Logger, setting bi
 	}
 }
 
-func (r *CertRenew) Run() {
+func (r *CertRenew) Run(_ context.Context) error {
 	if app.Status != app.StatusNormal {
-		return
+		return nil
 	}
 
 	var certs []biz.Cert
 	if err := r.db.Preload("Website").Preload("Account").Preload("DNS").Find(&certs).Error; err != nil {
 		r.log.Warn("failed to get certs", slog.String("type", biz.OperationTypeCert), slog.Uint64("operator_id", 0), slog.Any("err", err))
-		return
+		return nil
 	}
 
 	for _, cert := range certs {
@@ -73,13 +75,44 @@ func (r *CertRenew) Run() {
 	}
 
 	// 面板证书续签
-	if r.conf.HTTP.ACME {
+	switch r.conf.HTTP.TLS {
+	case "self-signed":
+		// 自签证书续签
+		crt, _ := os.ReadFile(filepath.Join(app.Root, "panel/storage/cert.pem"))
+		decode, err := pkgcert.ParseCert(crt)
+		if err == nil {
+			if time.Until(decode.NotAfter) > 30*24*time.Hour {
+				return nil
+			}
+		} else {
+			r.log.Warn("failed to parse panel certificate", slog.String("type", biz.OperationTypeCert), slog.Uint64("operator_id", 0), slog.Any("err", err))
+		}
+
+		newCrt, newKey, err := pkgcert.GenerateSelfSigned(tools.CollectLocalNames())
+		if err != nil {
+			r.log.Warn("failed to generate self-signed certificate", slog.String("type", biz.OperationTypeCert), slog.Uint64("operator_id", 0), slog.Any("err", err))
+			return nil
+		}
+		if err = r.settingRepo.UpdateCert(&request.SettingCert{
+			Cert: string(newCrt),
+			Key:  string(newKey),
+		}); err != nil {
+			r.log.Warn("failed to update panel certificate", slog.String("type", biz.OperationTypeCert), slog.Uint64("operator_id", 0), slog.Any("err", err))
+			return nil
+		}
+		r.log.Info("panel self-signed certificate renewed", slog.String("type", biz.OperationTypeCert), slog.Uint64("operator_id", 0))
+
+	case "off", "custom":
+		// off/custom 不需要自动续签
+
+	default:
+		// ACME 模式
 		crt, _ := os.ReadFile(filepath.Join(app.Root, "panel/storage/cert.pem"))
 		decode, err := pkgcert.ParseCert(crt)
 		if err == nil {
 			// 结束时间大于 2 天不续签
 			if time.Until(decode.NotAfter) > 24*2*time.Hour {
-				return
+				return nil
 			}
 		} else {
 			// 解析失败则继续续签流程，可能是证书格式不对或者文件不存在
@@ -89,28 +122,28 @@ func (r *CertRenew) Run() {
 		ip, err := r.settingRepo.Get(biz.SettingKeyPublicIPs)
 		if err != nil {
 			r.log.Warn("failed to get panel IP", slog.String("type", biz.OperationTypeCert), slog.Uint64("operator_id", 0), slog.Any("err", err))
-			return
+			return nil
 		}
 		var ips []string
 		if err = json.Unmarshal([]byte(ip), &ips); err != nil || len(ips) == 0 {
 			r.log.Warn("panel public IPs not set", slog.String("type", biz.OperationTypeCert), slog.Uint64("operator_id", 0), slog.Any("err", err))
-			return
+			return nil
 		}
 
 		var user biz.User
 		if err = r.db.First(&user).Error; err != nil {
 			r.log.Warn("failed to get a panel user", slog.String("type", biz.OperationTypeCert), slog.Uint64("operator_id", 0), slog.Any("err", err))
-			return
+			return nil
 		}
 		account, err := r.certAccountRepo.GetDefault(user.ID)
 		if err != nil {
 			r.log.Warn("failed to get panel ACME account", slog.String("type", biz.OperationTypeCert), slog.Uint64("operator_id", 0), slog.Any("err", err))
-			return
+			return nil
 		}
 		crt, key, err := r.certRepo.ObtainPanel(account, ips)
 		if err != nil {
 			r.log.Warn("failed to obtain panel certificate via ACME", slog.String("type", biz.OperationTypeCert), slog.Uint64("operator_id", 0), slog.Any("err", err))
-			return
+			return nil
 		}
 
 		if err = r.settingRepo.UpdateCert(&request.SettingCert{
@@ -118,10 +151,11 @@ func (r *CertRenew) Run() {
 			Key:  string(key),
 		}); err != nil {
 			r.log.Warn("failed to update panel certificate", slog.String("type", biz.OperationTypeCert), slog.Uint64("operator_id", 0), slog.Any("err", err))
-			return
+			return nil
 		}
 
 		r.log.Info("panel certificate renewed successfully", slog.String("type", biz.OperationTypeCert), slog.Uint64("operator_id", 0))
 	}
 
+	return nil
 }

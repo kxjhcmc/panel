@@ -9,12 +9,14 @@ import (
 type BackupType string
 
 const (
-	BackupTypePath     BackupType = "path"
-	BackupTypeWebsite  BackupType = "website"
-	BackupTypeMySQL    BackupType = "mysql"
-	BackupTypePostgres BackupType = "postgresql"
-	BackupTypeRedis    BackupType = "redis"
-	BackupTypePanel    BackupType = "panel"
+	BackupTypePath       BackupType = "path"
+	BackupTypeWebsite    BackupType = "website"
+	BackupTypeMySQL      BackupType = "mysql"
+	BackupTypePostgres   BackupType = "postgresql"
+	BackupTypeClickHouse BackupType = "clickhouse"
+	BackupTypeRedis      BackupType = "redis"
+	BackupTypeValkey     BackupType = "valkey"
+	BackupTypePanel      BackupType = "panel"
 )
 
 type BackupRepo interface {

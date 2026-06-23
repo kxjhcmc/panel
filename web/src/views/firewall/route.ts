@@ -1,13 +1,13 @@
-import type { RouteType } from '~/types/router'
+import type { RouteType } from '@/types/router'
 
-const Layout = () => import('@/layout/IndexView.vue')
+const Layout = () => import('@/layouts/IndexView.vue')
 
 export default {
   name: 'firewall',
   path: '/firewall',
   component: Layout,
   meta: {
-    order: 40
+    order: 40,
   },
   children: [
     {
@@ -18,8 +18,8 @@ export default {
         title: 'Firewall',
         icon: 'mdi:firewall',
         role: ['admin'],
-        requireAuth: true
-      }
-    }
-  ]
+        requireAuth: true,
+      },
+    },
+  ],
 } as RouteType

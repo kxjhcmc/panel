@@ -90,8 +90,6 @@ func (r certAccountRepo) Create(ctx context.Context, req *request.CertAccountCre
 		client, err = acme.NewRegisterAccount(context.Background(), account.Email, acme.CALetsEncrypt, nil, acme.KeyType(account.KeyType), r.log)
 	case "litessl":
 		client, err = acme.NewRegisterAccount(context.Background(), account.Email, acme.CALiteSSL, &acme.EAB{KeyID: account.Kid, MACKey: account.HmacEncoded}, acme.KeyType(account.KeyType), r.log)
-	case "buypass":
-		client, err = acme.NewRegisterAccount(context.Background(), account.Email, acme.CABuypass, nil, acme.KeyType(account.KeyType), r.log)
 	case "zerossl":
 		eab, eabErr := r.getZeroSSLEAB(account.Email)
 		if eabErr != nil {
@@ -154,8 +152,6 @@ func (r certAccountRepo) Update(ctx context.Context, req *request.CertAccountUpd
 		client, err = acme.NewRegisterAccount(context.Background(), account.Email, acme.CALetsEncrypt, nil, acme.KeyType(account.KeyType), r.log)
 	case "litessl":
 		client, err = acme.NewRegisterAccount(context.Background(), account.Email, acme.CALiteSSL, &acme.EAB{KeyID: account.Kid, MACKey: account.HmacEncoded}, acme.KeyType(account.KeyType), r.log)
-	case "buypass":
-		client, err = acme.NewRegisterAccount(context.Background(), account.Email, acme.CABuypass, nil, acme.KeyType(account.KeyType), r.log)
 	case "zerossl":
 		eab, eabErr := r.getZeroSSLEAB(account.Email)
 		if eabErr != nil {
@@ -216,7 +212,7 @@ func (r certAccountRepo) getGoogleEAB() (*acme.EAB, error) {
 	client.SetRetryCount(3)
 
 	resp, err := client.R().SetResult(&data{}).Get("https://gts.rat.dev/eab")
-	if err != nil || !resp.IsSuccess() {
+	if err != nil || !resp.IsStatusSuccess() {
 		return &acme.EAB{}, errors.New(r.t.Get("failed to get Google EAB: %v", err))
 	}
 	eab := resp.Result().(*data)
@@ -242,7 +238,7 @@ func (r certAccountRepo) getZeroSSLEAB(email string) (*acme.EAB, error) {
 	resp, err := client.R().SetFormData(map[string]string{
 		"email": email,
 	}).SetResult(&data{}).Post("https://api.zerossl.com/acme/eab-credentials-email")
-	if err != nil || !resp.IsSuccess() {
+	if err != nil || !resp.IsStatusSuccess() {
 		return &acme.EAB{}, errors.New(r.t.Get("failed to get ZeroSSL EAB: %v", err))
 	}
 	eab := resp.Result().(*data)

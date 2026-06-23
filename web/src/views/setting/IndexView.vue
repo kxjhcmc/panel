@@ -1,6 +1,6 @@
 <script setup lang="ts">
 defineOptions({
-  name: 'setting-index'
+  name: 'setting-index',
 })
 
 import type { MessageReactive } from 'naive-ui'
@@ -8,7 +8,7 @@ import { NButton } from 'naive-ui'
 import { useGettext } from 'vue3-gettext'
 
 import setting from '@/api/panel/setting'
-import { usePermissionStore, useThemeStore } from '@/store'
+import { usePermissionStore, useThemeStore } from '@/stores'
 import CreateModal from '@/views/setting/CreateModal.vue'
 import SettingBase from '@/views/setting/SettingBase.vue'
 import SettingSafe from '@/views/setting/SettingSafe.vue'
@@ -24,19 +24,17 @@ const isObtainCert = ref(false)
 const saveLoading = ref(false)
 
 // 记录已保存的 HTTPS 相关设置，用于判断是否有未保存的修改
-const savedHttpsState = ref({ https: false, acme: false, public_ip: '[]' })
+const savedHttpsState = ref({ tls: 'off', public_ip: '[]' })
 const httpsSettingsDirty = computed(() => {
   return (
-    model.value.https !== savedHttpsState.value.https ||
-    model.value.acme !== savedHttpsState.value.acme ||
+    model.value.tls !== savedHttpsState.value.tls ||
     JSON.stringify(model.value.public_ip) !== savedHttpsState.value.public_ip
   )
 })
 const snapshotHttpsState = () => {
   savedHttpsState.value = {
-    https: model.value.https,
-    acme: model.value.acme,
-    public_ip: JSON.stringify(model.value.public_ip)
+    tls: model.value.tls,
+    public_ip: JSON.stringify(model.value.public_ip),
   }
 }
 
@@ -58,6 +56,7 @@ const { data: model } = useRequest(setting.list, {
     bind_ua: [],
     website_path: '',
     backup_path: '',
+    backup_format: 'tar.xz',
     project_path: '',
     container_sock: '',
     hidden_menu: [],
@@ -65,12 +64,11 @@ const { data: model } = useRequest(setting.list, {
     ipdb_type: '',
     ipdb_url: '',
     ipdb_path: '',
-    https: false,
-    acme: false,
+    tls: 'off',
     public_ip: [],
     cert: '',
-    key: ''
-  }
+    key: '',
+  },
 })
 
 // 数据加载完成后快照 HTTPS 状态
@@ -101,7 +99,7 @@ const handleSave = () => {
       if (data.restart) {
         window.$message.info($gettext('Panel is restarting, page will refresh in 5 seconds'))
         setTimeout(() => {
-          const protocol = model.value.https ? 'https:' : 'http:'
+          const protocol = model.value.tls !== 'off' ? 'https:' : 'http:'
           const hostname = window.location.hostname
           const port = model.value.port
           const entrance = model.value.entrance || '/'
@@ -118,7 +116,7 @@ const handleSave = () => {
 const handleObtainCert = () => {
   isObtainCert.value = true
   messageReactive = window.$message.loading($gettext('Please wait...'), {
-    duration: 0
+    duration: 0,
   })
   useRequest(setting.obtainCert())
     .onSuccess(() => {
@@ -143,8 +141,8 @@ const handleCreate = () => {
 </script>
 
 <template>
-  <common-page show-header show-footer>
-    <template #tabbar>
+  <PageContainer :show-footer="true">
+    <template #tabs>
       <n-tabs v-model:value="currentTab" animated>
         <n-tab name="base" :tab="$gettext('Basic')" />
         <n-tab name="safe" :tab="$gettext('Safe')" />
@@ -171,17 +169,21 @@ const handleCreate = () => {
           {{ $gettext('Save') }}
         </n-button>
         <n-button
-          v-if="currentTab === 'safe' && model.https && model.acme"
+          v-if="currentTab === 'safe' && (model.tls === 'acme' || model.tls === 'self-signed')"
           type="info"
           :loading="isObtainCert"
           :disabled="httpsSettingsDirty || isObtainCert"
           @click="handleObtainCert"
         >
-          {{ $gettext('Refresh Certificate') }}
+          {{
+            model.tls === 'acme'
+              ? $gettext('Refresh Certificate')
+              : $gettext('Regenerate Certificate')
+          }}
         </n-button>
       </n-flex>
     </n-flex>
-  </common-page>
+  </PageContainer>
   <create-modal v-model:show="createModal" />
 </template>
 

@@ -9,6 +9,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/leonelquinteros/gotext"
 	"github.com/libtnb/chix"
+	"github.com/samber/lo"
 	"github.com/spf13/cast"
 
 	"github.com/acepanel/panel/v3/internal/app"
@@ -17,6 +18,7 @@ import (
 	"github.com/acepanel/panel/v3/pkg/io"
 	"github.com/acepanel/panel/v3/pkg/shell"
 	"github.com/acepanel/panel/v3/pkg/systemctl"
+	"github.com/acepanel/panel/v3/pkg/types"
 )
 
 type App struct {
@@ -40,6 +42,11 @@ func (s *App) Route(r chi.Router) {
 	r.Post("/config_tune", s.UpdateConfigTune)
 }
 
+func (s *App) Status() string {
+	ok, _ := systemctl.Status("pure-ftpd")
+	return types.AggregateAppStatus(ok)
+}
+
 // List 获取用户列表
 func (s *App) List(w http.ResponseWriter, r *http.Request) {
 	listRaw, err := shell.Execf("pure-pw list")
@@ -50,19 +57,17 @@ func (s *App) List(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	listArr := strings.Split(listRaw, "\n")
-	var users []User
-	for _, v := range listArr {
+	userRe := regexp.MustCompile(`(\S+)\s+(\S+)`)
+	users := lo.FilterMap(strings.Split(listRaw, "\n"), func(v string, _ int) (User, bool) {
 		if len(v) == 0 {
-			continue
+			return User{}, false
 		}
-
-		match := regexp.MustCompile(`(\S+)\s+(\S+)`).FindStringSubmatch(v)
-		users = append(users, User{
+		match := userRe.FindStringSubmatch(v)
+		return User{
 			Username: match[1],
 			Path:     strings.Replace(match[2], "/./", "/", 1),
-		})
-	}
+		}, true
+	})
 
 	paged, total := service.Paginate(r, users)
 

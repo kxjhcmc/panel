@@ -11,14 +11,14 @@ export default {
     password: string,
     pass_code: string,
     safe_login: boolean,
-    captcha_code: string
+    captcha_code: string,
   ): any =>
     http.Post('/user/login', {
       username,
       password,
       pass_code,
       safe_login,
-      captcha_code
+      captcha_code,
     }),
   // 登出
   logout: (): any => http.Post('/user/logout'),
@@ -27,7 +27,7 @@ export default {
   // 是否2FA
   isTwoFA: (username: string): any => http.Get('/user/is_2fa', { params: { username } }),
   // 获取用户信息
-  info: (): any => http.Get('/user/info'),
+  info: (config = {}): any => http.Get('/user/info', config),
   // 获取用户列表
   list: (page: number, limit: number): any => http.Get(`/users`, { params: { page, limit } }),
   // 创建用户
@@ -70,5 +70,5 @@ export default {
   passkeyFinishLogin: (assertion: any): any => http.Put('/user/passkey/login', assertion),
   passkeyList: (user_id: number): any => http.Get('/user_passkeys', { params: { user_id } }),
   passkeyDelete: (id: number, user_id: number): any =>
-    http.Delete(`/user_passkeys/${id}`, { params: { user_id } })
+    http.Delete(`/user_passkeys/${id}`, { params: { user_id } }),
 }

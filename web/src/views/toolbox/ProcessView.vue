@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { DataTableSortState, DropdownOption } from 'naive-ui'
-import { NButton, NDropdown, NTag } from 'naive-ui'
+import { NTag } from 'naive-ui'
 import { useGettext } from 'vue3-gettext'
 
 import process, { type ProcessListParams } from '@/api/panel/process'
@@ -39,7 +39,7 @@ const SIGNALS = {
   SIGCONT: 18, // 继续
   SIGSTOP: 19, // 暂停
   SIGUSR1: 10, // 用户自定义信号1
-  SIGUSR2: 12 // 用户自定义信号2
+  SIGUSR2: 12, // 用户自定义信号2
 }
 
 // 状态选项
@@ -51,7 +51,7 @@ const statusOptions = [
   { label: $gettext('Idle'), value: 'I' },
   { label: $gettext('Zombie'), value: 'Z' },
   { label: $gettext('Waiting'), value: 'W' },
-  { label: $gettext('Locked'), value: 'L' }
+  { label: $gettext('Locked'), value: 'L' },
 ]
 
 // 操作菜单选项
@@ -67,7 +67,7 @@ const actionOptions: DropdownOption[] = [
   { label: $gettext('Interrupt (SIGINT)'), key: 'sigint' },
   { label: $gettext('Hang Up (SIGHUP)'), key: 'sighup' },
   { label: $gettext('User Signal 1 (SIGUSR1)'), key: 'sigusr1' },
-  { label: $gettext('User Signal 2 (SIGUSR2)'), key: 'sigusr2' }
+  { label: $gettext('User Signal 2 (SIGUSR2)'), key: 'sigusr2' },
 ]
 
 // 渲染状态标签
@@ -100,7 +100,7 @@ const columns = computed<any[]>(() => [
     key: 'pid',
     width: 160,
     sortOrder: sortKeyMapOrder.value.pid || false,
-    sorter: true
+    sorter: true,
   },
   {
     title: $gettext('Name'),
@@ -108,27 +108,27 @@ const columns = computed<any[]>(() => [
     resizable: true,
     sortOrder: sortKeyMapOrder.value.name || false,
     sorter: true,
-    ellipsis: { tooltip: true }
+    ellipsis: { tooltip: true },
   },
   {
     title: $gettext('Parent PID'),
     key: 'ppid',
     width: 160,
     sortOrder: sortKeyMapOrder.value.ppid || false,
-    sorter: true
+    sorter: true,
   },
   {
     title: $gettext('Threads'),
     key: 'num_threads',
     width: 100,
     sortOrder: sortKeyMapOrder.value.num_threads || false,
-    sorter: true
+    sorter: true,
   },
   {
     title: $gettext('User'),
     key: 'username',
     width: 100,
-    ellipsis: { tooltip: true }
+    ellipsis: { tooltip: true },
   },
   {
     title: $gettext('Status'),
@@ -136,7 +136,7 @@ const columns = computed<any[]>(() => [
     width: 100,
     render(row: any) {
       return renderStatus(row.status)
-    }
+    },
   },
   {
     title: 'CPU',
@@ -146,7 +146,7 @@ const columns = computed<any[]>(() => [
     sorter: true,
     render(row: any): string {
       return formatPercent(row.cpu) + '%'
-    }
+    },
   },
   {
     title: $gettext('Memory'),
@@ -156,56 +156,39 @@ const columns = computed<any[]>(() => [
     sorter: true,
     render(row: any): string {
       return formatBytes(row.rss)
-    }
+    },
   },
   {
     title: $gettext('Start Time'),
     key: 'start_time',
     width: 240,
     sortOrder: sortKeyMapOrder.value.start_time || false,
-    sorter: true
+    sorter: true,
   },
-  {
-    title: $gettext('Actions'),
-    key: 'actions',
-    width: 80,
-    fixed: 'right' as const,
-    render(row: any) {
-      return h(
-        NDropdown,
-        {
-          options: actionOptions,
-          trigger: 'click',
-          onSelect: (key: string) => {
-            selectedRow.value = row
-            handleDropdownSelect(key)
-          }
-        },
-        {
-          default: () =>
-            h(NButton, { size: 'small', ghost: true }, { default: () => $gettext('Actions') })
-        }
-      )
-    }
-  }
 ])
 
-// 行属性 - 右键菜单 & 双击查看详情
+// 行属性 - 左键/右键菜单 & 双击查看详情
+const openDropdownAt = (row: any, e: MouseEvent) => {
+  showDropdown.value = false
+  nextTick().then(() => {
+    showDropdown.value = true
+    selectedRow.value = row
+    dropdownX.value = e.clientX
+    dropdownY.value = e.clientY
+  })
+}
+
 const rowProps = (row: any) => {
   return {
+    style: 'cursor: pointer',
+    onClick: (e: MouseEvent) => openDropdownAt(row, e),
     onContextmenu: (e: MouseEvent) => {
       e.preventDefault()
-      showDropdown.value = false
-      nextTick().then(() => {
-        showDropdown.value = true
-        selectedRow.value = row
-        dropdownX.value = e.clientX
-        dropdownY.value = e.clientY
-      })
+      openDropdownAt(row, e)
     },
     onDblclick: () => {
       handleShowDetail(row.pid)
-    }
+    },
   }
 }
 
@@ -259,7 +242,7 @@ const handleSignal = (pid: number, signal: number, signalName: string) => {
     title: $gettext('Confirm'),
     content: $gettext('Are you sure you want to send %{ signal } to process %{ pid }?', {
       signal: signalName,
-      pid: pid.toString()
+      pid: pid.toString(),
     }),
     positiveText: $gettext('Confirm'),
     negativeText: $gettext('Cancel'),
@@ -269,11 +252,11 @@ const handleSignal = (pid: number, signal: number, signalName: string) => {
         window.$message.success(
           $gettext('Signal %{ signal } has been sent to process %{ pid }', {
             signal: signalName,
-            pid: pid.toString()
-          })
+            pid: pid.toString(),
+          }),
         )
       })
-    }
+    },
   })
 }
 
@@ -315,7 +298,7 @@ const { loading, data, page, total, pageSize, pageCount, reload } = usePaginatio
       sort,
       order,
       status: statusFilter.value || undefined,
-      keyword: keyword.value || undefined
+      keyword: keyword.value || undefined,
     }
     return process.list(params)
   },
@@ -324,8 +307,8 @@ const { loading, data, page, total, pageSize, pageCount, reload } = usePaginatio
     initialPageSize: 50,
     total: (res: any) => res.total,
     data: (res: any) => res.items,
-    watchingStates: [sortState, statusFilter, keyword]
-  }
+    watchingStates: [sortState, statusFilter, keyword],
+  },
 )
 </script>
 
@@ -337,7 +320,7 @@ const { loading, data, page, total, pageSize, pageCount, reload } = usePaginatio
         v-model:value="keyword"
         :placeholder="$gettext('Search by PID or name')"
         clearable
-        style="width: 250px"
+        class="!w-62.5"
       >
         <template #prefix>
           <the-icon :size="16" icon="mdi:magnify" />
@@ -346,7 +329,7 @@ const { loading, data, page, total, pageSize, pageCount, reload } = usePaginatio
       <n-select
         v-model:value="statusFilter"
         :options="statusOptions"
-        style="width: 150px"
+        class="w-37.5"
         @update:value="page = 1"
       />
       <n-button @click="reload" type="primary" ghost>{{ $gettext('Refresh') }}</n-button>
@@ -357,7 +340,7 @@ const { loading, data, page, total, pageSize, pageCount, reload } = usePaginatio
       striped
       remote
       virtual-scroll
-      :scroll-x="1480"
+      :scroll-x="1400"
       :loading="loading"
       :columns="columns"
       :data="data"
@@ -369,12 +352,11 @@ const { loading, data, page, total, pageSize, pageCount, reload } = usePaginatio
       v-model:pageSize="pageSize"
       :pagination="{
         page: page,
-        pageCount: pageCount,
         pageSize: pageSize,
         itemCount: total,
         showQuickJumper: true,
         showSizePicker: true,
-        pageSizes: [50, 100, 200, 500]
+        pageSizes: [50, 100, 200, 500],
       }"
     />
 
@@ -457,7 +439,7 @@ const { loading, data, page, total, pageSize, pageCount, reload } = usePaginatio
             </n-ellipsis>
           </n-descriptions-item>
         </n-descriptions>
-        <n-collapse v-if="processDetail" style="margin-top: 16px">
+        <n-collapse v-if="processDetail" class="mt-4">
           <n-collapse-item
             v-if="processDetail.envs?.length"
             :title="$gettext('Environment Variables')"
@@ -502,7 +484,7 @@ const { loading, data, page, total, pageSize, pageCount, reload } = usePaginatio
                     ? processDetail.connections
                         .map(
                           (c: any) =>
-                            `${c.localaddr?.ip || '*'}:${c.localaddr?.port || '*'} -> ${c.remoteaddr?.ip || '*'}:${c.remoteaddr?.port || '*'} (${c.status || 'UNKNOWN'})`
+                            `${c.localaddr?.ip || '*'}:${c.localaddr?.port || '*'} -> ${c.remoteaddr?.ip || '*'}:${c.remoteaddr?.port || '*'} (${c.status || 'UNKNOWN'})`,
                         )
                         .join('\n')
                     : $gettext('No network connections')

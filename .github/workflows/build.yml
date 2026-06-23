@@ -13,9 +13,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
       - name: Setup pnpm
-        uses: pnpm/action-setup@v5
+        uses: pnpm/action-setup@v6
         with:
-          run_install: true
+          run_install: |
+            - cwd: web
           package_json_file: web/package.json
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -27,7 +28,7 @@ jobs:
         working-directory: web
         run: |
           cp .env.production .env
-          cp settings/proxy-config.example.ts settings/proxy-config.ts
+          cp config/proxy-config.example.ts config/proxy-config.ts
           pnpm run gettext:compile
           pnpm build
       - name: Upload frontend

@@ -1,8 +1,9 @@
 <script setup lang="ts">
-import database from '@/api/panel/database'
-import { generateRandomString } from '@/utils'
 import { NButton, NInput } from 'naive-ui'
 import { useGettext } from 'vue3-gettext'
+
+import database from '@/api/panel/database'
+import { generateRandomString } from '@/utils'
 
 const props = defineProps<{
   type?: string
@@ -16,15 +17,23 @@ const createModel = ref({
   password: '',
   host: 'localhost',
   privileges: [],
-  remark: ''
+  remark: '',
 })
 
-const servers = ref<{ label: string; value: string }[]>([])
+const servers = ref<{ label: string; value: string; type: string }[]>([])
+
+// 仅这些数据库类型支持用户管理
+const userSupportedTypes = ['mysql', 'postgresql', 'clickhouse']
+
+// 当前选中服务器的类型，用于决定是否显示 Host 字段（仅 MySQL 需要）
+const selectedServerType = computed(
+  () => servers.value.find((s) => s.value === createModel.value.server_id)?.type,
+)
 
 const hostTypeOptions = [
   { label: $gettext('Local (localhost)'), value: 'localhost' },
   { label: $gettext('All (%)'), value: '%' },
-  { label: $gettext('Specific'), value: 'specific' }
+  { label: $gettext('Specific'), value: 'specific' },
 ]
 const hostType = ref('localhost')
 
@@ -59,14 +68,18 @@ watch(
       useRequest(database.serverList(1, 10000, props.type)).onSuccess(({ data }: { data: any }) => {
         servers.value = []
         for (const server of data.items) {
+          if (!userSupportedTypes.includes(server.type)) {
+            continue
+          }
           servers.value.push({
             label: server.name,
-            value: server.id
+            value: server.id,
+            type: server.type,
           })
         }
       })
     }
-  }
+  },
 )
 </script>
 
@@ -118,7 +131,7 @@ watch(
             </n-button>
           </n-input-group>
         </n-form-item>
-        <n-form-item v-if="props.type === 'mysql'" path="host-select" :label="$gettext('Host')">
+        <n-form-item v-if="selectedServerType === 'mysql'" path="host-select" :label="$gettext('Host')">
           <n-select
             v-model:value="hostType"
             @keydown.enter.prevent
@@ -126,7 +139,11 @@ watch(
             :options="hostTypeOptions"
           />
         </n-form-item>
-        <n-form-item v-if="hostType === 'specific' && props.type === 'mysql'" path="host" :label="$gettext('Specific Host')">
+        <n-form-item
+          v-if="hostType === 'specific' && selectedServerType === 'mysql'"
+          path="host"
+          :label="$gettext('Specific Host')"
+        >
           <n-input
             v-model:value="createModel.host"
             type="text"
@@ -149,7 +166,9 @@ watch(
           />
         </n-form-item>
       </n-form>
-      <n-button type="info" block :loading="loading" :disabled="loading" @click="handleCreate">{{ $gettext('Submit') }}</n-button>
+      <n-button type="info" block :loading="loading" :disabled="loading" @click="handleCreate">
+        {{ $gettext('Submit') }}
+      </n-button>
     </n-flex>
   </n-modal>
 </template>

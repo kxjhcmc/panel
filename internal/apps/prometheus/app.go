@@ -9,6 +9,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/leonelquinteros/gotext"
+	"github.com/samber/lo"
 	"github.com/spf13/cast"
 	"go.yaml.in/yaml/v4"
 	"resty.dev/v3"
@@ -52,6 +53,12 @@ func (s *App) Route(r chi.Router) {
 	r.Post("/exporters/{slug}/config", s.UpdateExporterConfig)
 }
 
+func (s *App) Status() string {
+	prom, _ := systemctl.Status("prometheus")
+	alert, _ := systemctl.Status("alertmanager")
+	return types.AggregateAppStatus(prom, alert)
+}
+
 func (s *App) Load(w http.ResponseWriter, r *http.Request) {
 	status, err := systemctl.Status("prometheus")
 	if err != nil {
@@ -66,7 +73,7 @@ func (s *App) Load(w http.ResponseWriter, r *http.Request) {
 	client := resty.New().SetTimeout(10 * time.Second)
 	defer func(client *resty.Client) { _ = client.Close() }(client)
 	resp, err := client.R().Get("http://127.0.0.1:9090/api/v1/status/runtimeinfo")
-	if err != nil || !resp.IsSuccess() {
+	if err != nil || !resp.IsStatusSuccess() {
 		service.Success(w, []types.NV{})
 		return
 	}
@@ -420,10 +427,7 @@ func (s *App) getExporterConfigPath(slug string) string {
 
 // checkExporter 检查 slug 是否有效
 func (s *App) checkExporter(slug string) bool {
-	for _, e := range s.getExporters() {
-		if e.Slug == slug {
-			return true
-		}
-	}
-	return false
+	return lo.ContainsBy(s.getExporters(), func(e Exporter) bool {
+		return e.Slug == slug
+	})
 }

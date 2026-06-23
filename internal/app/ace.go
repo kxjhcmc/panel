@@ -14,7 +14,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-gormigrate/gormigrate/v2"
 	"github.com/gookit/validate"
-	"github.com/robfig/cron/v3"
+	"github.com/libtnb/cron"
 
 	"github.com/acepanel/panel/v3/pkg/config"
 	"github.com/acepanel/panel/v3/pkg/tlscert"
@@ -51,7 +51,9 @@ func (r *Ace) Run() error {
 	fmt.Println("[DB] database migrated")
 
 	// start cron scheduler
-	r.cron.Start()
+	if err := r.cron.Start(); err != nil {
+		return err
+	}
 	fmt.Println("[CRON] cron scheduler started")
 
 	// create context for runner
@@ -69,7 +71,7 @@ func (r *Ace) Run() error {
 	serverErr := make(chan error, 1)
 	go func() {
 		fmt.Println("[HTTP] listening and serving on port", r.conf.HTTP.Port)
-		if r.conf.HTTP.TLS {
+		if r.conf.HTTP.IsHTTPS() {
 			if err := r.server.ListenAndServeTLS("", ""); !errors.Is(err, http.ErrServerClosed) {
 				serverErr <- err
 			}
@@ -95,8 +97,9 @@ func (r *Ace) Run() error {
 	fmt.Println("[APP] shutting down gracefully...")
 
 	// stop cron scheduler
-	ctx := r.cron.Stop()
-	<-ctx.Done()
+	cronCtx, cronCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	_ = r.cron.Stop(cronCtx)
+	cronCancel()
 	fmt.Println("[CRON] cron scheduler stopped")
 
 	// stop task runner

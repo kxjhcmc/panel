@@ -1,13 +1,13 @@
-import type { RouteType } from '~/types/router'
+import type { RouteType } from '@/types/router'
 
-const Layout = () => import('@/layout/IndexView.vue')
+const Layout = () => import('@/layouts/IndexView.vue')
 
 export default {
   name: 'container',
   path: '/container',
   component: Layout,
   meta: {
-    order: 2
+    order: 2,
   },
   children: [
     {
@@ -18,8 +18,8 @@ export default {
         title: 'Container',
         icon: 'mdi:layers-outline',
         role: ['admin'],
-        requireAuth: true
-      }
-    }
-  ]
+        requireAuth: true,
+      },
+    },
+  ],
 } as RouteType
