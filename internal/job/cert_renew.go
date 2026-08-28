@@ -2,17 +2,18 @@ package job
 
 import (
 	"context"
-	"encoding/json"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
+	"github.com/leonelquinteros/gotext"
 	"gorm.io/gorm"
 
 	"github.com/acepanel/panel/v3/internal/app"
 	"github.com/acepanel/panel/v3/internal/biz"
-	"github.com/acepanel/panel/v3/internal/http/request"
+	"github.com/acepanel/panel/v3/internal/request"
 	pkgcert "github.com/acepanel/panel/v3/pkg/cert"
 	"github.com/acepanel/panel/v3/pkg/config"
 	"github.com/acepanel/panel/v3/pkg/tools"
@@ -23,19 +24,27 @@ type CertRenew struct {
 	conf            *config.Config
 	db              *gorm.DB
 	log             *slog.Logger
-	settingRepo     biz.SettingRepo
-	certRepo        biz.CertRepo
-	certAccountRepo biz.CertAccountRepo
+	settingRepo     *biz.SettingUsecase
+	certRepo        *biz.CertUsecase
+	certAccountRepo *biz.CertAccountUsecase
+	notifyRepo      *biz.NotifyUsecase
+	t               *gotext.Locale
 }
 
-func NewCertRenew(conf *config.Config, db *gorm.DB, log *slog.Logger, setting biz.SettingRepo, cert biz.CertRepo, certAccount biz.CertAccountRepo) *CertRenew {
-	return &CertRenew{
-		conf:            conf,
-		db:              db,
-		log:             log,
-		settingRepo:     setting,
-		certRepo:        cert,
-		certAccountRepo: certAccount,
+// NewCertRenew 构造证书续签任务
+func NewCertRenew(certAccountUsecase *biz.CertAccountUsecase, certUsecase *biz.CertUsecase, notifyUsecase *biz.NotifyUsecase, settingUsecase *biz.SettingUsecase, conf *config.Config, db *gorm.DB, t *gotext.Locale, log *slog.Logger) Job {
+	return Job{
+		Spec: "0 4 * * *",
+		Task: &CertRenew{
+			conf:            conf,
+			db:              db,
+			log:             log,
+			settingRepo:     settingUsecase,
+			certRepo:        certUsecase,
+			certAccountRepo: certAccountUsecase,
+			notifyRepo:      notifyUsecase,
+			t:               t,
+		},
 	}
 }
 
@@ -45,7 +54,7 @@ func (r *CertRenew) Run(_ context.Context) error {
 	}
 
 	var certs []biz.Cert
-	if err := r.db.Preload("Website").Preload("Account").Preload("DNS").Find(&certs).Error; err != nil {
+	if err := r.db.Preload("Websites").Preload("Account").Preload("DNS").Find(&certs).Error; err != nil {
 		r.log.Warn("failed to get certs", slog.String("type", biz.OperationTypeCert), slog.Uint64("operator_id", 0), slog.Any("err", err))
 		return nil
 	}
@@ -70,6 +79,7 @@ func (r *CertRenew) Run(_ context.Context) error {
 		if time.Now().After(cert.RenewalInfo.SelectedTime) {
 			if _, err := r.certRepo.Renew(cert.ID); err != nil {
 				r.log.Warn("failed to renew certificate", slog.String("type", biz.OperationTypeCert), slog.Uint64("operator_id", 0), slog.Any("err", err))
+				r.notifyFailed(strings.Join(cert.Domains, ", "), err)
 			}
 		}
 	}
@@ -91,6 +101,7 @@ func (r *CertRenew) Run(_ context.Context) error {
 		newCrt, newKey, err := pkgcert.GenerateSelfSigned(tools.CollectLocalNames())
 		if err != nil {
 			r.log.Warn("failed to generate self-signed certificate", slog.String("type", biz.OperationTypeCert), slog.Uint64("operator_id", 0), slog.Any("err", err))
+			r.notifyFailed(r.t.Get("panel certificate"), err)
 			return nil
 		}
 		if err = r.settingRepo.UpdateCert(&request.SettingCert{
@@ -98,6 +109,7 @@ func (r *CertRenew) Run(_ context.Context) error {
 			Key:  string(newKey),
 		}); err != nil {
 			r.log.Warn("failed to update panel certificate", slog.String("type", biz.OperationTypeCert), slog.Uint64("operator_id", 0), slog.Any("err", err))
+			r.notifyFailed(r.t.Get("panel certificate"), err)
 			return nil
 		}
 		r.log.Info("panel self-signed certificate renewed", slog.String("type", biz.OperationTypeCert), slog.Uint64("operator_id", 0))
@@ -110,24 +122,16 @@ func (r *CertRenew) Run(_ context.Context) error {
 		crt, _ := os.ReadFile(filepath.Join(app.Root, "panel/storage/cert.pem"))
 		decode, err := pkgcert.ParseCert(crt)
 		if err == nil {
-			// 结束时间大于 2 天不续签
-			if time.Until(decode.NotAfter) > 24*2*time.Hour {
+			renewBefore := 2 * 24 * time.Hour
+			if len(r.conf.HTTP.BindDomain) > 0 {
+				renewBefore = 30 * 24 * time.Hour
+			}
+			if time.Until(decode.NotAfter) > renewBefore {
 				return nil
 			}
 		} else {
 			// 解析失败则继续续签流程，可能是证书格式不对或者文件不存在
 			r.log.Warn("failed to parse panel certificate", slog.String("type", biz.OperationTypeCert), slog.Uint64("operator_id", 0), slog.Any("err", err))
-		}
-
-		ip, err := r.settingRepo.Get(biz.SettingKeyPublicIPs)
-		if err != nil {
-			r.log.Warn("failed to get panel IP", slog.String("type", biz.OperationTypeCert), slog.Uint64("operator_id", 0), slog.Any("err", err))
-			return nil
-		}
-		var ips []string
-		if err = json.Unmarshal([]byte(ip), &ips); err != nil || len(ips) == 0 {
-			r.log.Warn("panel public IPs not set", slog.String("type", biz.OperationTypeCert), slog.Uint64("operator_id", 0), slog.Any("err", err))
-			return nil
 		}
 
 		var user biz.User
@@ -138,11 +142,13 @@ func (r *CertRenew) Run(_ context.Context) error {
 		account, err := r.certAccountRepo.GetDefault(user.ID)
 		if err != nil {
 			r.log.Warn("failed to get panel ACME account", slog.String("type", biz.OperationTypeCert), slog.Uint64("operator_id", 0), slog.Any("err", err))
+			r.notifyFailed(r.t.Get("panel certificate"), err)
 			return nil
 		}
-		crt, key, err := r.certRepo.ObtainPanel(account, ips)
+		crt, key, err := r.certRepo.ObtainPanel(account, r.conf.HTTP.BindDomain)
 		if err != nil {
 			r.log.Warn("failed to obtain panel certificate via ACME", slog.String("type", biz.OperationTypeCert), slog.Uint64("operator_id", 0), slog.Any("err", err))
+			r.notifyFailed(r.t.Get("panel certificate"), err)
 			return nil
 		}
 
@@ -151,6 +157,7 @@ func (r *CertRenew) Run(_ context.Context) error {
 			Key:  string(key),
 		}); err != nil {
 			r.log.Warn("failed to update panel certificate", slog.String("type", biz.OperationTypeCert), slog.Uint64("operator_id", 0), slog.Any("err", err))
+			r.notifyFailed(r.t.Get("panel certificate"), err)
 			return nil
 		}
 
@@ -158,4 +165,13 @@ func (r *CertRenew) Run(_ context.Context) error {
 	}
 
 	return nil
+}
+
+// notifyFailed 上报证书续签失败
+func (r *CertRenew) notifyFailed(target string, err error) {
+	r.notifyRepo.SendEvent(biz.NotifyEventCertRenew, r.t.Get("[AcePanel] Certificate Renewal Failed"), biz.NotifyBody(r.t.Get("certificate renewal failed"), [][2]string{
+		{r.t.Get("Certificate"), target},
+		{r.t.Get("Error"), err.Error()},
+		{r.t.Get("Time"), time.Now().Format(time.DateTime)},
+	}))
 }

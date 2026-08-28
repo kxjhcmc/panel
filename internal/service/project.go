@@ -4,22 +4,22 @@ import (
 	"net/http"
 	"path/filepath"
 
-	"github.com/libtnb/chix"
+	"github.com/libtnb/chix/v2"
 
 	"github.com/acepanel/panel/v3/internal/biz"
-	"github.com/acepanel/panel/v3/internal/http/request"
+	"github.com/acepanel/panel/v3/internal/request"
 	"github.com/acepanel/panel/v3/pkg/types"
 )
 
 type ProjectService struct {
-	projectRepo biz.ProjectRepo
-	settingRepo biz.SettingRepo
+	projectRepo *biz.ProjectUsecase
+	settingRepo *biz.SettingUsecase
 }
 
-func NewProjectService(project biz.ProjectRepo, setting biz.SettingRepo) *ProjectService {
+func NewProjectService(projectUsecase *biz.ProjectUsecase, settingUsecase *biz.SettingUsecase) *ProjectService {
 	return &ProjectService{
-		projectRepo: project,
-		settingRepo: setting,
+		projectRepo: projectUsecase,
+		settingRepo: settingUsecase,
 	}
 }
 

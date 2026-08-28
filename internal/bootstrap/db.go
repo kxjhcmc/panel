@@ -3,9 +3,10 @@ package bootstrap
 import (
 	"log/slog"
 	"path/filepath"
+	"time"
 
-	"github.com/DeRuina/timberjack"
 	"github.com/go-gormigrate/gormigrate/v2"
+	"github.com/libtnb/logrotate"
 	"github.com/libtnb/sqlite"
 	sloggorm "github.com/orandin/slog-gorm"
 	"gorm.io/gorm"
@@ -16,23 +17,26 @@ import (
 )
 
 func NewDB(conf *config.Config) (*gorm.DB, error) {
-	tjLogger := &timberjack.Logger{
-		Filename:    filepath.Join(app.Root, "panel/storage/logs/db.log"),
-		MaxSize:     10,
-		MaxAge:      30,
-		LocalTime:   true,
-		RotateAt:    []string{"00:00"},
-		FileMode:    0o600,
-		Compression: "none",
+
+	// db 日志写入轮转文件
+	w, err := logrotate.New(filepath.Join(app.Root, "panel/storage/logs/db.log"),
+		logrotate.WithMaxSize(10*logrotate.MB),
+		logrotate.WithMaxAge(30*logrotate.Day),
+		logrotate.WithRotateAt("00:00"),
+		logrotate.WithFileMode(0o600),
+		logrotate.WithLocation(time.Local),
+	)
+	if err != nil {
+		return nil, err
 	}
 
-	handler := slog.New(slog.NewJSONHandler(tjLogger, nil)).Handler()
+	handler := slog.New(slog.NewJSONHandler(w, nil)).Handler()
 	options := []sloggorm.Option{sloggorm.WithHandler(handler)}
 	if conf.Database.Debug {
 		options = append(options, sloggorm.WithTraceAll())
 	}
 
-	db, err := gorm.Open(sqlite.Open("file:"+filepath.Join(app.Root, "panel/storage/panel.db")+"?_txlock=immediate&_pragma=busy_timeout(10000)&_pragma=journal_mode(WAL)"),
+	db, err := gorm.Open(sqlite.Open("file:"+filepath.Join(app.Root, "panel/storage/panel.db")+"?_txlock=immediate&_pragma=busy_timeout(10000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)"),
 		&gorm.Config{
 			Logger:                                   sloggorm.New(options...),
 			SkipDefaultTransaction:                   true,
@@ -53,7 +57,5 @@ func NewDB(conf *config.Config) (*gorm.DB, error) {
 }
 
 func NewMigrate(db *gorm.DB) *gormigrate.Gormigrate {
-	return gormigrate.New(db, &gormigrate.Options{
-		UseTransaction: true, // Note: MySQL not support DDL transaction
-	}, migration.Migrations)
+	return gormigrate.New(db, nil, migration.Migrations)
 }

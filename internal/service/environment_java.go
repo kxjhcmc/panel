@@ -8,19 +8,19 @@ import (
 
 	"github.com/acepanel/panel/v3/internal/app"
 	"github.com/acepanel/panel/v3/internal/biz"
-	"github.com/acepanel/panel/v3/internal/http/request"
+	"github.com/acepanel/panel/v3/internal/request"
 	"github.com/acepanel/panel/v3/pkg/io"
 )
 
 type EnvironmentJavaService struct {
 	t               *gotext.Locale
-	environmentRepo biz.EnvironmentRepo
+	environmentRepo *biz.EnvironmentUsecase
 }
 
-func NewEnvironmentJavaService(t *gotext.Locale, environmentRepo biz.EnvironmentRepo) *EnvironmentJavaService {
+func NewEnvironmentJavaService(environmentUsecase *biz.EnvironmentUsecase, t *gotext.Locale) *EnvironmentJavaService {
 	return &EnvironmentJavaService{
 		t:               t,
-		environmentRepo: environmentRepo,
+		environmentRepo: environmentUsecase,
 	}
 }
 

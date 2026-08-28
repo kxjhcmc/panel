@@ -3,19 +3,19 @@ package service
 import (
 	"net/http"
 
-	"github.com/libtnb/chix"
+	"github.com/libtnb/chix/v2"
 
 	"github.com/acepanel/panel/v3/internal/biz"
-	"github.com/acepanel/panel/v3/internal/http/request"
+	"github.com/acepanel/panel/v3/internal/request"
 )
 
 type DatabaseService struct {
-	databaseRepo biz.DatabaseRepo
+	databaseRepo *biz.DatabaseUsecase
 }
 
-func NewDatabaseService(database biz.DatabaseRepo) *DatabaseService {
+func NewDatabaseService(databaseUsecase *biz.DatabaseUsecase) *DatabaseService {
 	return &DatabaseService{
-		databaseRepo: database,
+		databaseRepo: databaseUsecase,
 	}
 }
 
@@ -26,7 +26,7 @@ func (s *DatabaseService) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	databases, total, err := s.databaseRepo.List(req.Page, req.Limit, req.Type)
+	databases, total, err := s.databaseRepo.List(r.Context(), req.Page, req.Limit, req.Type)
 	if err != nil {
 		Error(w, http.StatusInternalServerError, "%v", err)
 		return
@@ -75,7 +75,7 @@ func (s *DatabaseService) Comment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err = s.databaseRepo.Comment(req); err != nil {
+	if err = s.databaseRepo.Comment(r.Context(), req); err != nil {
 		Error(w, http.StatusInternalServerError, "%v", err)
 		return
 	}

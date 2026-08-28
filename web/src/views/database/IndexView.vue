@@ -6,6 +6,11 @@ defineOptions({
 import { NButton } from 'naive-ui'
 import { useGettext } from 'vue3-gettext'
 
+import pgadmin from '@/api/apps/pgadmin'
+import phpmyadmin from '@/api/apps/phpmyadmin'
+import app from '@/api/panel/app'
+import database from '@/api/panel/database'
+import { renderLocalIcon } from '@/utils'
 import CreateDatabaseModal from '@/views/database/CreateDatabaseModal.vue'
 import CreateServerModal from '@/views/database/CreateServerModal.vue'
 import CreateUserModal from '@/views/database/CreateUserModal.vue'
@@ -16,24 +21,113 @@ import ServerList from '@/views/database/ServerList.vue'
 import UserList from '@/views/database/UserList.vue'
 
 const { $gettext } = useGettext()
-const currentTab = ref('mysql')
+const currentTab = ref('')
 
 const createDatabaseModalShow = ref(false)
 const createUserModalShow = ref(false)
 const createServerModalShow = ref(false)
+
+const phpMyAdminIcon = renderLocalIcon('app', 'phpmyadmin', { size: 16 })
+const pgAdminIcon = renderLocalIcon('app', 'pgadmin', { size: 16 })
+
+const phpMyAdminInstalled = ref(false)
+const phpMyAdminLoading = ref(false)
+
+const pgAdminInstalled = ref(false)
+const pgAdminLoading = ref(false)
+
+useRequest(app.isInstalled('phpmyadmin')).onSuccess(({ data }: any) => {
+  phpMyAdminInstalled.value = data
+})
+useRequest(app.isInstalled('pgadmin')).onSuccess(({ data }: any) => {
+  pgAdminInstalled.value = data
+})
+
+// 类型标签页仅展示已添加服务器的数据库类型
+const typeTabs = [
+  'mysql',
+  'postgresql',
+  'clickhouse',
+  'mongodb',
+  'sqlite',
+  'elasticsearch',
+  'redis',
+]
+const servers = ref<any[]>([])
+
+const availableTypes = computed(() => new Set(servers.value.map((item: any) => item.type)))
+// n-tabs 对 v-if 动态增删子 tab 不会重算指示条位置，用 key 强制重挂
+const tabsKey = computed(() => typeTabs.filter((t) => availableTypes.value.has(t)).join(','))
+const mysqlServers = computed(() => servers.value.filter((item: any) => item.type === 'mysql'))
+const postgresqlServers = computed(() =>
+  servers.value.filter((item: any) => item.type === 'postgresql'),
+)
+
+const refreshServers = () => {
+  useRequest(database.serverList(1, 10000)).onSuccess(({ data }: any) => {
+    servers.value = data.items || []
+    // 未初始化或停留在已消失的类型标签时定位到第一个可用类型
+    const first = typeTabs.find((t) => availableTypes.value.has(t))
+    if (
+      !currentTab.value ||
+      (typeTabs.includes(currentTab.value) && !availableTypes.value.has(currentTab.value))
+    ) {
+      currentTab.value = first ?? 'server'
+    }
+  })
+}
+
+onMounted(() => {
+  refreshServers()
+  window.$bus.on('database-server:refresh', refreshServers)
+})
+
+onUnmounted(() => {
+  window.$bus.off('database-server:refresh', refreshServers)
+})
+
+const serverOptions = computed(() =>
+  mysqlServers.value.map((item: any) => ({ label: item.name, key: item.id })),
+)
+
+const handlePhpMyAdmin = (serverID: number) => {
+  phpMyAdminLoading.value = true
+  useRequest(phpmyadmin.login(serverID))
+    .onSuccess(({ data }: any) => {
+      window.open(`http://${window.location.hostname}:${data.port}/${data.path}/`, '_blank')
+    })
+    .onComplete(() => {
+      phpMyAdminLoading.value = false
+    })
+}
+
+const handlePgAdmin = () => {
+  pgAdminLoading.value = true
+  useRequest(pgadmin.login())
+    .onSuccess(({ data }: any) => {
+      window.open(`http://${window.location.hostname}:${data.port}/`, '_blank')
+    })
+    .onComplete(() => {
+      pgAdminLoading.value = false
+    })
+}
 </script>
 
 <template>
   <PageContainer :show-footer="true">
     <template #tabs>
-      <n-tabs v-model:value="currentTab" animated>
-        <n-tab name="mysql" tab="MySQL" />
-        <n-tab name="postgresql" tab="PostgreSQL" />
-        <n-tab name="clickhouse" tab="ClickHouse" />
-        <n-tab name="mongodb" tab="MongoDB" />
-        <n-tab name="sqlite" tab="SQLite" />
-        <n-tab name="elasticsearch" tab="Elasticsearch" />
-        <n-tab name="redis" tab="Redis" />
+      <n-tabs :key="tabsKey" v-model:value="currentTab" animated>
+        <n-tab v-if="availableTypes.has('mysql')" name="mysql" tab="MySQL" />
+        <n-tab v-if="availableTypes.has('postgresql')" name="postgresql" tab="PostgreSQL" />
+        <n-tab v-if="availableTypes.has('clickhouse')" name="clickhouse" tab="ClickHouse" />
+        <n-tab v-if="availableTypes.has('mongodb')" name="mongodb" tab="MongoDB" />
+        <n-tab v-if="availableTypes.has('sqlite')" name="sqlite" tab="SQLite" />
+        <n-tab
+          v-if="availableTypes.has('elasticsearch')"
+          name="elasticsearch"
+          tab="Elasticsearch"
+        />
+        <n-tab v-if="availableTypes.has('redis')" name="redis" tab="Redis" />
         <n-tab name="user" :tab="$gettext('User')" />
         <n-tab name="server" :tab="$gettext('Server')" />
       </n-tabs>
@@ -46,6 +140,43 @@ const createServerModalShow = ref(false)
           @click="createDatabaseModalShow = true"
         >
           {{ $gettext('Create Database') }}
+        </n-button>
+        <template v-if="currentTab === 'mysql' && phpMyAdminInstalled && mysqlServers.length > 0">
+          <n-dropdown
+            v-if="mysqlServers.length > 1"
+            :options="serverOptions"
+            trigger="click"
+            @select="handlePhpMyAdmin"
+          >
+            <n-button :loading="phpMyAdminLoading" :disabled="phpMyAdminLoading">
+              <template #icon>
+                <component :is="phpMyAdminIcon" />
+              </template>
+              phpMyAdmin
+            </n-button>
+          </n-dropdown>
+          <n-button
+            v-else
+            :loading="phpMyAdminLoading"
+            :disabled="phpMyAdminLoading"
+            @click="handlePhpMyAdmin(mysqlServers[0].id)"
+          >
+            <template #icon>
+              <component :is="phpMyAdminIcon" />
+            </template>
+            phpMyAdmin
+          </n-button>
+        </template>
+        <n-button
+          v-if="currentTab === 'postgresql' && pgAdminInstalled && postgresqlServers.length > 0"
+          :loading="pgAdminLoading"
+          :disabled="pgAdminLoading"
+          @click="handlePgAdmin"
+        >
+          <template #icon>
+            <component :is="pgAdminIcon" />
+          </template>
+          pgAdmin
         </n-button>
         <n-button v-if="currentTab === 'user'" type="primary" @click="createUserModalShow = true">
           {{ $gettext('Create User') }}

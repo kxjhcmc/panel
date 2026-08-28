@@ -3,19 +3,19 @@ package service
 import (
 	"net/http"
 
-	"github.com/libtnb/chix"
+	"github.com/libtnb/chix/v2"
 
 	"github.com/acepanel/panel/v3/internal/biz"
-	"github.com/acepanel/panel/v3/internal/http/request"
+	"github.com/acepanel/panel/v3/internal/request"
 )
 
 type DatabaseServerService struct {
-	databaseServerRepo biz.DatabaseServerRepo
+	databaseServerRepo *biz.DatabaseServerUsecase
 }
 
-func NewDatabaseServerService(databaseServer biz.DatabaseServerRepo) *DatabaseServerService {
+func NewDatabaseServerService(databaseServerUsecase *biz.DatabaseServerUsecase) *DatabaseServerService {
 	return &DatabaseServerService{
-		databaseServerRepo: databaseServer,
+		databaseServerRepo: databaseServerUsecase,
 	}
 }
 
@@ -26,7 +26,7 @@ func (s *DatabaseServerService) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	servers, total, err := s.databaseServerRepo.List(req.Page, req.Limit, req.Type)
+	servers, total, err := s.databaseServerRepo.List(r.Context(), req.Page, req.Limit, req.Type)
 	if err != nil {
 		Error(w, http.StatusInternalServerError, "%v", err)
 		return
@@ -45,7 +45,7 @@ func (s *DatabaseServerService) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err = s.databaseServerRepo.Create(req); err != nil {
+	if err = s.databaseServerRepo.Create(r.Context(), req); err != nil {
 		Error(w, http.StatusInternalServerError, "%v", err)
 		return
 	}
@@ -60,7 +60,7 @@ func (s *DatabaseServerService) Get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	server, err := s.databaseServerRepo.Get(req.ID)
+	server, err := s.databaseServerRepo.Get(r.Context(), req.ID)
 	if err != nil {
 		Error(w, http.StatusInternalServerError, "%v", err)
 		return
@@ -76,7 +76,7 @@ func (s *DatabaseServerService) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err = s.databaseServerRepo.Update(req); err != nil {
+	if err = s.databaseServerRepo.Update(r.Context(), req); err != nil {
 		Error(w, http.StatusInternalServerError, "%v", err)
 		return
 	}
@@ -121,7 +121,7 @@ func (s *DatabaseServerService) Sync(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err = s.databaseServerRepo.Sync(req.ID); err != nil {
+	if err = s.databaseServerRepo.Sync(r.Context(), req.ID); err != nil {
 		Error(w, http.StatusInternalServerError, "%v", err)
 		return
 	}

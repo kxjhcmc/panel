@@ -1,13 +1,13 @@
 package data
 
 import (
-	"context"
+	"cmp"
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -18,22 +18,20 @@ import (
 	"gorm.io/gorm"
 
 	"github.com/acepanel/panel/v3/internal/biz"
-	"github.com/acepanel/panel/v3/internal/http/request"
+	"github.com/acepanel/panel/v3/internal/request"
 	"github.com/acepanel/panel/v3/pkg/systemctl"
 	"github.com/acepanel/panel/v3/pkg/types"
 )
 
 type projectRepo struct {
-	t   *gotext.Locale
-	db  *gorm.DB
-	log *slog.Logger
+	t  *gotext.Locale
+	db *gorm.DB
 }
 
-func NewProjectRepo(t *gotext.Locale, db *gorm.DB, log *slog.Logger) biz.ProjectRepo {
+func NewProjectRepo(db *gorm.DB, t *gotext.Locale) biz.ProjectRepo {
 	return &projectRepo{
-		t:   t,
-		db:  db,
-		log: log,
+		t:  t,
+		db: db,
 	}
 }
 
@@ -45,7 +43,7 @@ func (r *projectRepo) Count() (int64, error) {
 	return count, nil
 }
 
-func (r *projectRepo) List(typ types.ProjectType, page, limit uint) ([]*types.ProjectDetail, int64, error) {
+func (r *projectRepo) List(typ types.ProjectType, page, limit uint) ([]*biz.Project, int64, error) {
 	var projects []*biz.Project
 	var total int64
 
@@ -61,47 +59,28 @@ func (r *projectRepo) List(typ types.ProjectType, page, limit uint) ([]*types.Pr
 		return nil, 0, err
 	}
 
-	details := lo.Map(projects, func(p *biz.Project, _ int) *types.ProjectDetail {
-		detail, err := r.parseProjectDetail(p)
-		if err != nil {
-			// 如果解析失败，返回基本信息
-			return &types.ProjectDetail{
-				ID:   p.ID,
-				Name: p.Name,
-				Type: p.Type,
-			}
-		}
-		return detail
-	})
-
-	return details, total, nil
+	return projects, total, nil
 }
 
-func (r *projectRepo) Get(id uint) (*types.ProjectDetail, error) {
+func (r *projectRepo) GetEntity(id uint) (*biz.Project, error) {
 	project := new(biz.Project)
 	if err := r.db.First(project, id).Error; err != nil {
 		return nil, err
 	}
-	return r.parseProjectDetail(project)
+	return project, nil
 }
 
-func (r *projectRepo) Create(ctx context.Context, req *request.ProjectCreate) (*types.ProjectDetail, error) {
-	// 检查项目名是否已存在
+// NameExists 检查项目名是否已存在
+func (r *projectRepo) NameExists(name string) (bool, error) {
 	var count int64
-	if err := r.db.Model(&biz.Project{}).Where("name = ?", req.Name).Count(&count).Error; err != nil {
-		return nil, err
+	if err := r.db.Model(&biz.Project{}).Where("name = ?", name).Count(&count).Error; err != nil {
+		return false, err
 	}
-	if count > 0 {
-		return nil, errors.New(r.t.Get("project name already exists"))
-	}
+	return count > 0, nil
+}
 
-	project := &biz.Project{
-		Name: req.Name,
-		Type: req.Type,
-		Path: lo.If(!strings.HasPrefix(req.RootDir, "/"), filepath.Join("/", req.RootDir)).Else(req.RootDir),
-	}
-
-	err := r.db.Transaction(func(tx *gorm.DB) error {
+func (r *projectRepo) Create(project *biz.Project, req *request.ProjectCreate) error {
+	return r.db.Transaction(func(tx *gorm.DB) error {
 		// 创建数据库记录
 		if err := tx.Create(project).Error; err != nil {
 			return err
@@ -119,73 +98,42 @@ func (r *projectRepo) Create(ctx context.Context, req *request.ProjectCreate) (*
 
 		return nil
 	})
-	if err != nil {
-		return nil, err
-	}
-
-	// 记录日志
-	r.log.Info("project created", slog.String("type", biz.OperationTypeProject), slog.Uint64("operator_id", getOperatorID(ctx)), slog.String("name", req.Name), slog.String("project_type", string(req.Type)))
-
-	return r.parseProjectDetail(project)
 }
 
-func (r *projectRepo) Update(ctx context.Context, req *request.ProjectUpdate) error {
-	project := new(biz.Project)
-	if err := r.db.First(project, req.ID).Error; err != nil {
-		return err
-	}
-
-	// 如果名称变更，需要重命名 unit 文件
-	if req.Name != project.Name {
-		oldPath := r.unitFilePath(project.Name)
-		newPath := r.unitFilePath(req.Name)
-		if err := os.Rename(oldPath, newPath); err != nil && !os.IsNotExist(err) {
-			return fmt.Errorf("%s: %w", r.t.Get("failed to rename systemd config"), err)
-		}
-		project.Name = req.Name
-	}
-
-	project.Path = lo.If(!strings.HasPrefix(req.RootDir, "/"), filepath.Join("/", req.RootDir)).Else(req.RootDir)
-	if err := r.db.Save(project).Error; err != nil {
-		return err
-	}
-
-	// 记录日志
-	r.log.Info("project updated", slog.String("type", biz.OperationTypeProject), slog.Uint64("operator_id", getOperatorID(ctx)), slog.Uint64("id", uint64(req.ID)), slog.String("name", project.Name))
-
-	// 更新 systemd unit 文件
-	return r.updateUnitFile(project.Name, req)
+func (r *projectRepo) Save(project *biz.Project) error {
+	return r.db.Save(project).Error
 }
 
-func (r *projectRepo) Delete(ctx context.Context, id uint) error {
-	project := new(biz.Project)
-	if err := r.db.First(project, id).Error; err != nil {
-		return err
+// RenameUnitFile 重命名 systemd unit 文件
+func (r *projectRepo) RenameUnitFile(old, new string) error {
+	oldPath := r.unitFilePath(old)
+	newPath := r.unitFilePath(new)
+	if err := os.Rename(oldPath, newPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("%s: %w", r.t.Get("failed to rename systemd config"), err)
 	}
+	return nil
+}
 
-	// 删除 systemd unit 文件
-	unitPath := r.unitFilePath(project.Name)
+// RemoveUnitFile 删除 systemd unit 文件
+func (r *projectRepo) RemoveUnitFile(name string) error {
+	unitPath := r.unitFilePath(name)
 	if err := os.Remove(unitPath); err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("%s: %w", r.t.Get("failed to delete systemd config"), err)
 	}
-
-	if err := r.db.Delete(project).Error; err != nil {
-		return err
-	}
-
-	// 记录日志
-	r.log.Info("project deleted", slog.String("type", biz.OperationTypeProject), slog.Uint64("operator_id", getOperatorID(ctx)), slog.Uint64("id", uint64(id)), slog.String("name", project.Name))
-
 	return nil
+}
+
+func (r *projectRepo) Delete(project *biz.Project) error {
+	return r.db.Delete(project).Error
 }
 
 // unitFilePath 返回 systemd unit 文件路径
 func (r *projectRepo) unitFilePath(name string) string {
-	return filepath.Join("/etc/systemd/system", fmt.Sprintf("%s.service", name))
+	return filepath.Join("/etc/systemd/system", name+".service")
 }
 
-// parseProjectDetail 从数据库记录和 systemd unit 文件解析项目详情
-func (r *projectRepo) parseProjectDetail(project *biz.Project) (*types.ProjectDetail, error) {
+// ParseDetail 从数据库记录和 systemd unit 文件解析项目详情
+func (r *projectRepo) ParseDetail(project *biz.Project) (*types.ProjectDetail, error) {
 	detail := &types.ProjectDetail{
 		ID:      project.ID,
 		Name:    project.Name,
@@ -317,13 +265,27 @@ func (r *projectRepo) parseServiceSection(detail *types.ProjectDetail, opt *unit
 	}
 }
 
-// parseEnvironment 解析环境变量
+// parseEnvironment 解析环境变量，兼容 "KEY=VALUE" 和 KEY="VALUE" 两种引号格式
 func (r *projectRepo) parseEnvironment(value string) *types.KV {
-	parts := strings.SplitN(value, "=", 2)
+	parts := strings.SplitN(r.unquoteEnvironment(value), "=", 2)
 	if len(parts) != 2 {
 		return nil
 	}
-	return &types.KV{Key: parts[0], Value: parts[1]}
+	return &types.KV{Key: parts[0], Value: r.unquoteEnvironment(parts[1])}
+}
+
+// quoteEnvironment 序列化环境变量，加双引号以支持值中包含空格
+func (r *projectRepo) quoteEnvironment(env types.KV) string {
+	value := strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(env.Value)
+	return fmt.Sprintf(`"%s=%s"`, env.Key, value)
+}
+
+// unquoteEnvironment 去除首尾双引号并反转义
+func (r *projectRepo) unquoteEnvironment(s string) string {
+	if len(s) >= 2 && strings.HasPrefix(s, `"`) && strings.HasSuffix(s, `"`) {
+		s = strings.NewReplacer(`\\`, `\`, `\"`, `"`).Replace(s[1 : len(s)-1])
+	}
+	return s
 }
 
 // parseBytes 解析字节大小 (如 512M, 1G)
@@ -371,6 +333,60 @@ func (r *projectRepo) parsePercent(value string) (float64, error) {
 	return strconv.ParseFloat(value, 64)
 }
 
+// managedUnitKeys 面板托管的 unit 配置项，更新时整体重写，文件中的其余配置项原样保留
+var managedUnitKeys = map[string]map[string]bool{
+	"Unit": {
+		"Description": true,
+		"Requires":    true,
+		"Wants":       true,
+		"After":       true,
+		"Before":      true,
+	},
+	"Service": {
+		"Type":             true,
+		"WorkingDirectory": true,
+		"ExecStartPre":     true,
+		"ExecStart":        true,
+		"ExecStartPost":    true,
+		"ExecStop":         true,
+		"ExecReload":       true,
+		"User":             true,
+		"Restart":          true,
+		"RestartSec":       true,
+		"StartLimitBurst":  true,
+		"TimeoutStartSec":  true,
+		"TimeoutStopSec":   true,
+		"Environment":      true,
+		"StandardOutput":   true,
+		"StandardError":    true,
+		"MemoryLimit":      true,
+		"CPUQuota":         true,
+		"NoNewPrivileges":  true,
+		"ProtectTmp":       true,
+		"ProtectHome":      true,
+		"ProtectSystem":    true,
+		"ReadWritePaths":   true,
+		"ReadOnlyPaths":    true,
+	},
+	"Install": {
+		"WantedBy": true,
+	},
+}
+
+// sectionOrder 返回 unit 文件段落的排序权重
+func sectionOrder(section string) int {
+	switch section {
+	case "Unit":
+		return 0
+	case "Service":
+		return 1
+	case "Install":
+		return 2
+	default:
+		return 3
+	}
+}
+
 // generateUnitFile 生成 systemd unit 文件
 func (r *projectRepo) generateUnitFile(req *request.ProjectCreate) error {
 	req.RootDir = lo.If(!strings.HasPrefix(req.RootDir, "/"), filepath.Join("/", req.RootDir)).Else(req.RootDir)
@@ -397,10 +413,14 @@ func (r *projectRepo) generateUnitFile(req *request.ProjectCreate) error {
 	} else {
 		options = append(options, unit.NewUnitOption("Service", "Restart", "on-failure"))
 	}
+	if req.Type == types.ProjectTypeJava {
+		// JVM 捕获 SIGTERM 后主动以 143 (128+15) 退出，需视为正常退出
+		options = append(options, unit.NewUnitOption("Service", "SuccessExitStatus", "143"))
+	}
 
 	// 环境变量
 	for _, env := range req.Environments {
-		options = append(options, unit.NewUnitOption("Service", "Environment", fmt.Sprintf("%s=%s", env.Key, env.Value)))
+		options = append(options, unit.NewUnitOption("Service", "Environment", r.quoteEnvironment(env)))
 	}
 
 	// [Install] section
@@ -421,8 +441,8 @@ func (r *projectRepo) generateUnitFile(req *request.ProjectCreate) error {
 	return systemctl.DaemonReload()
 }
 
-// updateUnitFile 更新 systemd unit 文件
-func (r *projectRepo) updateUnitFile(name string, req *request.ProjectUpdate) error {
+// UpdateUnitFile 更新 systemd unit 文件
+func (r *projectRepo) UpdateUnitFile(name string, req *request.ProjectUpdate) error {
 	req.RootDir = lo.If(!strings.HasPrefix(req.RootDir, "/"), filepath.Join("/", req.RootDir)).Else(req.RootDir)
 	req.WorkingDir = lo.If(req.WorkingDir != "", req.WorkingDir).Else(req.RootDir)
 	req.WorkingDir = lo.If(!strings.HasPrefix(req.WorkingDir, "/"), filepath.Join("/", req.WorkingDir)).Else(req.WorkingDir)
@@ -491,7 +511,7 @@ func (r *projectRepo) updateUnitFile(name string, req *request.ProjectUpdate) er
 
 	// 环境变量
 	for _, env := range req.Environments {
-		options = append(options, unit.NewUnitOption("Service", "Environment", fmt.Sprintf("%s=%s", env.Key, env.Value)))
+		options = append(options, unit.NewUnitOption("Service", "Environment", r.quoteEnvironment(env)))
 	}
 
 	// 输出
@@ -533,8 +553,26 @@ func (r *projectRepo) updateUnitFile(name string, req *request.ProjectUpdate) er
 	// [Install] section
 	options = append(options, unit.NewUnitOption("Install", "WantedBy", "multi-user.target"))
 
-	// 写入文件
+	// 保留现有文件中面板未托管的配置项（如 SuccessExitStatus、LimitNOFILE 等），解析失败时直接重写
 	unitPath := r.unitFilePath(name)
+	if file, err := os.Open(unitPath); err == nil {
+		existing, errParse := unit.DeserializeOptions(file)
+		_ = file.Close()
+		if errParse == nil {
+			for _, opt := range existing {
+				if !managedUnitKeys[opt.Section][opt.Name] {
+					options = append(options, opt)
+				}
+			}
+		}
+	}
+
+	// 按段落分组排序，避免序列化时段落交错
+	slices.SortStableFunc(options, func(a, b *unit.UnitOption) int {
+		return cmp.Compare(sectionOrder(a.Section), sectionOrder(b.Section))
+	})
+
+	// 写入文件
 	reader := unit.Serialize(options)
 	content, err := io.ReadAll(reader)
 	if err != nil {

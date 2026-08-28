@@ -12,16 +12,17 @@ import (
 
 	"github.com/hashicorp/go-version"
 	"github.com/leonelquinteros/gotext"
-	"github.com/libtnb/chix"
+	"github.com/libtnb/chix/v2"
 	"github.com/libtnb/utils/collect"
 	"github.com/samber/lo"
+	lop "github.com/samber/lo/parallel"
 	"github.com/shirou/gopsutil/v4/disk"
 	"github.com/shirou/gopsutil/v4/host"
 	"github.com/spf13/cast"
 
 	"github.com/acepanel/panel/v3/internal/app"
 	"github.com/acepanel/panel/v3/internal/biz"
-	"github.com/acepanel/panel/v3/internal/http/request"
+	"github.com/acepanel/panel/v3/internal/request"
 	"github.com/acepanel/panel/v3/pkg/api"
 	"github.com/acepanel/panel/v3/pkg/config"
 	"github.com/acepanel/panel/v3/pkg/db"
@@ -34,33 +35,33 @@ type HomeService struct {
 	t                  *gotext.Locale
 	api                *api.API
 	conf               *config.Config
-	taskRepo           biz.TaskRepo
-	websiteRepo        biz.WebsiteRepo
-	projectRepo        biz.ProjectRepo
-	appRepo            biz.AppRepo
-	environmentRepo    biz.EnvironmentRepo
-	settingRepo        biz.SettingRepo
-	databaseServerRepo biz.DatabaseServerRepo
-	cronRepo           biz.CronRepo
-	backupRepo         biz.BackupRepo
-	containerRepo      biz.ContainerRepo
+	taskRepo           *biz.TaskUsecase
+	websiteRepo        *biz.WebsiteUsecase
+	projectRepo        *biz.ProjectUsecase
+	appRepo            *biz.AppUsecase
+	environmentRepo    *biz.EnvironmentUsecase
+	settingRepo        *biz.SettingUsecase
+	databaseServerRepo *biz.DatabaseServerUsecase
+	cronRepo           *biz.CronUsecase
+	backupRepo         *biz.BackupUsecase
+	containerRepo      *biz.ContainerUsecase
 }
 
-func NewHomeService(t *gotext.Locale, conf *config.Config, task biz.TaskRepo, website biz.WebsiteRepo, project biz.ProjectRepo, appRepo biz.AppRepo, environment biz.EnvironmentRepo, setting biz.SettingRepo, databaseServer biz.DatabaseServerRepo, cron biz.CronRepo, backupRepo biz.BackupRepo, container biz.ContainerRepo) *HomeService {
+func NewHomeService(appUsecase *biz.AppUsecase, backupUsecase *biz.BackupUsecase, containerUsecase *biz.ContainerUsecase, cronUsecase *biz.CronUsecase, databaseServerUsecase *biz.DatabaseServerUsecase, environmentUsecase *biz.EnvironmentUsecase, projectUsecase *biz.ProjectUsecase, settingUsecase *biz.SettingUsecase, taskUsecase *biz.TaskUsecase, websiteUsecase *biz.WebsiteUsecase, conf *config.Config, t *gotext.Locale) *HomeService {
 	return &HomeService{
 		t:                  t,
 		api:                api.NewAPI(app.Version, app.Locale),
 		conf:               conf,
-		taskRepo:           task,
-		websiteRepo:        website,
-		projectRepo:        project,
-		appRepo:            appRepo,
-		environmentRepo:    environment,
-		settingRepo:        setting,
-		databaseServerRepo: databaseServer,
-		cronRepo:           cron,
-		backupRepo:         backupRepo,
-		containerRepo:      container,
+		taskRepo:           taskUsecase,
+		websiteRepo:        websiteUsecase,
+		projectRepo:        projectUsecase,
+		appRepo:            appUsecase,
+		environmentRepo:    environmentUsecase,
+		settingRepo:        settingUsecase,
+		databaseServerRepo: databaseServerUsecase,
+		cronRepo:           cronUsecase,
+		backupRepo:         backupUsecase,
+		containerRepo:      containerUsecase,
 	}
 }
 
@@ -179,7 +180,7 @@ func (s *HomeService) CountInfo(w http.ResponseWriter, r *http.Request) {
 	var databaseCount int
 	if mysqlInstalled {
 		rootPassword, _ := s.settingRepo.Get(biz.SettingKeyMySQLRootPassword)
-		mysql, err := db.NewMySQL("root", rootPassword, "/tmp/mysql.sock", "unix")
+		mysql, err := db.NewMySQL(r.Context(), "root", rootPassword, db.MySQLSocket(app.Root), "unix")
 		if err == nil {
 			defer mysql.Close()
 			databases, err := mysql.Databases()
@@ -189,8 +190,8 @@ func (s *HomeService) CountInfo(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if postgresqlInstalled {
-		if server, err := s.databaseServerRepo.GetByName("local_postgresql"); err == nil {
-			if postgres, err := db.NewPostgres(server.Username, server.Password, server.Host, server.Port); err == nil {
+		if server, err := s.databaseServerRepo.GetByName(r.Context(), "local_postgresql"); err == nil {
+			if postgres, err := db.NewPostgres(r.Context(), server.Username, server.Password, server.Host, server.Port); err == nil {
 				defer postgres.Close()
 				if databases, err := postgres.Databases(); err == nil {
 					databaseCount += len(databases)
@@ -229,35 +230,36 @@ func (s *HomeService) InstalledEnvironment(w http.ResponseWriter, r *http.Reques
 	postgresqlInstalled, _ := s.appRepo.IsInstalled("slug = ?", "postgresql")
 	clickhouseInstalled, _ := s.appRepo.IsInstalled("slug = ?", "clickhouse")
 	rsyncInstalled, _ := s.appRepo.IsInstalled("slug = ?", "rsync")
+	allEnvs := s.environmentRepo.All()
 
 	// Go 版本
-	goData := lo.Map(s.environmentRepo.InstalledSlugs("go"), func(slug string, _ int) types.LV {
-		return types.LV{Value: slug, Label: fmt.Sprintf("Go %s", s.environmentRepo.InstalledVersion("go", slug))}
+	goData := lop.Map(s.installedSlugs(allEnvs, "go"), func(slug string, _ int) types.LV {
+		return types.LV{Value: slug, Label: "Go " + s.environmentRepo.InstalledVersion("go", slug)}
 	})
 
 	// Java 版本
-	javaData := lo.Map(s.environmentRepo.InstalledSlugs("java"), func(slug string, _ int) types.LV {
-		return types.LV{Value: slug, Label: fmt.Sprintf("Java %s", s.environmentRepo.InstalledVersion("java", slug))}
+	javaData := lop.Map(s.installedSlugs(allEnvs, "java"), func(slug string, _ int) types.LV {
+		return types.LV{Value: slug, Label: "Java " + s.environmentRepo.InstalledVersion("java", slug)}
 	})
 
 	// Node.js 版本
-	nodejsData := lo.Map(s.environmentRepo.InstalledSlugs("nodejs"), func(slug string, _ int) types.LV {
-		return types.LV{Value: slug, Label: fmt.Sprintf("Node.js %s", s.environmentRepo.InstalledVersion("nodejs", slug))}
+	nodejsData := lop.Map(s.installedSlugs(allEnvs, "nodejs"), func(slug string, _ int) types.LV {
+		return types.LV{Value: slug, Label: "Node.js " + s.environmentRepo.InstalledVersion("nodejs", slug)}
 	})
 
 	// PHP 版本
-	phpData := lo.Map(s.environmentRepo.InstalledSlugs("php"), func(slug string, _ int) types.LVInt {
-		return types.LVInt{Value: cast.ToInt(slug), Label: fmt.Sprintf("PHP %s", s.environmentRepo.InstalledVersion("php", slug))}
+	phpData := lop.Map(s.installedSlugs(allEnvs, "php"), func(slug string, _ int) types.LVInt {
+		return types.LVInt{Value: cast.ToInt(slug), Label: "PHP " + s.environmentRepo.InstalledVersion("php", slug)}
 	})
 
 	// Python 版本
-	pythonData := lo.Map(s.environmentRepo.InstalledSlugs("python"), func(slug string, _ int) types.LV {
-		return types.LV{Value: slug, Label: fmt.Sprintf("Python %s", s.environmentRepo.InstalledVersion("python", slug))}
+	pythonData := lop.Map(s.installedSlugs(allEnvs, "python"), func(slug string, _ int) types.LV {
+		return types.LV{Value: slug, Label: "Python " + s.environmentRepo.InstalledVersion("python", slug)}
 	})
 
 	// .NET 版本
-	dotnetData := lo.Map(s.environmentRepo.InstalledSlugs("dotnet"), func(slug string, _ int) types.LV {
-		return types.LV{Value: slug, Label: fmt.Sprintf(".NET %s", s.environmentRepo.InstalledVersion("dotnet", slug))}
+	dotnetData := lop.Map(s.installedSlugs(allEnvs, "dotnet"), func(slug string, _ int) types.LV {
+		return types.LV{Value: slug, Label: ".NET " + s.environmentRepo.InstalledVersion("dotnet", slug)}
 	})
 
 	// 数据库
@@ -388,14 +390,12 @@ func (s *HomeService) Update(w http.ResponseWriter, r *http.Request) {
 	url := fmt.Sprintf("https://%s%s", s.conf.App.DownloadEndpoint, download.URL)
 	checksum := fmt.Sprintf("https://%s%s", s.conf.App.DownloadEndpoint, download.Checksum)
 
-	app.Status = app.StatusUpgrade
-	if err = s.backupRepo.UpdatePanel(panel.Version, url, checksum); err != nil {
-		app.Status = app.StatusFailed
+	// UpdatePanel 内部管理升级锁与 app.Status（失败自动恢复 Normal，不锁死 UI）
+	if err = s.backupRepo.UpdatePanel(panel.Version, url, checksum, nil); err != nil {
 		Error(w, http.StatusInternalServerError, "%v", err)
 		return
 	}
 
-	app.Status = app.StatusNormal
 	Success(w, nil)
 	tools.RestartPanel()
 }
@@ -523,4 +523,21 @@ func (s *HomeService) Goroutines(w http.ResponseWriter, r *http.Request) {
 	})
 
 	Success(w, goroutines)
+}
+
+// Health 返回当前所有健康问题，供前端全局横幅展示
+func (s *HomeService) Health(w http.ResponseWriter, r *http.Request) {
+	Success(w, app.Health.Snapshot())
+}
+
+// installedSlugs 从已加载的环境目录中筛出指定类型且已安装的 slug
+func (s *HomeService) installedSlugs(all api.Environments, typ string) []string {
+	slugs := make([]string, 0)
+	for _, env := range all {
+		if env.Type == typ && s.environmentRepo.IsInstalled(typ, env.Slug) {
+			slugs = append(slugs, env.Slug)
+		}
+	}
+
+	return slugs
 }

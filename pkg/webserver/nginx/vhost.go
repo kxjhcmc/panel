@@ -2,10 +2,12 @@ package nginx
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/samber/lo"
@@ -39,7 +41,7 @@ type baseVhost struct {
 // newBaseVhost 创建基础虚拟主机实例
 func newBaseVhost(configDir string) (*baseVhost, error) {
 	if configDir == "" {
-		return nil, fmt.Errorf("config directory is required")
+		return nil, errors.New("config directory is required")
 	}
 
 	v := &baseVhost{
@@ -485,7 +487,7 @@ func (v *baseVhost) SSLConfig() *types.SSLConfig {
 
 func (v *baseVhost) SetSSLConfig(cfg *types.SSLConfig) error {
 	if cfg == nil {
-		return fmt.Errorf("SSL config cannot be nil")
+		return errors.New("SSL config cannot be nil")
 	}
 
 	if err := v.ClearSSL(); err != nil {
@@ -507,14 +509,6 @@ func (v *baseVhost) SetSSLConfig(cfg *types.SSLConfig) error {
 		{
 			Name:       "ssl_protocols",
 			Parameters: v.parser.slices2Parameters(cfg.Protocols),
-		},
-		{
-			Name:       "ssl_prefer_server_ciphers",
-			Parameters: []config.Parameter{{Value: "on"}},
-		},
-		{
-			Name:       "ssl_early_data",
-			Parameters: []config.Parameter{{Value: "on"}},
 		},
 	}, "root")
 	if err != nil {
@@ -636,13 +630,13 @@ func (v *baseVhost) SetRateLimit(limit *types.RateLimit) error {
 	if limit.PerServer > 0 {
 		directives = append(directives, &config.Directive{
 			Name:       "limit_conn",
-			Parameters: []config.Parameter{{Value: "perserver"}, {Value: fmt.Sprintf("%d", limit.PerServer)}},
+			Parameters: []config.Parameter{{Value: "perserver"}, {Value: strconv.Itoa(limit.PerServer)}},
 		})
 	}
 	if limit.PerIP > 0 {
 		directives = append(directives, &config.Directive{
 			Name:       "limit_conn",
-			Parameters: []config.Parameter{{Value: "perip"}, {Value: fmt.Sprintf("%d", limit.PerIP)}},
+			Parameters: []config.Parameter{{Value: "perip"}, {Value: strconv.Itoa(limit.PerIP)}},
 		})
 	}
 	if len(directives) > 0 {
@@ -660,47 +654,46 @@ func (v *baseVhost) ClearRateLimit() error {
 	return nil
 }
 
-func (v *baseVhost) BasicAuth() map[string]string {
-	// auth_basic "realm"
-	realmDir, err := v.parser.FindOne("server.auth_basic")
-	if err != nil {
-		return nil
+func (v *baseVhost) BasicAuth() []types.BasicAuth {
+	// 新版配置：解析 shared 片段中的 map
+	if content := v.Config(AuthConfName, types.ScopeShared); content != "" {
+		return parseAuthMaps(content)
 	}
 
-	// auth_basic_user_file /path/to/file
+	// 兼容旧版 server 级整站配置
 	fileDir, err := v.parser.FindOne("server.auth_basic_user_file")
-	if err != nil {
+	if err != nil || len(fileDir.GetParameters()) == 0 {
 		return nil
 	}
-
-	realm := ""
-	if len(realmDir.GetParameters()) > 0 {
-		realm = realmDir.GetParameters()[0].GetValue()
+	file := fileDir.GetParameters()[0].GetValue()
+	if file == "" || strings.HasPrefix(file, "$") {
+		return nil
 	}
-
-	file := ""
-	if len(fileDir.GetParameters()) > 0 {
-		file = fileDir.GetParameters()[0].GetValue()
-	}
-
-	return map[string]string{
-		"realm":     realm,
-		"user_file": file,
-	}
+	return []types.BasicAuth{{Path: "/", UserFile: file}}
 }
 
-func (v *baseVhost) SetBasicAuth(auth map[string]string) error {
-	_ = v.parser.Clear("server.auth_basic")
-	_ = v.parser.Clear("server.auth_basic_user_file")
+func (v *baseVhost) SetBasicAuth(auths []types.BasicAuth) error {
+	if err := v.ClearBasicAuth(); err != nil {
+		return err
+	}
+	if len(auths) == 0 {
+		return nil
+	}
 
+	// map 变量在 http 上下文按 $uri 求值，server 级引用后继承入所有 location（含 PHP、反向代理）
+	if err := v.SetConfig(AuthConfName, types.ScopeShared, generateAuthMaps(v.siteName, auths)); err != nil {
+		return err
+	}
+
+	realmVar, fileVar := authVarNames(v.siteName)
 	return v.parser.Set("server", []*config.Directive{
 		{
 			Name:       "auth_basic",
-			Parameters: []config.Parameter{{Value: lo.If(auth["realm"] != "", auth["realm"]).Else("Restricted")}},
+			Parameters: []config.Parameter{{Value: realmVar}},
 		},
 		{
 			Name:       "auth_basic_user_file",
-			Parameters: []config.Parameter{{Value: auth["user_file"]}},
+			Parameters: []config.Parameter{{Value: fileVar}},
 		},
 	})
 }
@@ -708,7 +701,7 @@ func (v *baseVhost) SetBasicAuth(auth map[string]string) error {
 func (v *baseVhost) ClearBasicAuth() error {
 	_ = v.parser.Clear("server.auth_basic")
 	_ = v.parser.Clear("server.auth_basic_user_file")
-	return nil
+	return v.RemoveConfig(AuthConfName, types.ScopeShared)
 }
 
 func (v *baseVhost) RealIP() *types.RealIP {

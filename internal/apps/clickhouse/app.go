@@ -2,6 +2,7 @@ package clickhouse
 
 import (
 	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"strings"
@@ -9,11 +10,12 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"github.com/leonelquinteros/gotext"
-	"github.com/spf13/cast"
 	"go.yaml.in/yaml/v4"
 	"resty.dev/v3"
 
 	"github.com/acepanel/panel/v3/internal/app"
+	"github.com/acepanel/panel/v3/internal/apps/common"
+	"github.com/acepanel/panel/v3/internal/apps/confval"
 	"github.com/acepanel/panel/v3/internal/biz"
 	"github.com/acepanel/panel/v3/internal/service"
 	"github.com/acepanel/panel/v3/pkg/io"
@@ -27,11 +29,11 @@ type App struct {
 	databaseServerRepo biz.DatabaseServerRepo
 }
 
-func NewApp(t *gotext.Locale, setting biz.SettingRepo, databaseServer biz.DatabaseServerRepo) *App {
+func NewApp(t *gotext.Locale, databaseServerRepo biz.DatabaseServerRepo, settingRepo biz.SettingRepo) *App {
 	return &App{
 		t:                  t,
-		settingRepo:        setting,
-		databaseServerRepo: databaseServer,
+		settingRepo:        settingRepo,
+		databaseServerRepo: databaseServerRepo,
 	}
 }
 
@@ -106,29 +108,12 @@ func (s *App) Load(w http.ResponseWriter, r *http.Request) {
 
 // GetConfig 获取配置
 func (s *App) GetConfig(w http.ResponseWriter, r *http.Request) {
-	conf, _ := io.Read(s.configPath())
-	service.Success(w, conf)
+	common.ServeConfig(w, s.configPath())
 }
 
 // UpdateConfig 更新配置
 func (s *App) UpdateConfig(w http.ResponseWriter, r *http.Request) {
-	req, err := service.Bind[UpdateConfig](r)
-	if err != nil {
-		service.Error(w, http.StatusUnprocessableEntity, "%v", err)
-		return
-	}
-
-	if err = io.Write(s.configPath(), req.Config, 0644); err != nil {
-		service.Error(w, http.StatusInternalServerError, "%v", err)
-		return
-	}
-
-	if err = systemctl.Restart("clickhouse-server"); err != nil {
-		service.Error(w, http.StatusInternalServerError, "%v", err)
-		return
-	}
-
-	service.Success(w, nil)
+	common.SaveConfig(w, r, s.configPath(), "clickhouse-server")
 }
 
 // GetConfigTune 获取配置调整参数
@@ -141,14 +126,14 @@ func (s *App) GetConfigTune(w http.ResponseWriter, r *http.Request) {
 	}
 
 	tune := ConfigTune{
-		ListenHost:     s.getYAMLValue(cfg, "listen_host"),
-		HTTPPort:       s.getYAMLValue(cfg, "http_port"),
-		TCPPort:        s.getYAMLValue(cfg, "tcp_port"),
-		MaxMemoryUsage: s.getYAMLValue(cfg, "max_memory_usage"),
-		MaxThreads:     s.getYAMLValue(cfg, "max_threads"),
-		Path:           s.getYAMLValue(cfg, "path"),
-		TmpPath:        s.getYAMLValue(cfg, "tmp_path"),
-		LogLevel:       s.getYAMLValue(cfg, "logger.level"),
+		ListenHost:     confval.GetYAML(cfg, "listen_host"),
+		HTTPPort:       confval.GetYAML(cfg, "http_port"),
+		TCPPort:        confval.GetYAML(cfg, "tcp_port"),
+		MaxMemoryUsage: confval.GetYAML(cfg, "max_memory_usage"),
+		MaxThreads:     confval.GetYAML(cfg, "max_threads"),
+		Path:           confval.GetYAML(cfg, "path"),
+		TmpPath:        confval.GetYAML(cfg, "tmp_path"),
+		LogLevel:       confval.GetYAML(cfg, "logger.level"),
 	}
 
 	service.Success(w, tune)
@@ -218,7 +203,7 @@ func (s *App) SetDefaultPassword(w http.ResponseWriter, r *http.Request) {
 
 	// 计算 SHA256 哈希
 	hash := sha256.Sum256([]byte(req.Password))
-	hexHash := fmt.Sprintf("%x", hash)
+	hexHash := hex.EncodeToString(hash[:])
 
 	// 读取 users.d/default.yaml 并更新密码
 	raw, _ := io.Read(s.usersConfigPath())
@@ -262,12 +247,12 @@ func (s *App) SetDefaultPassword(w http.ResponseWriter, r *http.Request) {
 
 // configPath 返回主配置文件路径
 func (s *App) configPath() string {
-	return fmt.Sprintf("%s/server/clickhouse/config/config.yaml", app.Root)
+	return app.Root + "/server/clickhouse/config/config.yaml"
 }
 
 // usersConfigPath 返回用户密码配置文件路径（users.d/ 由 ConfigProcessor 自动合并到 users.yaml）
 func (s *App) usersConfigPath() string {
-	return fmt.Sprintf("%s/server/clickhouse/config/users.d/default.yaml", app.Root)
+	return app.Root + "/server/clickhouse/config/users.d/default.yaml"
 }
 
 // getPort 从配置中获取 HTTP 端口
@@ -276,33 +261,11 @@ func (s *App) getPort() string {
 	var cfg map[string]any
 	_ = yaml.Unmarshal([]byte(raw), &cfg)
 	if cfg != nil {
-		if v := s.getYAMLValue(cfg, "http_port"); v != "" {
+		if v := confval.GetYAML(cfg, "http_port"); v != "" {
 			return v
 		}
 	}
 	return "8123"
-}
-
-// getYAMLValue 获取 YAML 值，支持嵌套键
-func (s *App) getYAMLValue(cfg map[string]any, key string) string {
-	// 先尝试平铺键
-	if val, ok := cfg[key]; ok {
-		return cast.ToString(val)
-	}
-	// 回退到嵌套键
-	parts := strings.SplitN(key, ".", 2)
-	val, ok := cfg[parts[0]]
-	if !ok {
-		return ""
-	}
-	if len(parts) == 1 {
-		return cast.ToString(val)
-	}
-	nested, ok := val.(map[string]any)
-	if !ok {
-		return ""
-	}
-	return s.getYAMLValue(nested, parts[1])
 }
 
 // setYAMLValue 设置平铺 YAML 值

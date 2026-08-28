@@ -13,13 +13,13 @@ import (
 	"github.com/go-webauthn/webauthn/protocol"
 	"github.com/go-webauthn/webauthn/webauthn"
 	"github.com/leonelquinteros/gotext"
-	"github.com/libtnb/chix"
+	"github.com/libtnb/chix/v2"
 	"github.com/libtnb/sessions"
 	"github.com/spf13/cast"
 
 	"github.com/acepanel/panel/v3/internal/app"
 	"github.com/acepanel/panel/v3/internal/biz"
-	"github.com/acepanel/panel/v3/internal/http/request"
+	"github.com/acepanel/panel/v3/internal/request"
 	"github.com/acepanel/panel/v3/pkg/config"
 	"github.com/acepanel/panel/v3/pkg/passkey"
 )
@@ -28,19 +28,21 @@ type UserPasskeyService struct {
 	t               *gotext.Locale
 	conf            *config.Config
 	session         *sessions.Manager
-	userPasskeyRepo biz.UserPasskeyRepo
-	userRepo        biz.UserRepo
+	userPasskeyRepo *biz.UserPasskeyUsecase
+	userRepo        *biz.UserUsecase
+	notifyRepo      *biz.NotifyUsecase
 }
 
-func NewUserPasskeyService(t *gotext.Locale, conf *config.Config, session *sessions.Manager, userPasskeyRepo biz.UserPasskeyRepo, userRepo biz.UserRepo) *UserPasskeyService {
+func NewUserPasskeyService(notifyUsecase *biz.NotifyUsecase, userPasskeyUsecase *biz.UserPasskeyUsecase, userUsecase *biz.UserUsecase, conf *config.Config, t *gotext.Locale, session *sessions.Manager) *UserPasskeyService {
 	// 注册 webauthn.SessionData 类型，否则 gob 无法序列化
 	gob.Register(webauthn.SessionData{})
 	return &UserPasskeyService{
 		t:               t,
 		conf:            conf,
 		session:         session,
-		userPasskeyRepo: userPasskeyRepo,
-		userRepo:        userRepo,
+		userPasskeyRepo: userPasskeyUsecase,
+		userRepo:        userUsecase,
+		notifyRepo:      notifyUsecase,
 	}
 }
 
@@ -294,6 +296,14 @@ func (s *UserPasskeyService) FinishLogin(w http.ResponseWriter, r *http.Request)
 	// 通行密钥登录已经过设备验证，无需 safe_login
 	sess.Forget("safe_login")
 	sess.Forget("safe_client")
+
+	s.notifyRepo.SendEvent(biz.NotifyEventLogin, s.t.Get("[AcePanel] Panel Login"), biz.NotifyBody(s.t.Get("panel login detected"), [][2]string{
+		{s.t.Get("Username"), wUser.Inner.Username},
+		{s.t.Get("Method"), s.t.Get("passkey")},
+		{s.t.Get("IP"), clientIP(r, s.conf.HTTP.IPHeader)},
+		{s.t.Get("User Agent"), r.UserAgent()},
+		{s.t.Get("Time"), time.Now().Format(time.DateTime)},
+	}))
 
 	Success(w, nil)
 }

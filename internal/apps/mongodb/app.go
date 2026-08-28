@@ -2,7 +2,6 @@ package mongodb
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"strings"
 
@@ -12,6 +11,7 @@ import (
 	"go.yaml.in/yaml/v4"
 
 	"github.com/acepanel/panel/v3/internal/app"
+	"github.com/acepanel/panel/v3/internal/apps/common"
 	"github.com/acepanel/panel/v3/internal/biz"
 	"github.com/acepanel/panel/v3/internal/service"
 	"github.com/acepanel/panel/v3/pkg/io"
@@ -26,11 +26,11 @@ type App struct {
 	databaseServerRepo biz.DatabaseServerRepo
 }
 
-func NewApp(t *gotext.Locale, setting biz.SettingRepo, databaseServer biz.DatabaseServerRepo) *App {
+func NewApp(t *gotext.Locale, databaseServerRepo biz.DatabaseServerRepo, settingRepo biz.SettingRepo) *App {
 	return &App{
 		t:                  t,
-		settingRepo:        setting,
-		databaseServerRepo: databaseServer,
+		settingRepo:        settingRepo,
+		databaseServerRepo: databaseServerRepo,
 	}
 }
 
@@ -107,29 +107,12 @@ func (s *App) Load(w http.ResponseWriter, r *http.Request) {
 
 // GetConfig 获取配置
 func (s *App) GetConfig(w http.ResponseWriter, r *http.Request) {
-	conf, _ := io.Read(s.configPath())
-	service.Success(w, conf)
+	common.ServeConfig(w, s.configPath())
 }
 
 // UpdateConfig 更新配置
 func (s *App) UpdateConfig(w http.ResponseWriter, r *http.Request) {
-	req, err := service.Bind[UpdateConfig](r)
-	if err != nil {
-		service.Error(w, http.StatusUnprocessableEntity, "%v", err)
-		return
-	}
-
-	if err = io.Write(s.configPath(), req.Config, 0644); err != nil {
-		service.Error(w, http.StatusInternalServerError, "%v", err)
-		return
-	}
-
-	if err = systemctl.Restart("mongod"); err != nil {
-		service.Error(w, http.StatusInternalServerError, "%v", err)
-		return
-	}
-
-	service.Success(w, nil)
+	common.SaveConfig(w, r, s.configPath(), "mongod")
 }
 
 // GetConfigTune 获取配置调整参数
@@ -240,7 +223,7 @@ func (s *App) SetAdminPassword(w http.ResponseWriter, r *http.Request) {
 
 // configPath 返回配置文件路径
 func (s *App) configPath() string {
-	return fmt.Sprintf("%s/server/mongodb/mongod.conf", app.Root)
+	return app.Root + "/server/mongodb/mongod.conf"
 }
 
 // getYAMLValue 获取嵌套 YAML 值，支持 dot notation

@@ -9,20 +9,20 @@ import (
 
 	"github.com/acepanel/panel/v3/internal/app"
 	"github.com/acepanel/panel/v3/internal/biz"
-	"github.com/acepanel/panel/v3/internal/http/request"
+	"github.com/acepanel/panel/v3/internal/request"
 	"github.com/acepanel/panel/v3/pkg/io"
 	"github.com/acepanel/panel/v3/pkg/shell"
 )
 
 type EnvironmentGoService struct {
 	t               *gotext.Locale
-	environmentRepo biz.EnvironmentRepo
+	environmentRepo *biz.EnvironmentUsecase
 }
 
-func NewEnvironmentGoService(t *gotext.Locale, environmentRepo biz.EnvironmentRepo) *EnvironmentGoService {
+func NewEnvironmentGoService(environmentUsecase *biz.EnvironmentUsecase, t *gotext.Locale) *EnvironmentGoService {
 	return &EnvironmentGoService{
 		t:               t,
-		environmentRepo: environmentRepo,
+		environmentRepo: environmentUsecase,
 	}
 }
 

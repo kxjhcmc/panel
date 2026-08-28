@@ -8,19 +8,19 @@ import (
 
 	"github.com/acepanel/panel/v3/internal/app"
 	"github.com/acepanel/panel/v3/internal/biz"
-	"github.com/acepanel/panel/v3/internal/http/request"
+	"github.com/acepanel/panel/v3/internal/request"
 	"github.com/acepanel/panel/v3/pkg/io"
 )
 
 type EnvironmentDotnetService struct {
 	t               *gotext.Locale
-	environmentRepo biz.EnvironmentRepo
+	environmentRepo *biz.EnvironmentUsecase
 }
 
-func NewEnvironmentDotnetService(t *gotext.Locale, environmentRepo biz.EnvironmentRepo) *EnvironmentDotnetService {
+func NewEnvironmentDotnetService(environmentUsecase *biz.EnvironmentUsecase, t *gotext.Locale) *EnvironmentDotnetService {
 	return &EnvironmentDotnetService{
 		t:               t,
-		environmentRepo: environmentRepo,
+		environmentRepo: environmentUsecase,
 	}
 }
 

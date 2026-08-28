@@ -9,20 +9,20 @@ import (
 
 	"github.com/acepanel/panel/v3/internal/app"
 	"github.com/acepanel/panel/v3/internal/biz"
-	"github.com/acepanel/panel/v3/internal/http/request"
+	"github.com/acepanel/panel/v3/internal/request"
 	"github.com/acepanel/panel/v3/pkg/io"
 	"github.com/acepanel/panel/v3/pkg/shell"
 )
 
 type EnvironmentNodejsService struct {
 	t               *gotext.Locale
-	environmentRepo biz.EnvironmentRepo
+	environmentRepo *biz.EnvironmentUsecase
 }
 
-func NewEnvironmentNodejsService(t *gotext.Locale, environmentRepo biz.EnvironmentRepo) *EnvironmentNodejsService {
+func NewEnvironmentNodejsService(environmentUsecase *biz.EnvironmentUsecase, t *gotext.Locale) *EnvironmentNodejsService {
 	return &EnvironmentNodejsService{
 		t:               t,
-		environmentRepo: environmentRepo,
+		environmentRepo: environmentUsecase,
 	}
 }
 

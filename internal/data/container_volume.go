@@ -9,22 +9,20 @@ import (
 	"github.com/moby/moby/client"
 
 	"github.com/acepanel/panel/v3/internal/biz"
-	"github.com/acepanel/panel/v3/internal/http/request"
+	"github.com/acepanel/panel/v3/internal/request"
 	"github.com/acepanel/panel/v3/pkg/tools"
 	"github.com/acepanel/panel/v3/pkg/types"
 )
 
-type containerVolumeRepo struct {
-	settingRepo biz.SettingRepo
-}
+type containerVolumeRepo struct{}
 
-func NewContainerVolumeRepo(settingRepo biz.SettingRepo) biz.ContainerVolumeRepo {
-	return &containerVolumeRepo{settingRepo: settingRepo}
+func NewContainerVolumeRepo() biz.ContainerVolumeRepo {
+	return &containerVolumeRepo{}
 }
 
 // List 列出存储卷
-func (r *containerVolumeRepo) List() ([]types.ContainerVolume, error) {
-	apiClient, err := getDockerClient(getContainerSock(r.settingRepo))
+func (r *containerVolumeRepo) List(sock string) ([]types.ContainerVolume, error) {
+	apiClient, err := getDockerClient(sock)
 	if err != nil {
 		return nil, err
 	}
@@ -65,8 +63,8 @@ func (r *containerVolumeRepo) List() ([]types.ContainerVolume, error) {
 }
 
 // Create 创建存储卷
-func (r *containerVolumeRepo) Create(req *request.ContainerVolumeCreate) (string, error) {
-	apiClient, err := getDockerClient(getContainerSock(r.settingRepo))
+func (r *containerVolumeRepo) Create(sock string, req *request.ContainerVolumeCreate) (string, error) {
+	apiClient, err := getDockerClient(sock)
 	if err != nil {
 		return "", err
 	}
@@ -86,8 +84,8 @@ func (r *containerVolumeRepo) Create(req *request.ContainerVolumeCreate) (string
 }
 
 // Remove 删除存储卷
-func (r *containerVolumeRepo) Remove(id string) error {
-	apiClient, err := getDockerClient(getContainerSock(r.settingRepo))
+func (r *containerVolumeRepo) Remove(sock string, id string) error {
+	apiClient, err := getDockerClient(sock)
 	if err != nil {
 		return err
 	}
@@ -100,8 +98,8 @@ func (r *containerVolumeRepo) Remove(id string) error {
 }
 
 // Prune 清理未使用的存储卷
-func (r *containerVolumeRepo) Prune() error {
-	apiClient, err := getDockerClient(getContainerSock(r.settingRepo))
+func (r *containerVolumeRepo) Prune(sock string) error {
+	apiClient, err := getDockerClient(sock)
 	if err != nil {
 		return err
 	}

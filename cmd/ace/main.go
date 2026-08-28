@@ -1,25 +1,34 @@
 package main
 
 import (
+	"errors"
+	"fmt"
 	"os"
 	"runtime/debug"
 	_ "time/tzdata"
 )
 
 func main() {
+	if err := run(); err != nil {
+		_, _ = fmt.Fprintln(os.Stderr, "Error:", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	if os.Geteuid() != 0 {
-		panic("panel must run as root")
+		return errors.New("panel must run as root")
 	}
 
 	debug.SetGCPercent(10)
-	debug.SetMemoryLimit(256 << 20)
 
-	ace, err := initAce()
+	ace, cleanup, err := initAce()
 	if err != nil {
-		panic(err)
+		return err
+	}
+	if cleanup != nil {
+		defer cleanup()
 	}
 
-	if err = ace.Run(); err != nil {
-		panic(err)
-	}
+	return ace.Run()
 }

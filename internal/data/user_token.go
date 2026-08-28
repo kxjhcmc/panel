@@ -29,7 +29,7 @@ type userTokenRepo struct {
 	db   *gorm.DB
 }
 
-func NewUserTokenRepo(t *gotext.Locale, conf *config.Config, db *gorm.DB) biz.UserTokenRepo {
+func NewUserTokenRepo(conf *config.Config, db *gorm.DB, t *gotext.Locale) biz.UserTokenRepo {
 	return &userTokenRepo{
 		t:    t,
 		conf: conf,

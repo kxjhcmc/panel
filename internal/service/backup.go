@@ -9,24 +9,26 @@ import (
 	"slices"
 
 	"github.com/leonelquinteros/gotext"
-	"github.com/libtnb/chix"
+	"github.com/libtnb/chix/v2"
+	"github.com/libtnb/utils/str"
 
+	"github.com/acepanel/panel/v3/internal/app"
 	"github.com/acepanel/panel/v3/internal/biz"
-	"github.com/acepanel/panel/v3/internal/http/request"
+	"github.com/acepanel/panel/v3/internal/request"
 	"github.com/acepanel/panel/v3/pkg/io"
 )
 
 type BackupService struct {
 	t          *gotext.Locale
-	backupRepo biz.BackupRepo
-	taskRepo   biz.TaskRepo
+	backupRepo *biz.BackupUsecase
+	taskRepo   *biz.TaskUsecase
 }
 
-func NewBackupService(t *gotext.Locale, backup biz.BackupRepo, task biz.TaskRepo) *BackupService {
+func NewBackupService(backupUsecase *biz.BackupUsecase, taskUsecase *biz.TaskUsecase, t *gotext.Locale) *BackupService {
 	return &BackupService{
 		t:          t,
-		backupRepo: backup,
-		taskRepo:   task,
+		backupRepo: backupUsecase,
+		taskRepo:   taskUsecase,
 	}
 }
 
@@ -60,17 +62,29 @@ func (s *BackupService) Create(w http.ResponseWriter, r *http.Request) {
 
 	// 备份可能耗时较长（大库），提交到后台任务队列异步执行
 	pathEnv := "export PATH=/bin:/sbin:/usr/bin:/usr/sbin:/usr/local/bin:/usr/local/sbin:$PATH\n"
-	var cmd string
+	var backupCmd string
 	if req.Type == "website" {
-		cmd = fmt.Sprintf("%sacepanel backup website -n '%s' -s '%d'", pathEnv, req.Target, req.Storage)
+		backupCmd = fmt.Sprintf("acepanel backup website -n '%s' -s '%d'", req.Target, req.Storage)
 	} else {
-		cmd = fmt.Sprintf("%sacepanel backup database -t '%s' -n '%s' -s '%d'", pathEnv, req.Type, req.Target, req.Storage)
+		backupCmd = fmt.Sprintf("acepanel backup database -t '%s' -n '%s' -s '%d'", req.Type, req.Target, req.Storage)
 	}
 
+	// 备份进程被杀后无法自清临时目录，包一层独享 TMPDIR 供取消时精确清理，不误伤并发的其他备份
+	// 放在面板目录下，避免大文件撑爆 /tmp（常为内存盘）
+	tmpDir := filepath.Join(app.Root, "tmp", "ace-backup-task-"+str.Random(16))
+	cmd := fmt.Sprintf(`%sexport TMPDIR="%s"
+mkdir -p "$TMPDIR"
+%s
+rc=$?
+rm -rf "$TMPDIR"
+exit $rc`, pathEnv, tmpDir, backupCmd)
+
 	task := &biz.Task{
-		Name:   s.t.Get("Backup %s: %s", req.Type, req.Target),
-		Status: biz.TaskStatusWaiting,
-		Shell:  cmd,
+		Key:         fmt.Sprintf("backup:%s:%s", req.Type, req.Target),
+		Name:        s.t.Get("Backup %s: %s", req.Type, req.Target),
+		Status:      biz.TaskStatusWaiting,
+		Shell:       cmd,
+		CancelShell: fmt.Sprintf(`rm -rf "%s"`, tmpDir),
 	}
 	if err = s.taskRepo.Push(task); err != nil {
 		Error(w, http.StatusInternalServerError, "%v", err)
@@ -137,6 +151,29 @@ func (s *BackupService) Delete(w http.ResponseWriter, r *http.Request) {
 	Success(w, nil)
 }
 
+func (s *BackupService) Download(w http.ResponseWriter, r *http.Request) {
+	req, err := Bind[request.BackupFile](r)
+	if err != nil {
+		Error(w, http.StatusUnprocessableEntity, "%v", err)
+		return
+	}
+
+	file := filepath.Join(s.backupRepo.GetDefaultPath(biz.BackupType(req.Type)), req.File)
+	info, err := os.Stat(file)
+	if err != nil {
+		Error(w, http.StatusNotFound, "%v", err)
+		return
+	}
+	if info.IsDir() {
+		Error(w, http.StatusForbidden, s.t.Get("can't download a directory"))
+		return
+	}
+
+	render := chix.NewRender(w, r)
+	defer render.Release()
+	render.Download(file, info.Name())
+}
+
 func (s *BackupService) Restore(w http.ResponseWriter, r *http.Request) {
 	req, err := Bind[request.BackupRestore](r)
 	if err != nil {
@@ -144,7 +181,33 @@ func (s *BackupService) Restore(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err = s.backupRepo.Restore(r.Context(), biz.BackupType(req.Type), req.File, req.Target); err != nil {
+	// 恢复可能耗时较长（大库/大站），提交到后台任务队列异步执行
+	pathEnv := "export PATH=/bin:/sbin:/usr/bin:/usr/sbin:/usr/local/bin:/usr/local/sbin:$PATH\n"
+	var restoreCmd string
+	if req.Type == "website" {
+		restoreCmd = fmt.Sprintf("acepanel restore website -n '%s' -f '%s'", req.Target, req.File)
+	} else {
+		restoreCmd = fmt.Sprintf("acepanel restore database -t '%s' -n '%s' -f '%s'", req.Type, req.Target, req.File)
+	}
+
+	// 恢复进程被杀后无法自清临时目录，包一层独享 TMPDIR 供取消时精确清理，不误伤并发的其他任务
+	// 放在面板目录下，避免大文件撑爆 /tmp（常为内存盘）
+	tmpDir := filepath.Join(app.Root, "tmp", "ace-restore-task-"+str.Random(16))
+	cmd := fmt.Sprintf(`%sexport TMPDIR="%s"
+mkdir -p "$TMPDIR"
+%s
+rc=$?
+rm -rf "$TMPDIR"
+exit $rc`, pathEnv, tmpDir, restoreCmd)
+
+	task := &biz.Task{
+		Key:         fmt.Sprintf("restore:%s:%s", req.Type, req.Target),
+		Name:        s.t.Get("Restore %s: %s", req.Type, req.Target),
+		Status:      biz.TaskStatusWaiting,
+		Shell:       cmd,
+		CancelShell: fmt.Sprintf(`rm -rf "%s"`, tmpDir),
+	}
+	if err = s.taskRepo.Push(task); err != nil {
 		Error(w, http.StatusInternalServerError, "%v", err)
 		return
 	}

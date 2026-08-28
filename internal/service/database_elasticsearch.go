@@ -3,18 +3,18 @@ package service
 import (
 	"net/http"
 
-	"github.com/libtnb/chix"
+	"github.com/libtnb/chix/v2"
 
 	"github.com/acepanel/panel/v3/internal/biz"
-	"github.com/acepanel/panel/v3/internal/http/request"
+	"github.com/acepanel/panel/v3/internal/request"
 )
 
 type DatabaseElasticsearchService struct {
-	repo biz.DatabaseElasticsearchRepo
+	repo *biz.DatabaseElasticsearchUsecase
 }
 
-func NewDatabaseElasticsearchService(repo biz.DatabaseElasticsearchRepo) *DatabaseElasticsearchService {
-	return &DatabaseElasticsearchService{repo: repo}
+func NewDatabaseElasticsearchService(databaseElasticsearchUsecase *biz.DatabaseElasticsearchUsecase) *DatabaseElasticsearchService {
+	return &DatabaseElasticsearchService{repo: databaseElasticsearchUsecase}
 }
 
 func (s *DatabaseElasticsearchService) Indices(w http.ResponseWriter, r *http.Request) {
@@ -24,7 +24,7 @@ func (s *DatabaseElasticsearchService) Indices(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	indices, err := s.repo.Indices(req)
+	indices, err := s.repo.Indices(r.Context(), req)
 	if err != nil {
 		Error(w, http.StatusInternalServerError, "%v", err)
 		return
@@ -40,7 +40,7 @@ func (s *DatabaseElasticsearchService) IndexCreate(w http.ResponseWriter, r *htt
 		return
 	}
 
-	if err = s.repo.IndexCreate(req); err != nil {
+	if err = s.repo.IndexCreate(r.Context(), req); err != nil {
 		Error(w, http.StatusInternalServerError, "%v", err)
 		return
 	}
@@ -55,7 +55,7 @@ func (s *DatabaseElasticsearchService) IndexDelete(w http.ResponseWriter, r *htt
 		return
 	}
 
-	if err = s.repo.IndexDelete(req); err != nil {
+	if err = s.repo.IndexDelete(r.Context(), req); err != nil {
 		Error(w, http.StatusInternalServerError, "%v", err)
 		return
 	}
@@ -70,7 +70,7 @@ func (s *DatabaseElasticsearchService) Data(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	items, total, err := s.repo.Data(req)
+	items, total, err := s.repo.Data(r.Context(), req)
 	if err != nil {
 		Error(w, http.StatusInternalServerError, "%v", err)
 		return
@@ -89,7 +89,7 @@ func (s *DatabaseElasticsearchService) DocumentGet(w http.ResponseWriter, r *htt
 		return
 	}
 
-	doc, err := s.repo.DocumentGet(req)
+	doc, err := s.repo.DocumentGet(r.Context(), req)
 	if err != nil {
 		Error(w, http.StatusInternalServerError, "%v", err)
 		return
@@ -105,7 +105,7 @@ func (s *DatabaseElasticsearchService) DocumentSet(w http.ResponseWriter, r *htt
 		return
 	}
 
-	if err = s.repo.DocumentSet(req); err != nil {
+	if err = s.repo.DocumentSet(r.Context(), req); err != nil {
 		Error(w, http.StatusInternalServerError, "%v", err)
 		return
 	}
@@ -120,7 +120,7 @@ func (s *DatabaseElasticsearchService) DocumentDelete(w http.ResponseWriter, r *
 		return
 	}
 
-	if err = s.repo.DocumentDelete(req); err != nil {
+	if err = s.repo.DocumentDelete(r.Context(), req); err != nil {
 		Error(w, http.StatusInternalServerError, "%v", err)
 		return
 	}

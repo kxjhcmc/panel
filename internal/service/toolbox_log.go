@@ -9,13 +9,13 @@ import (
 	"strings"
 
 	"github.com/leonelquinteros/gotext"
-	"github.com/libtnb/chix"
+	"github.com/libtnb/chix/v2"
 	"github.com/samber/lo"
 	"gorm.io/gorm"
 
 	"github.com/acepanel/panel/v3/internal/app"
 	"github.com/acepanel/panel/v3/internal/biz"
-	"github.com/acepanel/panel/v3/internal/http/request"
+	"github.com/acepanel/panel/v3/internal/request"
 	"github.com/acepanel/panel/v3/pkg/io"
 	"github.com/acepanel/panel/v3/pkg/shell"
 	"github.com/acepanel/panel/v3/pkg/tools"
@@ -24,16 +24,16 @@ import (
 type ToolboxLogService struct {
 	t                  *gotext.Locale
 	db                 *gorm.DB
-	containerImageRepo biz.ContainerImageRepo
-	settingRepo        biz.SettingRepo
+	containerImageRepo *biz.ContainerImageUsecase
+	settingRepo        *biz.SettingUsecase
 }
 
-func NewToolboxLogService(t *gotext.Locale, db *gorm.DB, containerImageRepo biz.ContainerImageRepo, settingRepo biz.SettingRepo) *ToolboxLogService {
+func NewToolboxLogService(containerImageUsecase *biz.ContainerImageUsecase, settingUsecase *biz.SettingUsecase, db *gorm.DB, t *gotext.Locale) *ToolboxLogService {
 	return &ToolboxLogService{
 		t:                  t,
 		db:                 db,
-		containerImageRepo: containerImageRepo,
-		settingRepo:        settingRepo,
+		containerImageRepo: containerImageUsecase,
+		settingRepo:        settingUsecase,
 	}
 }
 
@@ -520,11 +520,7 @@ func (s *ToolboxLogService) cleanMySQLLogs() (int64, error) {
 	// 从面板设置获取 root 密码
 	rootPassword, err := s.settingRepo.Get(biz.SettingKeyMySQLRootPassword)
 	if err == nil && rootPassword != "" {
-		// 设置环境变量
-		if err = os.Setenv("MYSQL_PWD", rootPassword); err == nil {
-			_, _ = shell.Execf("mysql -u root -e 'PURGE BINARY LOGS BEFORE NOW()' 2>/dev/null")
-			_ = os.Unsetenv("MYSQL_PWD")
-		}
+		_, _ = shell.ExecfWithEnv([]string{"MYSQL_PWD=" + rootPassword}, "mysql -u root -e 'PURGE BINARY LOGS BEFORE NOW()' 2>/dev/null")
 	}
 
 	return cleaned, nil

@@ -2,19 +2,17 @@ package percona
 
 import (
 	"github.com/go-chi/chi/v5"
-	"github.com/leonelquinteros/gotext"
 
 	"github.com/acepanel/panel/v3/internal/apps/mysql"
-	"github.com/acepanel/panel/v3/internal/biz"
 )
 
 type App struct {
 	mysql *mysql.App
 }
 
-func NewApp(t *gotext.Locale, setting biz.SettingRepo, databaseServer biz.DatabaseServerRepo) *App {
+func NewApp(mysqlApp *mysql.App) *App {
 	return &App{
-		mysql: mysql.NewApp(t, setting, databaseServer),
+		mysql: mysqlApp,
 	}
 }
 

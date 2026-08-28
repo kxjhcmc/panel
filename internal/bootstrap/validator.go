@@ -1,34 +1,28 @@
 package bootstrap
 
 import (
-	"github.com/gookit/validate"
-	"github.com/gookit/validate/locales/ruru"
-	"github.com/gookit/validate/locales/zhcn"
-	"github.com/gookit/validate/locales/zhtw"
+	"github.com/libtnb/validator"
+	"github.com/libtnb/validator/translations"
 	"gorm.io/gorm"
 
-	"github.com/acepanel/panel/v3/internal/http/rule"
+	"github.com/acepanel/panel/v3/internal/rule"
 	"github.com/acepanel/panel/v3/pkg/config"
 )
 
-// NewValidator just for register global rules
-func NewValidator(conf *config.Config, db *gorm.DB) *validate.Validation {
+// NewValidator 构建校验器
+func NewValidator(conf *config.Config, db *gorm.DB) *validator.Validator {
+
+	opts := []validator.Option{
+		validator.WithStrictRequired(),
+		validator.WithRules(rule.Rules()...),
+		validator.WithFallibleRules(rule.FallibleRules(db)...),
+	}
 	switch conf.App.Locale {
 	case "zh_CN":
-		zhcn.RegisterGlobal()
+		opts = append(opts, validator.WithTranslation(translations.ZhHans()))
 	case "zh_TW":
-		zhtw.RegisterGlobal()
-	case "ru_RU":
-		ruru.RegisterGlobal()
+		opts = append(opts, validator.WithTranslation(translations.ZhHant()))
 	}
 
-	validate.Config(func(opt *validate.GlobalOption) {
-		opt.StopOnError = false
-		opt.SkipOnEmpty = true
-	})
-
-	// register global rules
-	rule.GlobalRules(db)
-
-	return validate.NewEmpty()
+	return validator.MustNew(opts...)
 }

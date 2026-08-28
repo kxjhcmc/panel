@@ -1,15 +1,14 @@
 package service
 
 import (
-	"encoding/json"
 	"net/http"
 
 	"github.com/leonelquinteros/gotext"
-	"github.com/libtnb/chix"
+	"github.com/libtnb/chix/v2"
 	"gorm.io/gorm"
 
 	"github.com/acepanel/panel/v3/internal/biz"
-	"github.com/acepanel/panel/v3/internal/http/request"
+	"github.com/acepanel/panel/v3/internal/request"
 	"github.com/acepanel/panel/v3/pkg/cert"
 	"github.com/acepanel/panel/v3/pkg/config"
 	"github.com/acepanel/panel/v3/pkg/tools"
@@ -18,18 +17,18 @@ import (
 type SettingService struct {
 	t               *gotext.Locale
 	db              *gorm.DB
-	settingRepo     biz.SettingRepo
-	certRepo        biz.CertRepo
-	certAccountRepo biz.CertAccountRepo
+	settingRepo     *biz.SettingUsecase
+	certRepo        *biz.CertUsecase
+	certAccountRepo *biz.CertAccountUsecase
 }
 
-func NewSettingService(t *gotext.Locale, db *gorm.DB, setting biz.SettingRepo, cert biz.CertRepo, certAccount biz.CertAccountRepo) *SettingService {
+func NewSettingService(certAccountUsecase *biz.CertAccountUsecase, certUsecase *biz.CertUsecase, settingUsecase *biz.SettingUsecase, db *gorm.DB, t *gotext.Locale) *SettingService {
 	return &SettingService{
 		t:               t,
 		db:              db,
-		settingRepo:     setting,
-		certRepo:        cert,
-		certAccountRepo: certAccount,
+		settingRepo:     settingUsecase,
+		certRepo:        certUsecase,
+		certAccountRepo: certAccountUsecase,
 	}
 }
 
@@ -50,8 +49,8 @@ func (s *SettingService) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	restart := false
-	if restart, err = s.settingRepo.UpdatePanel(r.Context(), req); err != nil {
+	restart, err := s.settingRepo.UpdatePanel(r.Context(), req)
+	if err != nil {
 		Error(w, http.StatusInternalServerError, "%v", err)
 		return
 	}
@@ -90,21 +89,6 @@ func (s *SettingService) ObtainCert(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// ACME 模式
-	ip, err := s.settingRepo.Get(biz.SettingKeyPublicIPs)
-	if err != nil {
-		Error(w, http.StatusInternalServerError, "%v", err)
-		return
-	}
-	var ips []string
-	if err = json.Unmarshal([]byte(ip), &ips); err != nil {
-		Error(w, http.StatusInternalServerError, "%v", err)
-		return
-	}
-	if len(ips) == 0 {
-		Error(w, http.StatusBadRequest, s.t.Get("please set public ips first"))
-		return
-	}
-
 	var user biz.User
 	if err = s.db.First(&user).Error; err != nil {
 		Error(w, http.StatusInternalServerError, "%v", err)
@@ -116,7 +100,7 @@ func (s *SettingService) ObtainCert(w http.ResponseWriter, r *http.Request) {
 		Error(w, http.StatusInternalServerError, "%v", err)
 		return
 	}
-	crt, key, err := s.certRepo.ObtainPanel(account, ips)
+	crt, key, err := s.certRepo.ObtainPanel(account, conf.HTTP.BindDomain)
 	if err != nil {
 		Error(w, http.StatusInternalServerError, "%v", err)
 		return

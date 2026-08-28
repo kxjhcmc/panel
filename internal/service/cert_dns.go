@@ -3,19 +3,19 @@ package service
 import (
 	"net/http"
 
-	"github.com/libtnb/chix"
+	"github.com/libtnb/chix/v2"
 
 	"github.com/acepanel/panel/v3/internal/biz"
-	"github.com/acepanel/panel/v3/internal/http/request"
+	"github.com/acepanel/panel/v3/internal/request"
 )
 
 type CertDNSService struct {
-	certDNSRepo biz.CertDNSRepo
+	certDNSRepo *biz.CertDNSUsecase
 }
 
-func NewCertDNSService(certDNS biz.CertDNSRepo) *CertDNSService {
+func NewCertDNSService(certDNSUsecase *biz.CertDNSUsecase) *CertDNSService {
 	return &CertDNSService{
-		certDNSRepo: certDNS,
+		certDNSRepo: certDNSUsecase,
 	}
 }
 

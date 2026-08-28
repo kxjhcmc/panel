@@ -2,32 +2,31 @@ package service
 
 import (
 	"cmp"
-	"fmt"
 	"net/http"
 	"slices"
 	"strconv"
 	"time"
 
-	"github.com/libtnb/chix"
+	"github.com/libtnb/chix/v2"
 	"github.com/samber/lo"
 
 	"github.com/acepanel/panel/v3/internal/biz"
-	"github.com/acepanel/panel/v3/internal/http/request"
+	"github.com/acepanel/panel/v3/internal/request"
 	"github.com/acepanel/panel/v3/pkg/websitestat"
 )
 
 type WebsiteStatService struct {
-	setting     biz.SettingRepo
-	statRepo    biz.WebsiteStatRepo
-	websiteRepo biz.WebsiteRepo
+	setting     *biz.SettingUsecase
+	statRepo    *biz.WebsiteStatUsecase
+	websiteRepo *biz.WebsiteUsecase
 	aggregator  *websitestat.Aggregator
 }
 
-func NewWebsiteStatService(setting biz.SettingRepo, statRepo biz.WebsiteStatRepo, websiteRepo biz.WebsiteRepo, aggregator *websitestat.Aggregator) *WebsiteStatService {
+func NewWebsiteStatService(settingUsecase *biz.SettingUsecase, websiteStatUsecase *biz.WebsiteStatUsecase, websiteUsecase *biz.WebsiteUsecase, aggregator *websitestat.Aggregator) *WebsiteStatService {
 	return &WebsiteStatService{
-		setting:     setting,
-		statRepo:    statRepo,
-		websiteRepo: websiteRepo,
+		setting:     settingUsecase,
+		statRepo:    websiteStatUsecase,
+		websiteRepo: websiteUsecase,
 		aggregator:  aggregator,
 	}
 }
@@ -410,23 +409,23 @@ func (s *WebsiteStatService) UpdateSetting(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	if err = s.setting.Set(biz.SettingKeyWebsiteStatDays, fmt.Sprintf("%d", req.Days)); err != nil {
+	if err = s.setting.Set(biz.SettingKeyWebsiteStatDays, strconv.FormatUint(uint64(req.Days), 10)); err != nil {
 		Error(w, http.StatusInternalServerError, "%v", err)
 		return
 	}
 	if req.ErrBufMax > 0 {
-		_ = s.setting.Set(biz.SettingKeyWebsiteStatErrBufMax, fmt.Sprintf("%d", req.ErrBufMax))
+		_ = s.setting.Set(biz.SettingKeyWebsiteStatErrBufMax, strconv.Itoa(req.ErrBufMax))
 	}
 	if req.UVMaxKeys > 0 {
-		_ = s.setting.Set(biz.SettingKeyWebsiteStatUVMaxKeys, fmt.Sprintf("%d", req.UVMaxKeys))
+		_ = s.setting.Set(biz.SettingKeyWebsiteStatUVMaxKeys, strconv.Itoa(req.UVMaxKeys))
 	}
 	if req.IPMaxKeys > 0 {
-		_ = s.setting.Set(biz.SettingKeyWebsiteStatIPMaxKeys, fmt.Sprintf("%d", req.IPMaxKeys))
+		_ = s.setting.Set(biz.SettingKeyWebsiteStatIPMaxKeys, strconv.Itoa(req.IPMaxKeys))
 	}
 	if req.DetailMaxKeys > 0 {
-		_ = s.setting.Set(biz.SettingKeyWebsiteStatDetailMaxKeys, fmt.Sprintf("%d", req.DetailMaxKeys))
+		_ = s.setting.Set(biz.SettingKeyWebsiteStatDetailMaxKeys, strconv.Itoa(req.DetailMaxKeys))
 	}
-	_ = s.setting.Set(biz.SettingKeyWebsiteStatBodyEnabled, fmt.Sprintf("%t", req.BodyEnabled))
+	_ = s.setting.Set(biz.SettingKeyWebsiteStatBodyEnabled, strconv.FormatBool(req.BodyEnabled))
 
 	Success(w, nil)
 }

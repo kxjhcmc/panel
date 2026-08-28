@@ -5,23 +5,23 @@ import (
 	"net/http"
 
 	"github.com/leonelquinteros/gotext"
-	"github.com/libtnb/chix"
+	"github.com/libtnb/chix/v2"
 
 	"github.com/acepanel/panel/v3/internal/biz"
-	"github.com/acepanel/panel/v3/internal/http/request"
+	"github.com/acepanel/panel/v3/internal/request"
 	"github.com/acepanel/panel/v3/pkg/storage"
 	"github.com/acepanel/panel/v3/pkg/types"
 )
 
 type BackupStorageService struct {
 	t                 *gotext.Locale
-	backupAccountRepo biz.BackupAccountRepo
+	backupAccountRepo *biz.BackupAccountUsecase
 }
 
-func NewBackupStorageService(t *gotext.Locale, backupAccount biz.BackupAccountRepo) *BackupStorageService {
+func NewBackupStorageService(backupAccountUsecase *biz.BackupAccountUsecase, t *gotext.Locale) *BackupStorageService {
 	return &BackupStorageService{
 		t:                 t,
-		backupAccountRepo: backupAccount,
+		backupAccountRepo: backupAccountUsecase,
 	}
 }
 
@@ -123,7 +123,7 @@ func (s *BackupStorageService) validateStorage(accountType string, info types.Ba
 
 	switch biz.BackupStorageType(accountType) {
 	case biz.BackupStorageTypeS3:
-		client, err = storage.NewS3(storage.S3Config{
+		client = storage.NewS3(storage.S3Config{
 			Region:          info.Region,
 			Bucket:          info.Bucket,
 			AccessKey:       info.AccessKey,
@@ -133,9 +133,6 @@ func (s *BackupStorageService) validateStorage(accountType string, info types.Ba
 			BasePath:        info.Path,
 			AddressingStyle: storage.S3AddressingStyle(info.Style),
 		})
-		if err != nil {
-			return errors.New(s.t.Get("s3 configuration error: %v", err))
-		}
 	case biz.BackupStorageTypeSFTP:
 		client, err = storage.NewSFTP(storage.SFTPConfig{
 			Host:       info.Host,

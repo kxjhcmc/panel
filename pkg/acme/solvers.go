@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net"
 	"net/http"
-	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -30,12 +29,13 @@ import (
 	pkgos "github.com/acepanel/panel/v3/pkg/os"
 	"github.com/acepanel/panel/v3/pkg/shell"
 	"github.com/acepanel/panel/v3/pkg/systemctl"
+	"github.com/acepanel/panel/v3/pkg/tools"
 )
 
 var panelSolverGlobal sync.Mutex
 
 type panelSolver struct {
-	ip        []string
+	names     []string
 	conf      string
 	webServer string // "nginx" or "apache"
 	server    *http.Server
@@ -64,8 +64,11 @@ func (s *panelSolver) Present(_ context.Context, challenge acme.Challenge) error
 
 	// 收集所有域名的 token
 	s.tokens[path] = token
+	s.names = append(s.names, challenge.Identifier.Value)
 	s.presentCount++
-	if s.presentCount < len(s.ip) {
+
+	// 内置服务器启动后只需继续追加 token
+	if s.server != nil {
 		return nil
 	}
 
@@ -116,7 +119,7 @@ func (s *panelSolver) startServer() error {
 }
 
 func (s *panelSolver) writeNginxConfig() error {
-	hasIPv6 := lo.SomeBy(s.ip, s.isIPv6)
+	hasIPv6 := lo.SomeBy(s.names, tools.IsIPv6)
 
 	var conf strings.Builder
 	conf.WriteString("server {\n    listen 80;\n")
@@ -124,11 +127,8 @@ func (s *panelSolver) writeNginxConfig() error {
 	if hasIPv6 {
 		conf.WriteString("    listen [::]:80;\n")
 	}
-	names := lo.Map(s.ip, func(ip string, _ int) string {
-		if s.isIPv6(ip) {
-			return "[" + ip + "]"
-		}
-		return ip
+	names := lo.Map(s.names, func(name string, _ int) string {
+		return tools.WrapIPv6(name)
 	})
 	_, _ = fmt.Fprintf(&conf, "    server_name %s;\n", strings.Join(names, " "))
 	for path, token := range s.tokens {
@@ -165,14 +165,14 @@ func (s *panelSolver) writeApacheConfig() error {
 	}
 
 	var conf strings.Builder
-	addrs := lo.Map(s.ip, func(ip string, _ int) string {
-		if s.isIPv6(ip) {
-			return "[" + ip + "]:80"
-		}
-		return ip + ":80"
+	names := lo.Map(s.names, func(name string, _ int) string {
+		return tools.WrapIPv6(name)
 	})
-	_, _ = fmt.Fprintf(&conf, "<VirtualHost %s>\n", strings.Join(addrs, " "))
-	conf.WriteString("    ServerName acme-ip-validation\n")
+	conf.WriteString("<VirtualHost *:80>\n")
+	_, _ = fmt.Fprintf(&conf, "    ServerName %s\n", names[0])
+	if len(names) > 1 {
+		_, _ = fmt.Fprintf(&conf, "    ServerAlias %s\n", strings.Join(names[1:], " "))
+	}
 	_, _ = fmt.Fprintf(&conf, "    Alias /.well-known/acme-challenge %s\n", tokenDir)
 	_, _ = fmt.Fprintf(&conf, "    <Directory %s>\n", tokenDir)
 	conf.WriteString("        Require all granted\n")
@@ -196,8 +196,8 @@ func (s *panelSolver) writeApacheConfig() error {
 func (s *panelSolver) CleanUp(ctx context.Context, _ acme.Challenge) error {
 	s.cleanupCount++
 
-	// 等待最后一次 CleanUp
-	if s.cleanupCount < len(s.ip) {
+	// 等待所有实际执行过 Present 的验证完成
+	if s.cleanupCount < s.presentCount {
 		return nil
 	}
 
@@ -236,158 +236,168 @@ func (s *panelSolver) CleanUp(ctx context.Context, _ acme.Challenge) error {
 	return nil
 }
 
-// isIPv6 判断 host 是否为 IPv6 地址
-func (s *panelSolver) isIPv6(host string) bool {
-	addr, err := netip.ParseAddr(host)
-	return err == nil && !addr.Is4()
+type httpSolver struct {
+	// confs 域名到 acme 配置文件的映射，用于把 token 精确投放到域名所属网站
+	confs map[string]string
+	// fallback 域名未命中 confs 时写入的配置文件列表
+	fallback  []string
+	webServer string // "nginx" or "apache"
 }
 
-type httpSolver struct {
-	conf      string
-	webServer string // "nginx" or "apache"
+// confsFor 取域名对应的配置文件列表
+func (s httpSolver) confsFor(domain string) []string {
+	domain = strings.ToLower(strings.TrimSuffix(domain, "."))
+	if conf, ok := s.confs[domain]; ok {
+		return []string{conf}
+	}
+	// 网站的 server_name 可能写成泛域名，如 *.example.com 覆盖 a.example.com
+	if _, parent, found := strings.Cut(domain, "."); found {
+		if conf, ok := s.confs["*."+parent]; ok {
+			return []string{conf}
+		}
+	}
+
+	return s.fallback
 }
 
 func (s httpSolver) Present(_ context.Context, challenge acme.Challenge) error {
 	path := challenge.HTTP01ResourcePath()
 	token := challenge.KeyAuthorization
+	confs := s.confsFor(challenge.Identifier.Value)
 
 	if s.webServer == "apache" {
-		return s.presentApache(path, token)
+		return s.presentApache(confs, path, token)
 	}
-	return s.presentNginx(path, token)
+	return s.presentNginx(confs, path, token)
 }
 
-func (s httpSolver) presentNginx(path, token string) error {
-	conf := fmt.Sprintf(`location = %s {
-    default_type text/plain;
-    return 200 %q;
-}
-`, path, token)
-
-	file, err := os.OpenFile(s.conf, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
-	if err != nil {
-		return fmt.Errorf("failed to open nginx config %q: %w", s.conf, err)
-	}
-	defer func(file *os.File) { _ = file.Close() }(file)
-
-	if _, err = file.Write([]byte(conf)); err != nil {
-		return fmt.Errorf("failed to write to nginx config %q: %w", s.conf, err)
+func (s httpSolver) presentNginx(confs []string, path, token string) error {
+	content := nginxChallengeConf(path, token)
+	for _, conf := range confs {
+		file, err := os.OpenFile(conf, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+		if err != nil {
+			return fmt.Errorf("failed to open nginx config %q: %w", conf, err)
+		}
+		_, err = file.WriteString(content)
+		_ = file.Close()
+		if err != nil {
+			return fmt.Errorf("failed to write to nginx config %q: %w", conf, err)
+		}
 	}
 
-	if err = systemctl.Reload("nginx"); err != nil {
-		_, err = shell.Execf("nginx -t")
-		return fmt.Errorf("failed to reload nginx: %w", err)
-	}
-
-	return nil
+	return reloadWebServer("nginx")
 }
 
-func (s httpSolver) presentApache(path, token string) error {
-	// 创建 token 目录
-	tokenDir := filepath.Dir(s.conf) + "/acme-challenge"
-	if err := os.MkdirAll(tokenDir, 0755); err != nil {
-		return fmt.Errorf("failed to create token directory: %w", err)
+func (s httpSolver) presentApache(confs []string, path, token string) error {
+	for _, conf := range confs {
+		// 创建 token 目录
+		tokenDir := filepath.Join(filepath.Dir(conf), "acme-challenge")
+		if err := os.MkdirAll(tokenDir, 0755); err != nil {
+			return fmt.Errorf("failed to create token directory: %w", err)
+		}
+
+		// 写入 token 文件
+		tokenFile := filepath.Join(tokenDir, filepath.Base(path))
+		if err := os.WriteFile(tokenFile, []byte(token), 0644); err != nil {
+			return fmt.Errorf("failed to write token file: %w", err)
+		}
+
+		// 写入 Apache 配置
+		file, err := os.OpenFile(conf, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
+		if err != nil {
+			return fmt.Errorf("failed to open apache config %q: %w", conf, err)
+		}
+		_, err = file.WriteString(apacheChallengeConf(tokenDir))
+		_ = file.Close()
+		if err != nil {
+			return fmt.Errorf("failed to write to apache config %q: %w", conf, err)
+		}
 	}
 
-	// 写入 token 文件
-	tokenFile := filepath.Join(tokenDir, filepath.Base(path))
-	if err := os.WriteFile(tokenFile, []byte(token), 0644); err != nil {
-		return fmt.Errorf("failed to write token file: %w", err)
-	}
-
-	// 写入 Apache 配置
-	conf := fmt.Sprintf(`Alias /.well-known/acme-challenge %s
-<Directory %s>
-    Require all granted
-    ForceType text/plain
-</Directory>
-`, tokenDir, tokenDir)
-
-	file, err := os.OpenFile(s.conf, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
-	if err != nil {
-		return fmt.Errorf("failed to open apache config %q: %w", s.conf, err)
-	}
-	defer func(file *os.File) { _ = file.Close() }(file)
-
-	if _, err = file.Write([]byte(conf)); err != nil {
-		return fmt.Errorf("failed to write to apache config %q: %w", s.conf, err)
-	}
-
-	if err = systemctl.Reload("apache"); err != nil {
-		_, err = shell.Execf("apachectl -t")
-		return fmt.Errorf("failed to reload apache: %w", err)
-	}
-
-	return nil
+	return reloadWebServer("apache")
 }
 
 // CleanUp cleans up the HTTP server if it is the last one to finish.
 func (s httpSolver) CleanUp(_ context.Context, challenge acme.Challenge) error {
 	path := challenge.HTTP01ResourcePath()
 	token := challenge.KeyAuthorization
+	confs := s.confsFor(challenge.Identifier.Value)
 
 	if s.webServer == "apache" {
-		return s.cleanUpApache(path, token)
+		return s.cleanUpApache(confs, path)
 	}
-	return s.cleanUpNginx(path, token)
+	return s.cleanUpNginx(confs, path, token)
 }
 
-func (s httpSolver) cleanUpNginx(path, token string) error {
-	conf, err := os.ReadFile(s.conf)
-	if err != nil {
-		return fmt.Errorf("failed to read nginx config %q: %w", s.conf, err)
+func (s httpSolver) cleanUpNginx(confs []string, path, token string) error {
+	content := nginxChallengeConf(path, token)
+	for _, conf := range confs {
+		raw, err := os.ReadFile(conf)
+		if err != nil {
+			return fmt.Errorf("failed to read nginx config %q: %w", conf, err)
+		}
+		if err = os.WriteFile(conf, []byte(strings.ReplaceAll(string(raw), content, "")), 0600); err != nil {
+			return fmt.Errorf("failed to write to nginx config %q: %w", conf, err)
+		}
 	}
 
-	target := fmt.Sprintf(`location = %s {
+	return reloadWebServer("nginx")
+}
+
+func (s httpSolver) cleanUpApache(confs []string, path string) error {
+	for _, conf := range confs {
+		tokenDir := filepath.Join(filepath.Dir(conf), "acme-challenge")
+
+		// 删除 token 文件
+		_ = os.Remove(filepath.Join(tokenDir, filepath.Base(path)))
+
+		// 清理配置文件
+		raw, err := os.ReadFile(conf)
+		if err != nil {
+			return fmt.Errorf("failed to read apache config %q: %w", conf, err)
+		}
+		content := strings.ReplaceAll(string(raw), apacheChallengeConf(tokenDir), "")
+		if err = os.WriteFile(conf, []byte(content), 0600); err != nil {
+			return fmt.Errorf("failed to write to apache config %q: %w", conf, err)
+		}
+	}
+
+	return reloadWebServer("apache")
+}
+
+// nginxChallengeConf 生成 Nginx 的 challenge 配置片段
+func nginxChallengeConf(path, token string) string {
+	return fmt.Sprintf(`location = %s {
     default_type text/plain;
     return 200 %q;
 }
 `, path, token)
-
-	newConf := strings.ReplaceAll(string(conf), target, "")
-	if err = os.WriteFile(s.conf, []byte(newConf), 0600); err != nil {
-		return fmt.Errorf("failed to write to nginx config %q: %w", s.conf, err)
-	}
-
-	if err = systemctl.Reload("nginx"); err != nil {
-		_, err = shell.Execf("nginx -t")
-		return fmt.Errorf("failed to reload nginx: %w", err)
-	}
-
-	return nil
 }
 
-func (s httpSolver) cleanUpApache(path, token string) error {
-	tokenDir := filepath.Dir(s.conf) + "/acme-challenge"
-
-	// 删除 token 文件
-	tokenFile := filepath.Join(tokenDir, filepath.Base(path))
-	_ = os.Remove(tokenFile)
-
-	// 清理配置文件
-	conf, err := os.ReadFile(s.conf)
-	if err != nil {
-		return fmt.Errorf("failed to read apache config %q: %w", s.conf, err)
-	}
-
-	target := fmt.Sprintf(`Alias /.well-known/acme-challenge %s
+// apacheChallengeConf 生成 Apache 的 challenge 配置片段
+func apacheChallengeConf(tokenDir string) string {
+	return fmt.Sprintf(`Alias /.well-known/acme-challenge %s
 <Directory %s>
     Require all granted
     ForceType text/plain
 </Directory>
 `, tokenDir, tokenDir)
+}
 
-	newConf := strings.ReplaceAll(string(conf), target, "")
-	if err = os.WriteFile(s.conf, []byte(newConf), 0600); err != nil {
-		return fmt.Errorf("failed to write to apache config %q: %w", s.conf, err)
+// reloadWebServer 重载 web 服务器，失败时附带配置测试输出
+func reloadWebServer(webServer string) error {
+	err := systemctl.Reload(webServer)
+	if err == nil {
+		return nil
 	}
 
-	if err = systemctl.Reload("apache"); err != nil {
-		_, err = shell.Execf("apachectl -t")
-		return fmt.Errorf("failed to reload apache: %w", err)
+	test := "nginx -t 2>&1"
+	if webServer == "apache" {
+		test = "apachectl -t 2>&1"
 	}
+	out, _ := shell.Execf(test)
 
-	return nil
+	return fmt.Errorf("failed to reload %s: %w; config test: %s", webServer, err, out)
 }
 
 type DnsType string
@@ -414,7 +424,7 @@ type DNSParam struct {
 }
 
 type DNSProvider interface {
-	libdns.RecordSetter
+	libdns.RecordAppender
 	libdns.RecordDeleter
 }
 
@@ -422,9 +432,8 @@ type dnsSolver struct {
 	mu               sync.Mutex
 	dns              DnsType
 	param            DNSParam
-	keyAuths         map[string][]string        // dnsName → keyAuth 列表
-	records          map[string][]libdns.Record // dnsName → 已设置的记录
-	alias            map[string]string          // DNS 验证别名映射 (domain → delegated domain)
+	records          map[string][]libdns.Record // dnsName → 已写入的记录
+	alias            map[string]string          // DNS 验证别名映射
 	dnsServer        string                     // DNS 验证服务器地址
 	skipVerify       bool                       // 跳过解析验证
 	progressCallback func(string)               // 进度回调
@@ -441,31 +450,24 @@ func (s *dnsSolver) Present(ctx context.Context, challenge acme.Challenge) error
 		return fmt.Errorf("failed to get DNS provider: %w", err)
 	}
 
-	s.report(fmt.Sprintf("setting DNS TXT record %s", dnsName))
+	s.report("setting DNS TXT record " + dnsName)
 
-	// 同名 TXT 记录可能对应多个 challenge， SetRecords 以 (name, type) 为单位覆盖
-	// 因此需把该记录名下所有 keyAuth 一次性写入，避免后者覆盖前者
-	s.mu.Lock()
-	s.keyAuths[dnsName] = append(s.keyAuths[dnsName], keyAuth)
-	recs := make([]libdns.Record, 0, len(s.keyAuths[dnsName]))
-	for _, ka := range s.keyAuths[dnsName] {
-		recs = append(recs, libdns.TXT{
-			Name: libdns.RelativeName(dnsName+".", zone+"."),
-			Text: ka,
-		})
+	// 同时签主域 + 通配符（如 example.com 与 *.example.com）会产生两个 challenge，
+	// 它们落在同一个 _acme-challenge.example.com TXT 名下，但 keyAuth 不同
+	rec := libdns.TXT{
+		Name: libdns.RelativeName(dnsName+".", zone+"."),
+		Text: keyAuth,
 	}
-	s.mu.Unlock()
-
-	results, err := provider.SetRecords(ctx, zone+".", recs)
+	results, err := provider.AppendRecords(ctx, zone+".", []libdns.Record{rec})
 	if err != nil {
-		return fmt.Errorf("failed to set DNS record %q for %q: %w", dnsName, zone, err)
+		return fmt.Errorf("failed to append DNS record %q for %q: %w", dnsName, zone, err)
 	}
-	if len(results) == 0 {
-		return fmt.Errorf("DNS provider returned no records after setting %q", dnsName)
+	if len(results) != 1 {
+		return fmt.Errorf("DNS provider returned %d records after appending %q, expected 1", len(results), dnsName)
 	}
 
 	s.mu.Lock()
-	s.records[dnsName] = results
+	s.records[dnsName] = append(s.records[dnsName], results[0])
 	s.mu.Unlock()
 
 	s.report(fmt.Sprintf("DNS TXT record %s set successfully", dnsName))
@@ -558,7 +560,6 @@ func (s *dnsSolver) CleanUp(ctx context.Context, challenge acme.Challenge) error
 	s.mu.Lock()
 	records := s.records[dnsName]
 	delete(s.records, dnsName)
-	delete(s.keyAuths, dnsName)
 	s.mu.Unlock()
 
 	if len(records) > 0 {

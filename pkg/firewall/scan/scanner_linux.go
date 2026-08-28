@@ -18,6 +18,7 @@ import (
 	"github.com/cilium/ebpf/asm"
 	"github.com/cilium/ebpf/link"
 	"github.com/cilium/ebpf/ringbuf"
+	"golang.org/x/sys/unix"
 )
 
 const (
@@ -91,13 +92,14 @@ type Scanner struct {
 	lastPorts map[uint16]bool
 }
 
-// newPortsMap 创建监听端口白名单 BPF map
+// newPortsMap 创建监听端口白名单 BPF map（按需分配，避免 64K 条目预占数 MB 内核内存）
 func newPortsMap() (*ebpf.Map, error) {
 	return ebpf.NewMap(&ebpf.MapSpec{
 		Type:       ebpf.Hash,
 		KeySize:    4, // uint32
 		ValueSize:  1, // uint8
 		MaxEntries: 65536,
+		Flags:      unix.BPF_F_NO_PREALLOC,
 	})
 }
 
@@ -414,6 +416,7 @@ func buildDetector(events, ports *ebpf.Map) (*ebpf.Program, error) {
 }
 
 // Supported 检测当前系统是否支持 eBPF
+// 程序可加载不代表可挂载（TCX 需内核 6.6+），在 lo 上试挂验证，避免误报支持
 func Supported() bool {
 	events, err := ebpf.NewMap(&ebpf.MapSpec{
 		Type:       ebpf.RingBuf,
@@ -422,23 +425,33 @@ func Supported() bool {
 	if err != nil {
 		return false
 	}
+	defer func() { _ = events.Close() }()
 
 	ports, err := newPortsMap()
 	if err != nil {
-		_ = events.Close()
 		return false
 	}
+	defer func() { _ = ports.Close() }()
 
 	prog, err := buildDetector(events, ports)
 	if err != nil {
-		_ = events.Close()
-		_ = ports.Close()
 		return false
 	}
+	defer func() { _ = prog.Close() }()
 
-	_ = prog.Close()
-	_ = events.Close()
-	_ = ports.Close()
+	iface, err := net.InterfaceByName("lo")
+	if err != nil {
+		return true // 无 lo 时退化为仅验证程序可加载
+	}
+	l, err := link.AttachTCX(link.TCXOptions{
+		Interface: iface.Index,
+		Program:   prog,
+		Attach:    ebpf.AttachTCXIngress,
+	})
+	if err != nil {
+		return false
+	}
+	_ = l.Close()
 	return true
 }
 
@@ -484,11 +497,16 @@ func New(ifaces []string, log *slog.Logger) (*Scanner, error) {
 		lastPorts: make(map[uint16]bool),
 	}
 
+	// 单网卡失败仅跳过（网卡可能已改名/移除），全部失败才报错
 	for _, ifaceName := range ifaces {
 		if err := s.attach(ifaceName); err != nil {
-			_ = s.Close()
-			return nil, fmt.Errorf("failed to attach to interface %s: %w", ifaceName, err)
+			log.Warn("failed to attach scan detector, skip interface",
+				slog.String("iface", ifaceName), slog.Any("err", err))
 		}
+	}
+	if len(s.handles) == 0 {
+		_ = s.Close()
+		return nil, errors.New("no interface attached")
 	}
 
 	reader, err := ringbuf.NewReader(events)

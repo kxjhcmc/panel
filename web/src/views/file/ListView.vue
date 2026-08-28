@@ -14,6 +14,7 @@ import {
 import { useGettext } from 'vue3-gettext'
 
 import file from '@/api/panel/file'
+import tamper from '@/api/panel/tamper'
 import PtyTerminalModal from '@/components/common/PtyTerminalModal.vue'
 import TheIcon from '@/components/custom/TheIcon.vue'
 import { useFileStore } from '@/stores'
@@ -25,17 +26,20 @@ import {
   getIconByExt,
   isCompress,
   isImage,
+  joinPath,
 } from '@/utils/file'
+import { useFileOps } from '@/views/file/composables/useFileOps'
 import { usePaste } from '@/views/file/composables/usePaste'
-import EditModal from '@/views/file/EditModal.vue'
 import PreviewModal from '@/views/file/PreviewModal.vue'
 import PropertyModal from '@/views/file/PropertyModal.vue'
+import ShareModal from '@/views/file/ShareModal.vue'
 import type { FileInfo } from '@/views/file/types'
 
 const { $gettext } = useGettext()
 const themeVars = useThemeVars()
 const fileStore = useFileStore()
 const { handlePaste: doPaste } = usePaste()
+const { deletePaths, movePath, markClipboard } = useFileOps()
 
 const props = defineProps<{
   tabId: string
@@ -54,22 +58,24 @@ const sub = computed(() => tab.value.sub)
 const marked = computed(() => fileStore.clipboard.marked)
 const markedType = computed(() => fileStore.clipboard.markedType)
 
-const selected = defineModel<any[]>('selected', { type: Array, default: () => [] })
+// 选中状态归属 fileStore（按标签页隔离），此处仅做读写代理
+const selected = computed<string[]>({
+  get: () => tab.value.selected,
+  set: (v) => {
+    tab.value.selected = v
+  },
+})
 const compress = defineModel<boolean>('compress', { type: Boolean, required: true })
 const permission = defineModel<boolean>('permission', { type: Boolean, required: true })
-const permissionFileInfoList = defineModel<FileInfo[]>('permissionFileInfoList', {
-  type: Array,
-  default: () => [],
-})
 
-const editorModal = ref(false)
-const editorMinimized = ref(false)
 const previewModal = ref(false)
 const currentFile = ref('')
 const propertyModal = ref(false)
 const propertyFileInfo = ref<FileInfo | null>(null)
 const terminalModal = ref(false)
 const terminalPath = ref('')
+const shareModal = ref(false)
+const shareFile = ref('')
 
 const showDropdown = ref(false)
 const selectedRow = ref<any>()
@@ -143,7 +149,7 @@ const submitInlineCreate = () => {
     return
   }
 
-  const fullPath = path.value + '/' + name
+  const fullPath = joinPath(path.value, name)
 
   useRequest(file.create(fullPath, inlineCreateIsDir.value))
     .onSuccess(() => {
@@ -230,6 +236,68 @@ const handleSort = (key: string) => {
 const getSortIcon = (key: string) => {
   if (fileStore.sortKey !== key) return 'mdi:unfold-more-horizontal'
   return fileStore.sortOrder === 'asc' ? 'mdi:chevron-up' : 'mdi:chevron-down'
+}
+
+// ==================== 防篡改保护 ====================
+const tamperRunning = ref(false)
+const protectedSet = ref<Set<string>>(new Set())
+
+const isProtected = (item: any) => protectedSet.value.has(item.full)
+
+// 拉取当前列表各路径的保护状态(防篡改未运行时后端返回全 false)
+const refreshProtected = (list: any[]) => {
+  const paths = list.map((item: any) => item.full)
+  if (!paths.length) {
+    protectedSet.value = new Set()
+    return
+  }
+  useRequest(tamper.checkPaths(paths)).onSuccess(({ data }: any) => {
+    tamperRunning.value = data.running
+    protectedSet.value = new Set(Object.keys(data.items || {}).filter((p) => data.items[p]))
+  })
+}
+
+// 添加/移除保护(二次确认)
+const handleProtect = (item: any, protect: boolean) => {
+  window.$dialog.warning({
+    title: protect ? $gettext('Add Protection') : $gettext('Remove Protection'),
+    content: protect
+      ? $gettext('Add tamper protection for %{ name }?', { name: item.name })
+      : $gettext(
+          'Remove tamper protection for %{ name }? The matching rule or exclusions will be adjusted accordingly.',
+          { name: item.name },
+        ),
+    positiveText: $gettext('Yes'),
+    negativeText: $gettext('No'),
+    onPositiveClick: () => {
+      useRequest(tamper.protect(item.full, protect)).onSuccess(() => {
+        window.$message.success($gettext('Operation successful'))
+        refresh()
+      })
+    },
+  })
+}
+
+// ==================== 文件分享 ====================
+const sharedPaths = ref<Set<string>>(new Set())
+
+const isShared = (item: any) => sharedPaths.value.has(item.full)
+
+// 拉取有效分享的路径集合，用于列表分享标识
+const refreshShares = () => {
+  useRequest(file.shareList()).onSuccess(({ data }: any) => {
+    const now = Date.now()
+    sharedPaths.value = new Set(
+      (data || [])
+        .filter((item: any) => new Date(item.expired_at).getTime() > now)
+        .map((item: any) => item.path),
+    )
+  })
+}
+
+const openShare = (item: any) => {
+  shareFile.value = item.full
+  shareModal.value = true
 }
 
 // 检查是否有 immutable 属性
@@ -345,11 +413,23 @@ const options = computed<DropdownOption[]>(() => {
       label: selectedRow.value.dir ? $gettext('Compress') : $gettext('Download'),
       key: selectedRow.value.dir ? 'compress' : 'download',
     },
+    {
+      label: $gettext('Share'),
+      key: 'share',
+      show: !selectedRow.value.dir,
+    },
     { label: $gettext('Rename'), key: 'rename' },
     {
       label: $gettext('Terminal'),
       key: 'terminal',
       show: selectedRow.value.dir,
+    },
+    {
+      label: isProtected(selectedRow.value)
+        ? $gettext('Remove Protection')
+        : $gettext('Add Protection'),
+      key: isProtected(selectedRow.value) ? 'unprotect' : 'protect',
+      show: tamperRunning.value,
     },
     { label: $gettext('Properties'), key: 'properties' },
     { label: () => h('span', { style: { color: 'red' } }, $gettext('Delete')), key: 'delete' },
@@ -365,7 +445,6 @@ const options = computed<DropdownOption[]>(() => {
 
 const openPermissionModal = (row: any) => {
   selected.value = [row.full]
-  permissionFileInfoList.value = [row as FileInfo]
   permission.value = true
 }
 
@@ -395,9 +474,8 @@ const openFile = (row: any) => {
     unCompressModel.value.path = path.value
     unCompressModal.value = true
   } else {
-    currentFile.value = row.full
-    editorModal.value = true
-    editorMinimized.value = false
+    // 编辑器由 IndexView 承载，跨文件标签页共享同一实例
+    window.$bus.emit('file:edit', row.full)
   }
 }
 
@@ -665,23 +743,15 @@ const getSelectedItems = () => {
 
 // 标记文件（复制/移动）
 const markFiles = (items: any[], type: 'copy' | 'move') => {
-  fileStore.setClipboard(
-    items.map((item: any) => ({
-      name: item.name,
-      source: item.full,
-      force: false,
-    })),
+  markClipboard(
+    items.map((item: any) => item.full),
     type,
-  )
-  window.$message.success(
-    $gettext('Marked successfully, please navigate to the destination path to paste'),
   )
 }
 
 // 打开权限弹窗
 const openPermission = (items: any[]) => {
   selected.value = items.map((item: any) => item.full)
-  permissionFileInfoList.value = items as FileInfo[]
   permission.value = true
 }
 
@@ -757,8 +827,21 @@ const submitInlineRename = () => {
     return
   }
 
-  const source = path.value + '/' + sourceName
-  const target = path.value + '/' + targetName
+  const source = joinPath(path.value, sourceName)
+  const target = joinPath(path.value, targetName)
+
+  // 执行重命名，成功后编辑器标签页同步与列表刷新由 movePath 收敛处理
+  const doRename = async (force: boolean) => {
+    if (await movePath(source, target, force)) {
+      window.$message.success(
+        $gettext('Renamed %{ source } to %{ target } successfully', {
+          source: sourceName,
+          target: targetName,
+        }),
+      )
+    }
+    cancelInlineRename()
+  }
 
   useRequest(file.exist([target])).onSuccess(({ data: existData }) => {
     if (existData[0]) {
@@ -767,39 +850,13 @@ const submitInlineRename = () => {
         content: $gettext('There are items with the same name. Do you want to overwrite?'),
         positiveText: $gettext('Overwrite'),
         negativeText: $gettext('Cancel'),
-        onPositiveClick: () => {
-          useRequest(file.move([{ source, target, force: true }]))
-            .onSuccess(() => {
-              window.$bus.emit('file:refresh')
-              window.$message.success(
-                $gettext('Renamed %{ source } to %{ target } successfully', {
-                  source: sourceName,
-                  target: targetName,
-                }),
-              )
-            })
-            .onComplete(() => {
-              cancelInlineRename()
-            })
-        },
+        onPositiveClick: () => doRename(true),
         onNegativeClick: () => {
           // 保持编辑状态，让用户修改名称
         },
       })
     } else {
-      useRequest(file.move([{ source, target, force: false }]))
-        .onSuccess(() => {
-          window.$bus.emit('file:refresh')
-          window.$message.success(
-            $gettext('Renamed %{ source } to %{ target } successfully', {
-              source: sourceName,
-              target: targetName,
-            }),
-          )
-        })
-        .onComplete(() => {
-          cancelInlineRename()
-        })
+      doRename(false)
     }
   })
 }
@@ -818,18 +875,9 @@ const handleInlineRenameKeydown = (event: KeyboardEvent) => {
 // 执行删除（不带确认）
 const doDelete = (items: any[]) => {
   if (items.length === 1) {
-    confirmImmutableOperation(items[0], () => {
-      useRequest(file.delete(items[0].full)).onSuccess(() => {
-        window.$bus.emit('file:refresh')
-        window.$message.success($gettext('Deleted successfully'))
-      })
-    })
+    confirmImmutableOperation(items[0], () => deletePaths([items[0].full]))
   } else {
-    const deletePromises = items.map((item: any) => file.delete(item.full))
-    Promise.all(deletePromises).then(() => {
-      window.$bus.emit('file:refresh')
-      window.$message.success($gettext('Deleted successfully'))
-    })
+    deletePaths(items.map((item: any) => item.full))
   }
 }
 
@@ -914,6 +962,9 @@ const handleSelect = (key: string) => {
     case 'download':
       window.open('/api/file/download?path=' + encodeURIComponent(selectedRow.value.full))
       break
+    case 'share':
+      openShare(selectedRow.value)
+      break
     case 'rename':
       openRename(selectedRow.value)
       break
@@ -922,6 +973,10 @@ const handleSelect = (key: string) => {
       break
     case 'properties':
       openProperty(selectedRow.value)
+      break
+    case 'protect':
+    case 'unprotect':
+      handleProtect(selectedRow.value, key === 'protect')
       break
     case 'delete':
       deleteFiles(items)
@@ -958,11 +1013,24 @@ const getMoreOptions = (item: any): SelectOption[] => {
     options.push({ label: $gettext('Uncompress'), value: 'uncompress' })
   }
 
+  // 文件支持分享
+  if (!item.dir) {
+    options.push({ label: $gettext('Share'), value: 'share' })
+  }
+
   options.push({ label: $gettext('Copy Path'), value: 'copy-path' })
 
   // 如果是文件夹，添加终端选项
   if (item.dir) {
     options.push({ label: $gettext('Terminal'), value: 'terminal' })
+  }
+
+  // 防篡改运行时，添加/移除保护
+  if (tamperRunning.value) {
+    options.push({
+      label: isProtected(item) ? $gettext('Remove Protection') : $gettext('Add Protection'),
+      value: isProtected(item) ? 'unprotect' : 'protect',
+    })
   }
 
   options.push({ label: $gettext('Properties'), value: 'properties' })
@@ -993,6 +1061,9 @@ const handleMoreSelect = (key: string, item: any) => {
     case 'uncompress':
       openUncompress(item)
       break
+    case 'share':
+      openShare(item)
+      break
     case 'copy-path':
       copyPath(item)
       break
@@ -1001,6 +1072,10 @@ const handleMoreSelect = (key: string, item: any) => {
       break
     case 'properties':
       openProperty(item)
+      break
+    case 'protect':
+    case 'unprotect':
+      handleProtect(item, key === 'protect')
       break
   }
 }
@@ -1210,18 +1285,14 @@ const handleUnCompress = () => {
     window.$message.error($gettext('Invalid path'))
     return
   }
-  const message = window.$message.loading($gettext('Uncompressing...'), {
-    duration: 0,
-  })
-  useRequest(file.unCompress(unCompressModel.value.file, unCompressModel.value.path))
-    .onSuccess(() => {
+  useRequest(file.unCompress(unCompressModel.value.file, unCompressModel.value.path)).onSuccess(
+    () => {
       unCompressModal.value = false
-      window.$bus.emit('file:refresh')
-      window.$message.success($gettext('Uncompressed successfully'))
-    })
-    .onComplete(() => {
-      message?.destroy()
-    })
+      window.$message.success(
+        $gettext('Uncompress task created successfully, please check the task list for progress'),
+      )
+    },
+  )
 }
 
 const {
@@ -1249,6 +1320,25 @@ const data = computed(() => {
   return rawData.value.filter((item: any) => !item.hidden)
 })
 
+// selected 只保留当前列表中存在的项，避免删除/翻页/排序后残留导致表头复选框显示部分勾选
+// 目录大小缓存同样只保留仍存在的项，避免删除后重建同名目录显示旧值
+watch(data, (list) => {
+  refreshProtected(list)
+  const dataSet = new Set(list.map((item: any) => item.full))
+  if (selected.value.length > 0) {
+    const filtered = selected.value.filter((p: any) => dataSet.has(p))
+    if (filtered.length !== selected.value.length) {
+      selected.value = filtered
+    }
+  }
+  for (const key of sizeCache.value.keys()) {
+    if (!dataSet.has(key)) sizeCache.value.delete(key)
+  }
+  for (const key of sizeLoading.value.keys()) {
+    if (!dataSet.has(key)) sizeLoading.value.delete(key)
+  }
+})
+
 // 搜索事件处理函数
 const handleFileSearch = () => {
   selected.value = []
@@ -1258,7 +1348,24 @@ const handleFileSearch = () => {
   fileStore.pushHistory(props.tabId, path.value)
 }
 
+const addDocumentListeners = () => {
+  document.addEventListener('mousemove', onSelectionMove)
+  document.addEventListener('mouseup', onSelectionEnd)
+  document.addEventListener('keydown', handleKeyDown)
+}
+
+const removeDocumentListeners = () => {
+  document.removeEventListener('mousemove', onSelectionMove)
+  document.removeEventListener('mouseup', onSelectionEnd)
+  document.removeEventListener('keydown', handleKeyDown)
+}
+
+onActivated(addDocumentListeners)
+onDeactivated(removeDocumentListeners)
+
 onMounted(() => {
+  refreshShares()
+
   watch(
     path,
     () => {
@@ -1285,12 +1392,7 @@ onMounted(() => {
   window.$bus.on('file:keyboard-resume', resumeKeyboard)
   window.$bus.on('file:inline-create', startInlineCreate)
 
-  // 添加全局鼠标事件监听
-  document.addEventListener('mousemove', onSelectionMove)
-  document.addEventListener('mouseup', onSelectionEnd)
-
-  // 添加键盘快捷键监听
-  document.addEventListener('keydown', handleKeyDown)
+  addDocumentListeners()
 })
 
 onUnmounted(() => {
@@ -1306,9 +1408,7 @@ onUnmounted(() => {
   window.$bus.off('file:keyboard-pause', pauseKeyboard)
   window.$bus.off('file:keyboard-resume', resumeKeyboard)
   window.$bus.off('file:inline-create', startInlineCreate)
-  document.removeEventListener('mousemove', onSelectionMove)
-  document.removeEventListener('mouseup', onSelectionEnd)
-  document.removeEventListener('keydown', handleKeyDown)
+  removeDocumentListeners()
 })
 </script>
 
@@ -1428,7 +1528,19 @@ onUnmounted(() => {
           <template v-if="fileStore.viewType === 'grid'">
             <div class="icon-wrapper">
               <the-icon :icon="getFileIcon(item)" :size="48" :color="getIconColor(item)" />
-              <the-icon v-if="item.immutable" icon="mdi:lock" :size="16" class="lock-icon" />
+              <the-icon
+                v-if="isProtected(item)"
+                icon="mdi:shield-lock"
+                :size="16"
+                class="lock-icon text-success"
+              />
+              <the-icon v-else-if="item.immutable" icon="mdi:lock" :size="16" class="lock-icon" />
+              <the-icon
+                v-if="isShared(item)"
+                icon="mdi:share-variant"
+                :size="16"
+                class="share-icon text-info"
+              />
             </div>
             <!-- 内联重命名输入框 -->
             <input
@@ -1476,10 +1588,22 @@ onUnmounted(() => {
                 {{ item.symlink ? item.name + ' -> ' + item.link : item.name }}
               </n-ellipsis>
               <the-icon
-                v-if="item.immutable"
+                v-if="isProtected(item)"
+                icon="mdi:shield-lock"
+                :size="14"
+                class="text-success ml-1 shrink-0"
+              />
+              <the-icon
+                v-else-if="item.immutable"
                 icon="mdi:lock"
                 :size="14"
                 class="text-warning ml-1 shrink-0"
+              />
+              <the-icon
+                v-if="isShared(item)"
+                icon="mdi:share-variant"
+                :size="14"
+                class="text-info ml-1 shrink-0"
               />
             </div>
             <div class="list-col col-size">
@@ -1625,12 +1749,6 @@ onUnmounted(() => {
     @select="handleSelect"
   />
 
-  <!-- 编辑弹窗 -->
-  <edit-modal
-    v-model:show="editorModal"
-    v-model:minimized="editorMinimized"
-    v-model:file="currentFile"
-  />
   <!-- 预览弹窗 -->
   <preview-modal v-model:show="previewModal" v-model:path="currentFile" />
   <!-- 解压弹窗 -->
@@ -1654,6 +1772,8 @@ onUnmounted(() => {
   </n-modal>
   <!-- 属性弹窗 -->
   <property-modal v-model:show="propertyModal" v-model:file-info="propertyFileInfo" />
+  <!-- 分享弹窗 -->
+  <share-modal v-model:show="shareModal" v-model:path="shareFile" @refresh="refreshShares" />
   <!-- 终端弹窗 -->
   <pty-terminal-modal
     v-model:show="terminalModal"
@@ -1820,6 +1940,12 @@ onUnmounted(() => {
   bottom: 0;
   right: 0;
   color: var(--warning-color);
+}
+
+.share-icon {
+  position: absolute;
+  bottom: 0;
+  left: 0;
 }
 
 // 内联重命名输入框样式

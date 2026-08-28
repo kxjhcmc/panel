@@ -15,6 +15,7 @@ import (
 	"resty.dev/v3"
 
 	"github.com/acepanel/panel/v3/internal/app"
+	"github.com/acepanel/panel/v3/internal/apps/common"
 	"github.com/acepanel/panel/v3/internal/biz"
 	"github.com/acepanel/panel/v3/internal/service"
 	"github.com/acepanel/panel/v3/pkg/config"
@@ -29,7 +30,8 @@ type App struct {
 	taskRepo biz.TaskRepo
 }
 
-func NewApp(t *gotext.Locale, conf *config.Config, taskRepo biz.TaskRepo) *App {
+func NewApp(conf *config.Config, t *gotext.Locale, taskRepo biz.TaskRepo) *App {
+
 	return &App{t: t, conf: conf, taskRepo: taskRepo}
 }
 
@@ -104,33 +106,16 @@ func (s *App) Load(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *App) GetConfig(w http.ResponseWriter, r *http.Request) {
-	conf, _ := io.Read(fmt.Sprintf("%s/server/prometheus/prometheus.yml", app.Root))
-	service.Success(w, conf)
+	common.ServeConfig(w, app.Root+"/server/prometheus/prometheus.yml")
 }
 
 func (s *App) UpdateConfig(w http.ResponseWriter, r *http.Request) {
-	req, err := service.Bind[UpdateConfig](r)
-	if err != nil {
-		service.Error(w, http.StatusUnprocessableEntity, "%v", err)
-		return
-	}
-
-	if err = io.Write(fmt.Sprintf("%s/server/prometheus/prometheus.yml", app.Root), req.Config, 0644); err != nil {
-		service.Error(w, http.StatusInternalServerError, "%v", err)
-		return
-	}
-
-	if err = systemctl.Restart("prometheus"); err != nil {
-		service.Error(w, http.StatusInternalServerError, "%v", err)
-		return
-	}
-
-	service.Success(w, nil)
+	common.SaveConfig(w, r, app.Root+"/server/prometheus/prometheus.yml", "prometheus")
 }
 
 // GetConfigTune 获取 Prometheus 全局配置调整参数
 func (s *App) GetConfigTune(w http.ResponseWriter, r *http.Request) {
-	conf, _ := io.Read(fmt.Sprintf("%s/server/prometheus/prometheus.yml", app.Root))
+	conf, _ := io.Read(app.Root + "/server/prometheus/prometheus.yml")
 
 	var cfg struct {
 		Global struct {
@@ -158,7 +143,7 @@ func (s *App) UpdateConfigTune(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	confPath := fmt.Sprintf("%s/server/prometheus/prometheus.yml", app.Root)
+	confPath := app.Root + "/server/prometheus/prometheus.yml"
 	raw, _ := io.Read(confPath)
 
 	var cfg map[string]any
@@ -204,7 +189,7 @@ func (s *App) UpdateConfigTune(w http.ResponseWriter, r *http.Request) {
 
 // GetAlertmanagerConfig 获取 Alertmanager 配置
 func (s *App) GetAlertmanagerConfig(w http.ResponseWriter, r *http.Request) {
-	conf, _ := io.Read(fmt.Sprintf("%s/server/prometheus/alertmanager/alertmanager.yml", app.Root))
+	conf, _ := io.Read(app.Root + "/server/prometheus/alertmanager/alertmanager.yml")
 	service.Success(w, conf)
 }
 
@@ -216,7 +201,7 @@ func (s *App) UpdateAlertmanagerConfig(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err = io.Write(fmt.Sprintf("%s/server/prometheus/alertmanager/alertmanager.yml", app.Root), req.Config, 0644); err != nil {
+	if err = io.Write(app.Root+"/server/prometheus/alertmanager/alertmanager.yml", req.Config, 0644); err != nil {
 		service.Error(w, http.StatusInternalServerError, "%v", err)
 		return
 	}
@@ -259,6 +244,7 @@ func (s *App) InstallExporter(w http.ResponseWriter, r *http.Request) {
 	cmd := fmt.Sprintf(`curl -sSLm 10 --retry 3 'https://%s/prometheus/exporters/exporter.sh' | bash -s -- 'install' '%s'`, s.conf.App.DownloadEndpoint, url.PathEscape(req.Slug))
 
 	task := new(biz.Task)
+	task.Key = "prometheus:exporter:" + req.Slug
 	task.Name = s.t.Get("Install Prometheus exporter %s", req.Slug)
 	task.Status = biz.TaskStatusWaiting
 	task.Shell = cmd
@@ -286,6 +272,7 @@ func (s *App) UninstallExporter(w http.ResponseWriter, r *http.Request) {
 	cmd := fmt.Sprintf(`curl -sSLm 10 --retry 3 'https://%s/prometheus/exporters/exporter.sh' | bash -s -- 'uninstall' '%s'`, s.conf.App.DownloadEndpoint, url.PathEscape(req.Slug))
 
 	task := new(biz.Task)
+	task.Key = "prometheus:exporter:" + req.Slug
 	task.Name = s.t.Get("Uninstall Prometheus exporter %s", req.Slug)
 	task.Status = biz.TaskStatusWaiting
 	task.Shell = cmd

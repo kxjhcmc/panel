@@ -3,19 +3,19 @@ package service
 import (
 	"net/http"
 
-	"github.com/libtnb/chix"
+	"github.com/libtnb/chix/v2"
 
 	"github.com/acepanel/panel/v3/internal/biz"
-	"github.com/acepanel/panel/v3/internal/http/request"
+	"github.com/acepanel/panel/v3/internal/request"
 )
 
 type CertAccountService struct {
-	certAccountRepo biz.CertAccountRepo
+	certAccountRepo *biz.CertAccountUsecase
 }
 
-func NewCertAccountService(certAccount biz.CertAccountRepo) *CertAccountService {
+func NewCertAccountService(certAccountUsecase *biz.CertAccountUsecase) *CertAccountService {
 	return &CertAccountService{
-		certAccountRepo: certAccount,
+		certAccountRepo: certAccountUsecase,
 	}
 }
 

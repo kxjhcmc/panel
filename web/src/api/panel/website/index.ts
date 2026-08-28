@@ -13,12 +13,18 @@ export default {
   rewrites: (): any => http.Get(`/website/rewrites`),
   // 获取默认配置
   defaultConfig: (): any => http.Get('/website/default_config'),
+  // 获取默认站点
+  defaultSite: (): any => http.Get('/website/default_site'),
+  // 设置默认站点(id 为 0 表示面板内置默认页)
+  saveDefaultSite: (id: number): any => http.Post('/website/default_site', { id }),
   // 保存默认配置
   saveDefaultConfig: (data: any): any => http.Post('/website/default_config', data),
   // 网站配置
   config: (id: number): any => http.Get('/website/' + id),
   // 保存网站配置
   saveConfig: (id: number, data: any): any => http.Put(`/website/${id}`, data),
+  // 切换网站类型
+  switchType: (id: number, data: any): any => http.Post(`/website/${id}/switch_type`, data),
   // 更新备注
   updateRemark: (id: number, remark: string): any =>
     http.Post(`/website/${id}` + '/update_remark', { remark }),

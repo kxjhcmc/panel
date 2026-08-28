@@ -2,8 +2,11 @@ package data
 
 import (
 	"bytes"
+	"cmp"
 	"context"
+	"errors"
 	"fmt"
+	"net/netip"
 	"slices"
 	"strconv"
 	"strings"
@@ -14,22 +17,20 @@ import (
 	"github.com/moby/moby/client"
 
 	"github.com/acepanel/panel/v3/internal/biz"
-	"github.com/acepanel/panel/v3/internal/http/request"
+	"github.com/acepanel/panel/v3/internal/request"
 	"github.com/acepanel/panel/v3/pkg/docker"
 	"github.com/acepanel/panel/v3/pkg/types"
 )
 
-type containerRepo struct {
-	settingRepo biz.SettingRepo
-}
+type containerRepo struct{}
 
-func NewContainerRepo(settingRepo biz.SettingRepo) biz.ContainerRepo {
-	return &containerRepo{settingRepo: settingRepo}
+func NewContainerRepo() biz.ContainerRepo {
+	return &containerRepo{}
 }
 
 // ListAll 列出所有容器
-func (r *containerRepo) ListAll() ([]types.Container, error) {
-	apiClient, err := getDockerClient(getContainerSock(r.settingRepo))
+func (r *containerRepo) ListAll(sock string) ([]types.Container, error) {
+	apiClient, err := getDockerClient(sock)
 	if err != nil {
 		return nil, err
 	}
@@ -44,17 +45,49 @@ func (r *containerRepo) ListAll() ([]types.Container, error) {
 
 	var containers []types.Container
 	for _, item := range resp.Items {
-		ports := make([]types.ContainerPort, 0)
-		for _, port := range item.Ports {
-			ports = append(ports, types.ContainerPort{
+		ports := make([]types.ContainerPort, len(item.Ports))
+		for i, port := range item.Ports {
+			ports[i] = types.ContainerPort{
 				ContainerStart: uint(port.PrivatePort),
 				ContainerEnd:   uint(port.PrivatePort),
 				HostStart:      uint(port.PublicPort),
 				HostEnd:        uint(port.PublicPort),
 				Protocol:       port.Type,
 				Host:           port.IP,
-			})
+			}
 		}
+		slices.SortFunc(ports, func(a, b types.ContainerPort) int {
+			aOffset := int64(a.HostStart) - int64(a.ContainerStart)
+			if a.HostStart == 0 {
+				aOffset = 0
+			}
+			bOffset := int64(b.HostStart) - int64(b.ContainerStart)
+			if b.HostStart == 0 {
+				bOffset = 0
+			}
+			return cmp.Or(
+				a.Host.Compare(b.Host),
+				strings.Compare(a.Protocol, b.Protocol),
+				cmp.Compare(aOffset, bOffset),
+				cmp.Compare(a.ContainerStart, b.ContainerStart),
+				cmp.Compare(a.HostStart, b.HostStart),
+			)
+		})
+
+		merged := ports[:0]
+		for _, port := range ports {
+			if len(merged) > 0 {
+				last := &merged[len(merged)-1]
+				if last.Host == port.Host && last.Protocol == port.Protocol &&
+					last.ContainerEnd+1 == port.ContainerStart && last.HostEnd+1 == port.HostStart {
+					last.ContainerEnd = port.ContainerEnd
+					last.HostEnd = port.HostEnd
+					continue
+				}
+			}
+			merged = append(merged, port)
+		}
+
 		if len(item.Names) == 0 {
 			item.Names = append(item.Names, "")
 		}
@@ -67,7 +100,7 @@ func (r *containerRepo) ListAll() ([]types.Container, error) {
 			CreatedAt: time.Unix(item.Created, 0),
 			State:     string(item.State),
 			Status:    item.Status,
-			Ports:     ports,
+			Ports:     merged,
 			Labels:    types.MapToKV(item.Labels),
 		})
 	}
@@ -79,23 +112,25 @@ func (r *containerRepo) ListAll() ([]types.Container, error) {
 	return containers, nil
 }
 
-// ListByName 根据名称搜索容器
-func (r *containerRepo) ListByName(names string) ([]types.Container, error) {
-	containers, err := r.ListAll()
+// Inspect 获取容器详细信息
+func (r *containerRepo) Inspect(sock string, id string) (any, error) {
+	apiClient, err := getDockerClient(sock)
+	if err != nil {
+		return nil, err
+	}
+	defer func(apiClient *client.Client) { _ = apiClient.Close() }(apiClient)
+
+	resp, err := apiClient.ContainerInspect(context.Background(), id, client.ContainerInspectOptions{})
 	if err != nil {
 		return nil, err
 	}
 
-	containers = slices.DeleteFunc(containers, func(item types.Container) bool {
-		return !strings.Contains(item.Name, names)
-	})
-
-	return containers, nil
+	return resp.Container, nil
 }
 
 // Create 创建容器
-func (r *containerRepo) Create(req *request.ContainerCreate) (string, error) {
-	apiClient, err := getDockerClient(getContainerSock(r.settingRepo))
+func (r *containerRepo) Create(sock string, req *request.ContainerCreate) (string, error) {
+	apiClient, err := getDockerClient(sock)
 	if err != nil {
 		return "", err
 	}
@@ -121,6 +156,9 @@ func (r *containerRepo) Create(req *request.ContainerCreate) (string, error) {
 	// 构建容器配置
 	config := &container.Config{
 		Image:        req.Image,
+		Hostname:     req.Hostname,
+		WorkingDir:   req.WorkingDir,
+		User:         req.User,
 		Tty:          req.Tty,
 		OpenStdin:    req.OpenStdin,
 		AttachStdin:  req.OpenStdin,
@@ -130,6 +168,16 @@ func (r *containerRepo) Create(req *request.ContainerCreate) (string, error) {
 		Labels:       types.KVToMap(req.Labels),
 		Entrypoint:   req.Entrypoint,
 		Cmd:          req.Command,
+		StopSignal:   req.StopSignal,
+	}
+	if req.StopTimeout > 0 {
+		config.StopTimeout = &req.StopTimeout
+	}
+	if req.Healthcheck != nil {
+		config.Healthcheck = &container.HealthConfig{
+			Test: req.Healthcheck.Test, Interval: req.Healthcheck.Interval, Timeout: req.Healthcheck.Timeout,
+			StartPeriod: req.Healthcheck.StartPeriod, Retries: req.Healthcheck.Retries,
+		}
 	}
 
 	// 构建主机配置
@@ -137,16 +185,51 @@ func (r *containerRepo) Create(req *request.ContainerCreate) (string, error) {
 		AutoRemove:      req.AutoRemove,
 		Privileged:      req.Privileged,
 		PublishAllPorts: req.PublishAllPorts,
+		ReadonlyRootfs:  req.ReadonlyRootfs,
+		ExtraHosts:      req.ExtraHosts,
+		CapAdd:          req.CapAdd,
+		CapDrop:         req.CapDrop,
+		SecurityOpt:     req.SecurityOpt,
+		Sysctls:         types.KVToMap(req.Sysctls),
+		Tmpfs:           types.KVToMap(req.Tmpfs),
+		ShmSize:         req.ShmSize,
+	}
+	if req.Init {
+		hostConfig.Init = &req.Init
+	}
+	for _, dns := range req.DNS {
+		if address, parseErr := netip.ParseAddr(dns); parseErr == nil {
+			hostConfig.DNS = append(hostConfig.DNS, address)
+		}
+	}
+	for _, device := range req.Devices {
+		hostConfig.Devices = append(hostConfig.Devices, container.DeviceMapping{
+			PathOnHost: device.Host, PathInContainer: device.Container, CgroupPermissions: device.Permissions,
+		})
+	}
+	for _, ulimit := range req.Ulimits {
+		hostConfig.Ulimits = append(hostConfig.Ulimits, &container.Ulimit{Name: ulimit.Name, Soft: ulimit.Soft, Hard: ulimit.Hard})
 	}
 
 	// 构建网络配置
 	networkConfig := &network.NetworkingConfig{}
 	if req.Network != "" {
 		switch req.Network {
-		case "host", "none", "bridge":
+		case "host", "none":
 			hostConfig.NetworkMode = container.NetworkMode(req.Network)
+		case "bridge":
+			hostConfig.NetworkMode = container.NetworkMode(req.Network)
+		default:
+			endpoint := &network.EndpointSettings{Aliases: req.NetworkAliases}
+			if req.StaticIP != "" {
+				address, parseErr := netip.ParseAddr(req.StaticIP)
+				if parseErr != nil {
+					return "", fmt.Errorf("invalid static IP address: %w", parseErr)
+				}
+				endpoint.IPAddress = address
+			}
+			networkConfig.EndpointsConfig = map[string]*network.EndpointSettings{req.Network: endpoint}
 		}
-		networkConfig.EndpointsConfig = map[string]*network.EndpointSettings{req.Network: {}}
 	}
 
 	// 设置端口映射
@@ -157,7 +240,7 @@ func (r *containerRepo) Create(req *request.ContainerCreate) (string, error) {
 				return "", fmt.Errorf("container port and host port count do not match (container: %d host: %d)", port.ContainerStart-port.ContainerEnd, port.HostStart-port.HostEnd)
 			}
 			if port.ContainerStart > port.ContainerEnd || port.HostStart > port.HostEnd || port.ContainerStart < 1 || port.HostStart < 1 {
-				return "", fmt.Errorf("port range is invalid")
+				return "", errors.New("port range is invalid")
 			}
 
 			count := uint(0)
@@ -190,7 +273,7 @@ func (r *containerRepo) Create(req *request.ContainerCreate) (string, error) {
 	}
 	// 设置资源限制
 	hostConfig.CPUShares = req.CPUShares
-	hostConfig.NanoCPUs = req.CPUs * 1e9
+	hostConfig.NanoCPUs = int64(req.CPUs * 1e9)
 	hostConfig.Memory = req.Memory * 1024 * 1024
 	hostConfig.MemorySwap = 0
 
@@ -211,8 +294,8 @@ func (r *containerRepo) Create(req *request.ContainerCreate) (string, error) {
 }
 
 // Remove 移除容器
-func (r *containerRepo) Remove(id string) error {
-	apiClient, err := getDockerClient(getContainerSock(r.settingRepo))
+func (r *containerRepo) Remove(sock string, id string) error {
+	apiClient, err := getDockerClient(sock)
 	if err != nil {
 		return err
 	}
@@ -225,8 +308,8 @@ func (r *containerRepo) Remove(id string) error {
 }
 
 // Start 启动容器
-func (r *containerRepo) Start(id string) error {
-	apiClient, err := getDockerClient(getContainerSock(r.settingRepo))
+func (r *containerRepo) Start(sock string, id string) error {
+	apiClient, err := getDockerClient(sock)
 	if err != nil {
 		return err
 	}
@@ -237,8 +320,8 @@ func (r *containerRepo) Start(id string) error {
 }
 
 // Stop 停止容器
-func (r *containerRepo) Stop(id string) error {
-	apiClient, err := getDockerClient(getContainerSock(r.settingRepo))
+func (r *containerRepo) Stop(sock string, id string) error {
+	apiClient, err := getDockerClient(sock)
 	if err != nil {
 		return err
 	}
@@ -249,8 +332,8 @@ func (r *containerRepo) Stop(id string) error {
 }
 
 // Restart 重启容器
-func (r *containerRepo) Restart(id string) error {
-	apiClient, err := getDockerClient(getContainerSock(r.settingRepo))
+func (r *containerRepo) Restart(sock string, id string) error {
+	apiClient, err := getDockerClient(sock)
 	if err != nil {
 		return err
 	}
@@ -261,8 +344,8 @@ func (r *containerRepo) Restart(id string) error {
 }
 
 // Pause 暂停容器
-func (r *containerRepo) Pause(id string) error {
-	apiClient, err := getDockerClient(getContainerSock(r.settingRepo))
+func (r *containerRepo) Pause(sock string, id string) error {
+	apiClient, err := getDockerClient(sock)
 	if err != nil {
 		return err
 	}
@@ -273,8 +356,8 @@ func (r *containerRepo) Pause(id string) error {
 }
 
 // Unpause 恢复容器
-func (r *containerRepo) Unpause(id string) error {
-	apiClient, err := getDockerClient(getContainerSock(r.settingRepo))
+func (r *containerRepo) Unpause(sock string, id string) error {
+	apiClient, err := getDockerClient(sock)
 	if err != nil {
 		return err
 	}
@@ -285,8 +368,8 @@ func (r *containerRepo) Unpause(id string) error {
 }
 
 // Kill 杀死容器
-func (r *containerRepo) Kill(id string) error {
-	apiClient, err := getDockerClient(getContainerSock(r.settingRepo))
+func (r *containerRepo) Kill(sock string, id string) error {
+	apiClient, err := getDockerClient(sock)
 	if err != nil {
 		return err
 	}
@@ -299,8 +382,8 @@ func (r *containerRepo) Kill(id string) error {
 }
 
 // Rename 重命名容器
-func (r *containerRepo) Rename(id string, newName string) error {
-	apiClient, err := getDockerClient(getContainerSock(r.settingRepo))
+func (r *containerRepo) Rename(sock string, id string, newName string) error {
+	apiClient, err := getDockerClient(sock)
 	if err != nil {
 		return err
 	}
@@ -313,8 +396,8 @@ func (r *containerRepo) Rename(id string, newName string) error {
 }
 
 // Logs 查看容器末尾 tail 行日志
-func (r *containerRepo) Logs(id string, tail int) (string, error) {
-	apiClient, err := getDockerClient(getContainerSock(r.settingRepo))
+func (r *containerRepo) Logs(sock string, id string, tail int) (string, error) {
+	apiClient, err := getDockerClient(sock)
 	if err != nil {
 		return "", err
 	}
@@ -346,8 +429,8 @@ func (r *containerRepo) Logs(id string, tail int) (string, error) {
 }
 
 // Prune 清理未使用的容器
-func (r *containerRepo) Prune() error {
-	apiClient, err := getDockerClient(getContainerSock(r.settingRepo))
+func (r *containerRepo) Prune(sock string) error {
+	apiClient, err := getDockerClient(sock)
 	if err != nil {
 		return err
 	}

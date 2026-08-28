@@ -1,0 +1,28 @@
+package request
+
+import "mime/multipart"
+
+type BackupList struct {
+	Type string `uri:"type" form:"type" validate:"required && in:path,website,mysql,postgresql,clickhouse,redis,valkey,panel"`
+}
+
+type BackupCreate struct {
+	Type    string `uri:"type" form:"type" validate:"required && in:website,mysql,postgresql,clickhouse,redis,valkey,panel"`
+	Target  string `json:"target" form:"target" validate:"required && regex:\"^[A-Za-z0-9_.-]{1,128}$\""`
+	Storage uint   `form:"storage" json:"storage"`
+}
+
+type BackupUpload struct {
+	Type string                `uri:"type" form:"type"` // 校验没有必要，因为根本没经过验证器
+	File *multipart.FileHeader `form:"file"`
+}
+
+type BackupFile struct {
+	Type string `uri:"type" form:"type" validate:"required && in:website,mysql,postgresql,clickhouse,redis,valkey,panel"`
+	File string `json:"file" form:"file" validate:"required"`
+}
+
+type BackupRestore struct {
+	BackupFile
+	Target string `json:"target" form:"target" validate:"required && regex:\"^[A-Za-z0-9_.-]{1,128}$\""`
+}

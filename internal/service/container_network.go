@@ -3,19 +3,19 @@ package service
 import (
 	"net/http"
 
-	"github.com/libtnb/chix"
+	"github.com/libtnb/chix/v2"
 
 	"github.com/acepanel/panel/v3/internal/biz"
-	"github.com/acepanel/panel/v3/internal/http/request"
+	"github.com/acepanel/panel/v3/internal/request"
 )
 
 type ContainerNetworkService struct {
-	containerNetworkRepo biz.ContainerNetworkRepo
+	containerNetworkRepo *biz.ContainerNetworkUsecase
 }
 
-func NewContainerNetworkService(containerNetwork biz.ContainerNetworkRepo) *ContainerNetworkService {
+func NewContainerNetworkService(containerNetworkUsecase *biz.ContainerNetworkUsecase) *ContainerNetworkService {
 	return &ContainerNetworkService{
-		containerNetworkRepo: containerNetwork,
+		containerNetworkRepo: containerNetworkUsecase,
 	}
 }
 

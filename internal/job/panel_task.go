@@ -20,6 +20,7 @@ import (
 	"github.com/acepanel/panel/v3/pkg/api"
 	"github.com/acepanel/panel/v3/pkg/config"
 	"github.com/acepanel/panel/v3/pkg/io"
+	"github.com/acepanel/panel/v3/pkg/tools"
 )
 
 // PanelTask 面板每日任务
@@ -28,26 +29,34 @@ type PanelTask struct {
 	conf        *config.Config
 	db          *gorm.DB
 	log         *slog.Logger
-	backupRepo  biz.BackupRepo
-	cacheRepo   biz.CacheRepo
-	taskRepo    biz.TaskRepo
-	settingRepo biz.SettingRepo
-	scanRepo    biz.ScanEventRepo
-	statRepo    biz.WebsiteStatRepo
+	backupRepo  *biz.BackupUsecase
+	cacheRepo   *biz.CacheUsecase
+	taskRepo    *biz.TaskUsecase
+	settingRepo *biz.SettingUsecase
+	monitorRepo *biz.MonitorUsecase
+	scanRepo    *biz.ScanEventUsecase
+	statRepo    *biz.WebsiteStatUsecase
+	tamperRepo  *biz.TamperUsecase
 }
 
-func NewPanelTask(conf *config.Config, db *gorm.DB, log *slog.Logger, backup biz.BackupRepo, cache biz.CacheRepo, task biz.TaskRepo, setting biz.SettingRepo, scan biz.ScanEventRepo, stat biz.WebsiteStatRepo) *PanelTask {
-	return &PanelTask{
-		api:         api.NewAPI(app.Version, app.Locale),
-		conf:        conf,
-		db:          db,
-		log:         log,
-		backupRepo:  backup,
-		cacheRepo:   cache,
-		taskRepo:    task,
-		settingRepo: setting,
-		scanRepo:    scan,
-		statRepo:    stat,
+// NewPanelTask 构造面板每日任务
+func NewPanelTask(backupUsecase *biz.BackupUsecase, cacheUsecase *biz.CacheUsecase, monitorUsecase *biz.MonitorUsecase, scanEventUsecase *biz.ScanEventUsecase, settingUsecase *biz.SettingUsecase, tamperUsecase *biz.TamperUsecase, taskUsecase *biz.TaskUsecase, websiteStatUsecase *biz.WebsiteStatUsecase, conf *config.Config, db *gorm.DB, log *slog.Logger) Job {
+	return Job{
+		Spec: "0 2 * * *",
+		Task: &PanelTask{
+			api:         api.NewAPI(app.Version, app.Locale),
+			conf:        conf,
+			db:          db,
+			log:         log,
+			backupRepo:  backupUsecase,
+			cacheRepo:   cacheUsecase,
+			taskRepo:    taskUsecase,
+			settingRepo: settingUsecase,
+			monitorRepo: monitorUsecase,
+			scanRepo:    scanEventUsecase,
+			statRepo:    websiteStatUsecase,
+			tamperRepo:  tamperUsecase,
+		},
 	}
 }
 
@@ -71,6 +80,12 @@ func (r *PanelTask) Run(_ context.Context) error {
 	}
 	if err := r.statRepo.VacuumDB(); err != nil {
 		r.log.Warn("failed to vacuum website stat database", slog.String("type", biz.OperationTypePanel), slog.Uint64("operator_id", 0), slog.Any("err", err))
+	}
+	if err := r.tamperRepo.VacuumDB(); err != nil {
+		r.log.Warn("failed to vacuum tamper database", slog.String("type", biz.OperationTypePanel), slog.Uint64("operator_id", 0), slog.Any("err", err))
+	}
+	if err := r.monitorRepo.VacuumDB(); err != nil {
+		r.log.Warn("failed to vacuum monitor database", slog.String("type", biz.OperationTypePanel), slog.Uint64("operator_id", 0), slog.Any("err", err))
 	}
 
 	// 备份面板
@@ -170,10 +185,14 @@ func (r *PanelTask) updatePanel() {
 		if download := collect.First(panel.Downloads); download != nil {
 			url := fmt.Sprintf("https://%s%s", r.conf.App.DownloadEndpoint, download.URL)
 			checksum := fmt.Sprintf("https://%s%s", r.conf.App.DownloadEndpoint, download.Checksum)
-			if err = r.backupRepo.UpdatePanel(panel.Version, url, checksum); err != nil {
+			if err = r.backupRepo.UpdatePanel(panel.Version, url, checksum, func(msg string) {
+				r.log.Info("panel updating", slog.String("type", biz.OperationTypePanel), slog.String("msg", msg))
+			}); err != nil {
 				r.log.Warn("failed to update panel", slog.String("type", biz.OperationTypePanel), slog.Uint64("operator_id", 0), slog.Any("err", err))
-				_ = r.backupRepo.FixPanel()
+				return
 			}
+			// 新流程非破坏性、storage 原地不动，失败无需 FixPanel；成功后由本入口负责重启
+			tools.RestartPanel()
 		}
 	})
 }

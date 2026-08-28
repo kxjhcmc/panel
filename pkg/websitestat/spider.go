@@ -48,18 +48,25 @@ var spiderDefs = []spiderDef{
 
 // SpiderName 返回蜘蛛名称，非蜘蛛返回空字符串
 func SpiderName(ua string) string {
-	// 先用关键词表精确命名
+	if name := spiderByKeyword(ua); name != "" {
+		return name
+	}
+
+	// 关键词没命中，用 UA 库兜底检测
+	if uaParser.Parse(ua).IsBot() {
+		return "Other"
+	}
+
+	return ""
+}
+
+// spiderByKeyword 用关键词表精确命名，未命中返回空字符串
+func spiderByKeyword(ua string) string {
 	lower := strings.ToLower(ua)
 	for _, def := range spiderDefs {
 		if strings.Contains(lower, def.keyword) {
 			return def.name
 		}
-	}
-
-	// 关键词没命中，用 UA 库兜底检测
-	agent := uaParser.Parse(ua)
-	if agent.IsBot() {
-		return "Other"
 	}
 
 	return ""

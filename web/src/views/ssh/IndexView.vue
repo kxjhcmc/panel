@@ -22,6 +22,7 @@ import { useConfirm } from '@/components/system/composables/useConfirm'
 
 import '@xterm/xterm/css/xterm.css'
 import CreateModal from '@/views/ssh/CreateModal.vue'
+import SftpPanel from '@/views/ssh/SftpPanel.vue'
 import UpdateModal from '@/views/ssh/UpdateModal.vue'
 
 const { $gettext } = useGettext()
@@ -31,6 +32,7 @@ const LOCAL_SERVER_ID = -1
 
 interface TerminalTab {
   id: string
+  type: 'terminal' | 'sftp'
   hostId: number
   name: string
   terminal: Terminal | null
@@ -89,9 +91,14 @@ const getHostName = (hostId: number) => {
 }
 
 // 主机下拉选项(用于顶部 + 按钮)
-const hostDropdownOptions = computed(() =>
-  hostList.value.map((h) => ({ label: h.label, key: h.key })),
-)
+const hostDropdownOptions = computed(() => [
+  ...hostList.value.map((h) => ({ label: h.label, key: h.key })),
+  { type: 'divider', key: 'divider-sftp' },
+  { label: $gettext('File Transfer'), key: 'sftp' },
+])
+
+// 文件互传面板的主机选项(含本机)
+const sftpHosts = computed(() => hostList.value.map((h) => ({ label: h.label, value: h.key })))
 
 const fetchData = async () => {
   hostList.value = [localHost]
@@ -129,8 +136,12 @@ const handleDeleteHost = (id: number) => {
   })
 }
 
-const handleSelectHost = (key: number) => {
-  addTab(key)
+const handleSelectHost = (key: number | string) => {
+  if (key === 'sftp') {
+    addSftpTab()
+  } else {
+    addTab(key as number)
+  }
   showHosts.value = false
 }
 
@@ -138,6 +149,7 @@ const addTab = async (hostId: number) => {
   const tabId = generateTabId()
   const tab: TerminalTab = {
     id: tabId,
+    type: 'terminal',
     hostId,
     name: getHostName(hostId),
     terminal: null,
@@ -155,6 +167,26 @@ const addTab = async (hostId: number) => {
 
   await nextTick()
   await initTerminal(tabId)
+}
+
+const addSftpTab = () => {
+  const tabId = generateTabId()
+  tabs.value.push({
+    id: tabId,
+    type: 'sftp',
+    hostId: LOCAL_SERVER_ID,
+    name: $gettext('File Transfer'),
+    terminal: null,
+    fitAddon: null,
+    webglAddon: null,
+    ws: null,
+    element: null,
+    connected: false,
+    latency: 0,
+    pingTimer: null,
+    lastPingTime: 0,
+  })
+  activeTabId.value = tabId
 }
 
 const closeTab = (tabId: string) => {
@@ -200,25 +232,27 @@ const initTerminal = async (tabId: string) => {
     tab.ws = tab.hostId === LOCAL_SERVER_ID ? await ws.pty('bash') : await ws.ssh(tab.hostId)
     tab.ws.binaryType = 'arraybuffer'
 
-    tab.terminal = new Terminal({
-      allowProposedApi: true,
-      lineHeight: 1.2,
-      fontSize: fontSize.value,
-      fontFamily: `'JetBrains Mono Variable', monospace`,
-      cursorBlink: true,
-      cursorStyle: 'underline',
-      tabStopWidth: 4,
-      theme: {
-        background:
-          getComputedStyle(document.documentElement)
-            .getPropertyValue('--color-bg-terminal')
-            .trim() || '#0a0e1a',
-        foreground: '#e6edf3',
-      },
-    })
+    tab.terminal = markRaw(
+      new Terminal({
+        allowProposedApi: true,
+        lineHeight: 1.2,
+        fontSize: fontSize.value,
+        fontFamily: `'JetBrains Mono Variable', monospace`,
+        cursorBlink: true,
+        cursorStyle: 'underline',
+        tabStopWidth: 4,
+        theme: {
+          background:
+            getComputedStyle(document.documentElement)
+              .getPropertyValue('--color-bg-terminal')
+              .trim() || '#0a0e1a',
+          foreground: '#e6edf3',
+        },
+      }),
+    )
 
-    tab.fitAddon = new FitAddon()
-    tab.webglAddon = new WebglAddon()
+    tab.fitAddon = markRaw(new FitAddon())
+    tab.webglAddon = markRaw(new WebglAddon())
 
     tab.terminal.loadAddon(tab.fitAddon)
     tab.terminal.loadAddon(new ClipboardAddon())
@@ -313,11 +347,14 @@ const disposeTab = (tab: TerminalTab) => {
 }
 
 const onResize = () => {
+  if (!terminalContainer.value?.isConnected) return
   const tab = tabs.value.find((t) => t.id === activeTabId.value)
   if (tab?.fitAddon && tab.terminal) tab.fitAddon.fit()
 }
 
 const onTermWheel = (event: WheelEvent) => {
+  const tab = tabs.value.find((t) => t.id === activeTabId.value)
+  if (tab?.type !== 'terminal') return
   if (event.ctrlKey) {
     event.preventDefault()
     if (event.deltaY > 0) {
@@ -330,8 +367,9 @@ const onTermWheel = (event: WheelEvent) => {
 }
 
 const onContextMenu = async (event: MouseEvent) => {
-  event.preventDefault()
   const tab = tabs.value.find((t) => t.id === activeTabId.value)
+  if (tab?.type !== 'terminal') return
+  event.preventDefault()
   if (tab?.terminal && tab.ws?.readyState === WebSocket.OPEN) {
     try {
       const text = await readClipboardText()
@@ -344,7 +382,7 @@ const onContextMenu = async (event: MouseEvent) => {
 
 const onKeyDown = (event: KeyboardEvent) => {
   const tab = tabs.value.find((t) => t.id === activeTabId.value)
-  if (!tab?.terminal) return
+  if (tab?.type !== 'terminal' || !tab?.terminal) return
 
   if (
     (event.ctrlKey && event.shiftKey && event.key === 'C') ||
@@ -422,13 +460,17 @@ const onFullscreenChange = () => {
 
 watch(fontSize, () => applyFontSettings())
 
+onActivated(async () => {
+  await nextTick()
+  onResize()
+})
+
 onMounted(() => {
   document.fonts.ready.then((fontFaceSet: any) =>
     Promise.all(Array.from(fontFaceSet).map((el: any) => el.load())).then(fetchData),
   )
   window.$bus.on('ssh:refresh', fetchData)
   window.addEventListener('resize', onResize)
-  window.addEventListener('keydown', onKeyDown)
   document.addEventListener('fullscreenchange', onFullscreenChange)
 })
 
@@ -436,7 +478,6 @@ onUnmounted(() => {
   tabs.value.forEach(disposeTab)
   window.$bus.off('ssh:refresh')
   window.removeEventListener('resize', onResize)
-  window.removeEventListener('keydown', onKeyDown)
   document.removeEventListener('fullscreenchange', onFullscreenChange)
 })
 </script>
@@ -462,7 +503,10 @@ onUnmounted(() => {
             :title="tab.name"
             @click="switchTab(tab.id)"
           >
-            <span class="status-dot" :class="tab.connected ? 'ok' : 'err'"></span>
+            <span v-if="tab.type === 'sftp'" class="tab-sftp-icon">
+              <i-mdi-swap-horizontal class="text-xs" />
+            </span>
+            <span v-else class="status-dot" :class="tab.connected ? 'ok' : 'err'"></span>
             <span class="tab-name">{{ tab.name }}</span>
             <span v-if="tab.connected" class="tab-latency">{{ tab.latency }}ms</span>
             <span class="tab-close" @click.stop="closeTab(tab.id)" :title="$gettext('Close')">
@@ -511,14 +555,23 @@ onUnmounted(() => {
         </div>
       </header>
 
-      <main class="terminals-content" @wheel="onTermWheel" @contextmenu="onContextMenu">
-        <div
-          v-for="tab in tabs"
-          :id="`terminal-${tab.id}`"
-          :key="tab.id"
-          class="terminal-pane"
-          :class="{ active: tab.id === activeTabId }"
-        ></div>
+      <main
+        class="terminals-content"
+        @keydown="onKeyDown"
+        @wheel="onTermWheel"
+        @contextmenu="onContextMenu"
+      >
+        <template v-for="tab in tabs" :key="tab.id">
+          <div
+            v-if="tab.type === 'terminal'"
+            :id="`terminal-${tab.id}`"
+            class="terminal-pane"
+            :class="{ active: tab.id === activeTabId }"
+          ></div>
+          <div v-else class="terminal-pane sftp-pane" :class="{ active: tab.id === activeTabId }">
+            <sftp-panel :hosts="sftpHosts" />
+          </div>
+        </template>
       </main>
     </div>
   </PageContainer>
@@ -717,6 +770,22 @@ onUnmounted(() => {
   text-overflow: ellipsis;
   max-width: 200px;
   font-variant-numeric: tabular-nums;
+}
+
+.tab-sftp-icon {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  color: #3b82f6;
+}
+
+.sftp-pane {
+  background: var(--color-bg-body);
+
+  &.active {
+    display: flex;
+    flex-direction: column;
+  }
 }
 
 .tab-latency {

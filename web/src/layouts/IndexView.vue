@@ -1,4 +1,5 @@
 <script lang="ts" setup>
+import HealthBanner from '@/components/system/HealthBanner.vue'
 import { useThemeStore } from '@/stores'
 
 import AppMain from './AppMain.vue'
@@ -55,6 +56,7 @@ onBeforeUnmount(() => window.removeEventListener('resize', handleResize))
       >
         <app-header />
       </header>
+      <health-banner />
       <section class="bg-bg-base flex flex-col flex-1 overflow-hidden">
         <app-main />
       </section>

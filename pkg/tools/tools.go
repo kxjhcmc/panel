@@ -8,11 +8,13 @@ import (
 	"fmt"
 	stdnet "net"
 	"net/http"
+	"net/netip"
 	"slices"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/samber/lo"
 	"github.com/shirou/gopsutil/v4/cpu"
 	"github.com/shirou/gopsutil/v4/disk"
 	"github.com/shirou/gopsutil/v4/host"
@@ -31,9 +33,8 @@ func CurrentInfo(nets, disks []string) types.CurrentInfo {
 	var res types.CurrentInfo
 	res.Cpus, _ = cpu.Info()
 	res.Percents, _ = cpu.Percent(100*time.Millisecond, true)
-	percent, _ := cpu.Percent(100*time.Millisecond, false)
-	if len(percent) > 0 {
-		res.Percent = percent[0]
+	if len(res.Percents) > 0 {
+		res.Percent = lo.Sum(res.Percents) / float64(len(res.Percents))
 	}
 	res.Load, _ = load.Avg()
 	res.Host, _ = host.Info()
@@ -63,7 +64,11 @@ func CurrentInfo(nets, disks []string) types.CurrentInfo {
 	})
 	// 分区使用
 	for _, partition := range res.Disk {
-		usage, _ := disk.Usage(partition.Mountpoint)
+		// 挂载点在两次调用之间消失或不可读时返回 nil，直接解引用会 panic
+		usage, err := disk.Usage(partition.Mountpoint)
+		if err != nil || usage == nil {
+			continue
+		}
 		res.DiskUsage = append(res.DiskUsage, *usage)
 	}
 	// 网络
@@ -93,14 +98,13 @@ func CollectTopProcesses() types.TopProcesses {
 	}
 
 	type procMetrics struct {
-		pid      int32
-		name     string
-		username string
-		cmdline  string
-		cpu      float64
-		rss      uint64
-		ioRead   uint64
-		ioWrite  uint64
+		proc    *process.Process
+		pid     int32
+		name    string
+		cpu     float64
+		rss     uint64
+		ioRead  uint64
+		ioWrite uint64
 	}
 
 	metrics := make([]procMetrics, 0, len(procs))
@@ -110,12 +114,7 @@ func CollectTopProcesses() types.TopProcesses {
 			continue
 		}
 
-		m := procMetrics{pid: p.Pid, name: name}
-		m.username, _ = p.Username()
-		m.cmdline, _ = p.Cmdline()
-		if len(m.cmdline) > 80 {
-			m.cmdline = m.cmdline[:80]
-		}
+		m := procMetrics{proc: p, pid: p.Pid, name: name}
 		m.cpu, _ = p.CPUPercent()
 		if memInfo, err := p.MemoryInfo(); err == nil && memInfo != nil {
 			m.rss = memInfo.RSS
@@ -131,6 +130,24 @@ func CollectTopProcesses() types.TopProcesses {
 	var result types.TopProcesses
 	topN := 5
 
+	type procDetail struct{ username, cmdline string }
+	details := make(map[int32]procDetail, topN*3)
+	statOf := func(m procMetrics, value float64) types.ProcessStat {
+		d, ok := details[m.pid]
+		if !ok {
+			d.username, _ = m.proc.Username()
+			d.cmdline, _ = m.proc.Cmdline()
+			if len(d.cmdline) > 80 {
+				d.cmdline = d.cmdline[:80]
+			}
+			details[m.pid] = d
+		}
+		return types.ProcessStat{
+			PID: m.pid, Name: m.name, Username: d.username, Command: d.cmdline,
+			Value: value,
+		}
+	}
+
 	// CPU Top 5
 	sort.Slice(metrics, func(i, j int) bool { return metrics[i].cpu > metrics[j].cpu })
 	for i := range min(topN, len(metrics)) {
@@ -138,10 +155,7 @@ func CollectTopProcesses() types.TopProcesses {
 		if m.cpu <= 0 {
 			break
 		}
-		result.CPU = append(result.CPU, types.ProcessStat{
-			PID: m.pid, Name: m.name, Username: m.username, Command: m.cmdline,
-			Value: m.cpu,
-		})
+		result.CPU = append(result.CPU, statOf(m, m.cpu))
 	}
 
 	// 内存 Top 5
@@ -151,10 +165,7 @@ func CollectTopProcesses() types.TopProcesses {
 		if m.rss == 0 {
 			break
 		}
-		result.Memory = append(result.Memory, types.ProcessStat{
-			PID: m.pid, Name: m.name, Username: m.username, Command: m.cmdline,
-			Value: float64(m.rss),
-		})
+		result.Memory = append(result.Memory, statOf(m, float64(m.rss)))
 	}
 
 	// 磁盘 IO Top 5（按累计读+写排序）
@@ -166,12 +177,10 @@ func CollectTopProcesses() types.TopProcesses {
 		if m.ioRead+m.ioWrite == 0 {
 			break
 		}
-		result.DiskIO = append(result.DiskIO, types.ProcessStat{
-			PID: m.pid, Name: m.name, Username: m.username, Command: m.cmdline,
-			Value: float64(m.ioRead + m.ioWrite),
-			Read:  float64(m.ioRead),
-			Write: float64(m.ioWrite),
-		})
+		stat := statOf(m, float64(m.ioRead+m.ioWrite))
+		stat.Read = float64(m.ioRead)
+		stat.Write = float64(m.ioWrite)
+		result.DiskIO = append(result.DiskIO, stat)
 	}
 
 	return result
@@ -312,4 +321,29 @@ func FormatBytes(size float64) string {
 	}
 
 	return fmt.Sprintf("%.2f %s", size, units[i])
+}
+
+// IsIPv6 判断 host 是否为 IPv6 地址（裸地址，不含方括号）
+func IsIPv6(host string) bool {
+	addr, err := netip.ParseAddr(host)
+	return err == nil && !addr.Is4()
+}
+
+// WrapIPv6 为裸 IPv6 地址套上方括号（如 ::1 → [::1]），用于 nginx server_name、URL 等语境
+// 非 IPv6 或已带方括号则原样返回
+func WrapIPv6(host string) string {
+	if IsIPv6(host) {
+		return "[" + host + "]"
+	}
+	return host
+}
+
+// UnwrapIPv6 去除 IPv6 地址的方括号（如 [::1] → ::1），非此形式则原样返回
+func UnwrapIPv6(host string) string {
+	if inner, ok := strings.CutPrefix(host, "["); ok {
+		if inner, ok = strings.CutSuffix(inner, "]"); ok && IsIPv6(inner) {
+			return inner
+		}
+	}
+	return host
 }

@@ -5,30 +5,30 @@ import (
 	"strings"
 
 	"github.com/leonelquinteros/gotext"
-	"github.com/libtnb/chix"
+	"github.com/libtnb/chix/v2"
 	"github.com/samber/lo"
 	lop "github.com/samber/lo/parallel"
 
 	"github.com/acepanel/panel/v3/internal/biz"
-	"github.com/acepanel/panel/v3/internal/http/request"
+	"github.com/acepanel/panel/v3/internal/request"
 	"github.com/acepanel/panel/v3/pkg/apploader"
 	"github.com/acepanel/panel/v3/pkg/types"
 )
 
 type AppService struct {
 	t           *gotext.Locale
-	appRepo     biz.AppRepo
-	cacheRepo   biz.CacheRepo
-	settingRepo biz.SettingRepo
+	appRepo     *biz.AppUsecase
+	cacheRepo   *biz.CacheUsecase
+	settingRepo *biz.SettingUsecase
 	loader      *apploader.Loader
 }
 
-func NewAppService(t *gotext.Locale, app biz.AppRepo, cache biz.CacheRepo, setting biz.SettingRepo, loader *apploader.Loader) *AppService {
+func NewAppService(loader *apploader.Loader, appUsecase *biz.AppUsecase, cacheUsecase *biz.CacheUsecase, settingUsecase *biz.SettingUsecase, t *gotext.Locale) *AppService {
 	return &AppService{
 		t:           t,
-		appRepo:     app,
-		cacheRepo:   cache,
-		settingRepo: setting,
+		appRepo:     appUsecase,
+		cacheRepo:   cacheUsecase,
+		settingRepo: settingUsecase,
 		loader:      loader,
 	}
 }
@@ -59,13 +59,19 @@ func (s *AppService) List(w http.ResponseWriter, r *http.Request) {
 	var apps []types.AppDetail
 	for _, item := range all {
 		installed, installedChannel, installedVersion, updateExist, show, status := false, "", "", false, false, ""
-		if _, ok := installedAppMap[item.Slug]; ok {
+		if inst, ok := installedAppMap[item.Slug]; ok {
 			installed = true
-			installedChannel = installedAppMap[item.Slug].Channel
-			installedVersion = installedAppMap[item.Slug].Version
-			updateExist = s.appRepo.UpdateExist(item.Slug)
-			show = installedAppMap[item.Slug].Show
+			installedChannel = inst.Channel
+			installedVersion = inst.Version
+			show = inst.Show
 			status = statusMap[item.Slug]
+			// 直接用已加载的目录与安装记录比对，避免每个应用都重新查库并反序列化整个应用目录
+			for _, channel := range item.Channels {
+				if channel.Slug == inst.Channel && channel.Version != inst.Version {
+					updateExist = true
+					break
+				}
+			}
 		}
 		if onlyInstalled && !installed {
 			continue
@@ -90,6 +96,7 @@ func (s *AppService) List(w http.ResponseWriter, r *http.Request) {
 			UpdateExist:      updateExist,
 			Show:             show,
 			Status:           status,
+			CustomSupported:  biz.CustomCompileApp(item.Slug),
 		}
 
 		for _, c := range item.Channels {
@@ -216,6 +223,42 @@ func (s *AppService) IsInstalled(w http.ResponseWriter, r *http.Request) {
 	}
 
 	Success(w, flag)
+}
+
+// GetCustom 获取自定义编译参数
+func (s *AppService) GetCustom(w http.ResponseWriter, r *http.Request) {
+	req, err := Bind[request.AppSlug](r)
+	if err != nil {
+		Error(w, http.StatusUnprocessableEntity, "%v", err)
+		return
+	}
+
+	custom, err := s.appRepo.GetCustom(req.Slug)
+	if err != nil {
+		Error(w, http.StatusInternalServerError, "%v", err)
+		return
+	}
+
+	Success(w, custom)
+}
+
+// SaveCustom 保存自定义编译参数
+func (s *AppService) SaveCustom(w http.ResponseWriter, r *http.Request) {
+	req, err := Bind[request.AppCustomSave](r)
+	if err != nil {
+		Error(w, http.StatusUnprocessableEntity, "%v", err)
+		return
+	}
+
+	if err = s.appRepo.SaveCustom(req.Slug, &biz.AppCustom{
+		PreScript: req.PreScript,
+		Args:      req.Args,
+	}); err != nil {
+		Error(w, http.StatusInternalServerError, "%v", err)
+		return
+	}
+
+	Success(w, nil)
 }
 
 func (s *AppService) UpdateCache(w http.ResponseWriter, r *http.Request) {

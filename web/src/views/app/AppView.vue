@@ -67,7 +67,7 @@ const columns: any = [
   {
     title: $gettext('Actions'),
     key: 'actions',
-    width: 350,
+    width: 430,
     hideInExcel: true,
     render(row: any) {
       return h(NFlex, null, {
@@ -159,7 +159,7 @@ const { data: categories } = useRequest(app.categories, {
   initialData: [],
 })
 
-const { loading, data, page, total, pageSize, pageCount, refresh } = usePagination(
+const { loading, data, page, total, pageSize, refresh } = usePagination(
   (page, pageSize) =>
     app.list(page, pageSize, selectedCategory.value || undefined, searchQuery.value || undefined),
   {
@@ -244,7 +244,7 @@ onMounted(() => {
       v-model:pageSize="pageSize"
       striped
       remote
-      :scroll-x="1300"
+      :scroll-x="1380"
       :loading="loading"
       :columns="columns"
       :data="data"

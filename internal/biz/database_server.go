@@ -1,13 +1,20 @@
 package biz
 
 import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"slices"
 	"time"
 
+	"github.com/leonelquinteros/gotext"
 	"github.com/libtnb/utils/crypt"
 	"gorm.io/gorm"
 
 	"github.com/acepanel/panel/v3/internal/app"
-	"github.com/acepanel/panel/v3/internal/http/request"
+	"github.com/acepanel/panel/v3/internal/request"
+	"github.com/acepanel/panel/v3/pkg/db"
 )
 
 type DatabaseServerStatus string
@@ -62,15 +69,194 @@ func (r *DatabaseServer) AfterFind(tx *gorm.DB) error {
 
 type DatabaseServerRepo interface {
 	Count() (int64, error)
-	List(page, limit uint, typ string) ([]*DatabaseServer, int64, error)
-	Get(id uint) (*DatabaseServer, error)
-	GetByName(name string) (*DatabaseServer, error)
-	Create(req *request.DatabaseServerCreate) error
-	Update(req *request.DatabaseServerUpdate) error
+	List(ctx context.Context, page, limit uint, typ string) ([]*DatabaseServer, int64, error)
+	Get(ctx context.Context, id uint) (*DatabaseServer, error)
+	GetByName(ctx context.Context, name string) (*DatabaseServer, error)
+	Create(server *DatabaseServer) error
+	Save(server *DatabaseServer) error
 	UpdateRemark(req *request.DatabaseServerUpdateRemark) error
 	UpdatePassword(name string, password string) error
 	UpdatePort(name string, port uint) error
 	Delete(id uint) error
 	ClearUsers(id uint) error
-	Sync(id uint) error
+	ListUsers(serverID uint) ([]*DatabaseUser, error)
+	CreateUser(user *DatabaseUser) error
+	Operator(ctx context.Context, server *DatabaseServer) (db.Operator, error)
+	CheckServer(ctx context.Context, server *DatabaseServer) bool
+}
+
+// DatabaseServerUsecase 数据库服务器业务用例
+type DatabaseServerUsecase struct {
+	repo DatabaseServerRepo
+	t    *gotext.Locale
+	log  *slog.Logger
+}
+
+func NewDatabaseServerUsecase(t *gotext.Locale, log *slog.Logger, databaseServerRepo DatabaseServerRepo) *DatabaseServerUsecase {
+	return &DatabaseServerUsecase{
+		repo: databaseServerRepo,
+		t:    t,
+		log:  log,
+	}
+}
+
+func (uc *DatabaseServerUsecase) Count() (int64, error) {
+	return uc.repo.Count()
+}
+
+func (uc *DatabaseServerUsecase) List(ctx context.Context, page, limit uint, typ string) ([]*DatabaseServer, int64, error) {
+	return uc.repo.List(ctx, page, limit, typ)
+}
+
+func (uc *DatabaseServerUsecase) Get(ctx context.Context, id uint) (*DatabaseServer, error) {
+	return uc.repo.Get(ctx, id)
+}
+
+func (uc *DatabaseServerUsecase) GetByName(ctx context.Context, name string) (*DatabaseServer, error) {
+	return uc.repo.GetByName(ctx, name)
+}
+
+func (uc *DatabaseServerUsecase) Create(ctx context.Context, req *request.DatabaseServerCreate) error {
+	databaseServer := &DatabaseServer{
+		Name:     req.Name,
+		Type:     DatabaseType(req.Type),
+		Host:     req.Host,
+		Port:     req.Port,
+		Username: req.Username,
+		Password: req.Password,
+		Remark:   req.Remark,
+	}
+
+	if !uc.repo.CheckServer(ctx, databaseServer) {
+		return errors.New(uc.t.Get("check server connection failed"))
+	}
+
+	return uc.repo.Create(databaseServer)
+}
+
+func (uc *DatabaseServerUsecase) Update(ctx context.Context, req *request.DatabaseServerUpdate) error {
+	server, err := uc.repo.Get(ctx, req.ID)
+	if err != nil {
+		return err
+	}
+
+	server.Name = req.Name
+	server.Host = req.Host
+	server.Port = req.Port
+	server.Username = req.Username
+	server.Password = req.Password
+	server.Remark = req.Remark
+
+	if !uc.repo.CheckServer(ctx, server) {
+		return errors.New(uc.t.Get("check server connection failed"))
+	}
+
+	return uc.repo.Save(server)
+}
+
+func (uc *DatabaseServerUsecase) UpdateRemark(req *request.DatabaseServerUpdateRemark) error {
+	return uc.repo.UpdateRemark(req)
+}
+
+func (uc *DatabaseServerUsecase) UpdatePassword(name string, password string) error {
+	return uc.repo.UpdatePassword(name, password)
+}
+
+func (uc *DatabaseServerUsecase) UpdatePort(name string, port uint) error {
+	return uc.repo.UpdatePort(name, port)
+}
+
+func (uc *DatabaseServerUsecase) Delete(id uint) error {
+	return uc.repo.Delete(id)
+}
+
+func (uc *DatabaseServerUsecase) ClearUsers(id uint) error {
+	return uc.repo.ClearUsers(id)
+}
+
+func (uc *DatabaseServerUsecase) Sync(ctx context.Context, id uint) error {
+	server, err := uc.repo.Get(ctx, id)
+	if err != nil {
+		return err
+	}
+
+	// 非 Operator 类型不支持用户同步
+	switch server.Type {
+	case DatabaseTypeRedis, DatabaseTypeMongoDB, DatabaseTypeSQLite, DatabaseTypeElasticsearch:
+		return fmt.Errorf("sync is not supported for %s", server.Type)
+	}
+
+	users, err := uc.repo.ListUsers(id)
+	if err != nil {
+		return err
+	}
+
+	operator, err := uc.repo.Operator(ctx, server)
+	if err != nil {
+		return err
+	}
+	defer operator.Close()
+
+	switch server.Type {
+	case DatabaseTypeMysql:
+		allUsers, err := operator.Users()
+		if err != nil {
+			return err
+		}
+		for user := range slices.Values(allUsers) {
+			if !slices.ContainsFunc(users, func(a *DatabaseUser) bool {
+				return a.Username == user.User && a.Host == user.Host
+			}) && !slices.Contains([]string{"root", "mysql.sys", "mysql.session", "mysql.infoschema"}, user.User) {
+				newUser := &DatabaseUser{
+					ServerID: id,
+					Username: user.User,
+					Host:     user.Host,
+					Remark:   uc.t.Get("sync from server %s", server.Name),
+				}
+				if err = uc.repo.CreateUser(newUser); err != nil {
+					uc.log.Warn("sync mysql database user failed", slog.String("type", OperationTypeDatabaseServer), slog.Uint64("operator_id", 0), slog.Any("err", err))
+				}
+			}
+		}
+	case DatabaseTypePostgresql:
+		allUsers, err := operator.Users()
+		if err != nil {
+			return err
+		}
+		for user := range slices.Values(allUsers) {
+			if !slices.ContainsFunc(users, func(a *DatabaseUser) bool {
+				return a.Username == user.User
+			}) && !slices.Contains([]string{"postgres"}, user.User) {
+				newUser := &DatabaseUser{
+					ServerID: id,
+					Username: user.User,
+					Remark:   uc.t.Get("sync from server %s", server.Name),
+				}
+				if err = uc.repo.CreateUser(newUser); err != nil {
+					uc.log.Warn("sync postgresql database user failed", slog.String("type", OperationTypeDatabaseServer), slog.Uint64("operator_id", 0), slog.Any("err", err))
+				}
+			}
+		}
+	case DatabaseTypeClickHouse:
+		allUsers, err := operator.Users()
+		if err != nil {
+			return err
+		}
+		for user := range slices.Values(allUsers) {
+			if !slices.ContainsFunc(users, func(a *DatabaseUser) bool {
+				return a.Username == user.User
+			}) && !slices.Contains([]string{"default"}, user.User) {
+				newUser := &DatabaseUser{
+					ServerID: id,
+					Username: user.User,
+					Remark:   uc.t.Get("sync from server %s", server.Name),
+				}
+				if err = uc.repo.CreateUser(newUser); err != nil {
+					uc.log.Warn("sync clickhouse database user failed", slog.String("type", OperationTypeDatabaseServer), slog.Uint64("operator_id", 0), slog.Any("err", err))
+				}
+			}
+		}
+	}
+
+	return nil
 }

@@ -5,21 +5,21 @@ import (
 	"time"
 
 	"github.com/leonelquinteros/gotext"
-	"github.com/libtnb/chix"
+	"github.com/libtnb/chix/v2"
 
 	"github.com/acepanel/panel/v3/internal/biz"
-	"github.com/acepanel/panel/v3/internal/http/request"
+	"github.com/acepanel/panel/v3/internal/request"
 )
 
 type UserTokenService struct {
 	t             *gotext.Locale
-	userTokenRepo biz.UserTokenRepo
+	userTokenRepo *biz.UserTokenUsecase
 }
 
-func NewUserTokenService(t *gotext.Locale, userToken biz.UserTokenRepo) *UserTokenService {
+func NewUserTokenService(userTokenUsecase *biz.UserTokenUsecase, t *gotext.Locale) *UserTokenService {
 	return &UserTokenService{
 		t:             t,
-		userTokenRepo: userToken,
+		userTokenRepo: userTokenUsecase,
 	}
 }
 

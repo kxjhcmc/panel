@@ -17,6 +17,12 @@ import (
 	"github.com/acepanel/panel/v3/pkg/geoip"
 )
 
+// healthKeyScanDB 扫描事件辅助数据库健康问题上报 key
+const healthKeyScanDB = "database:scan"
+
+// maxScanEntries 聚合缓冲/计数器条目上限,防伪造源 IP 洪水耗尽内存
+const maxScanEntries = 100000
+
 // ipCounter 单个 IP 的扫描计数器
 type ipCounter struct {
 	count     uint
@@ -26,8 +32,8 @@ type ipCounter struct {
 // FirewallScan 防火墙扫描感知任务
 type FirewallScan struct {
 	log          *slog.Logger
-	setting      biz.SettingRepo
-	scanRepo     biz.ScanEventRepo
+	setting      *biz.SettingUsecase
+	scanRepo     *biz.ScanEventUsecase
 	scanner      *scan.Scanner
 	geoIP        *geoip.GeoIP
 	geoIPPath    string
@@ -36,18 +42,24 @@ type FirewallScan struct {
 	ipCounters   map[string]*ipCounter     // per-IP 扫描计数
 	blockedIPs   map[string]time.Time      // 已屏蔽 IP → 屏蔽时间
 	fw           firewall.Firewall         // 懒加载
+	cleanedAt    time.Time
 	mu           sync.Mutex
+
+	unsupportedLogged bool // 内核不支持仅告警一次
 }
 
-// NewFirewallScan 创建扫描感知任务
-func NewFirewallScan(log *slog.Logger, setting biz.SettingRepo, scanRepo biz.ScanEventRepo) *FirewallScan {
-	return &FirewallScan{
-		log:        log,
-		setting:    setting,
-		scanRepo:   scanRepo,
-		buffer:     make(map[string]*biz.ScanEvent),
-		ipCounters: make(map[string]*ipCounter),
-		blockedIPs: make(map[string]time.Time),
+// NewFirewallScan 构造防火墙扫描感知任务
+func NewFirewallScan(scanEventUsecase *biz.ScanEventUsecase, settingUsecase *biz.SettingUsecase, log *slog.Logger) Job {
+	return Job{
+		Spec: "*/2 * * * *",
+		Task: &FirewallScan{
+			log:        log,
+			setting:    settingUsecase,
+			scanRepo:   scanEventUsecase,
+			buffer:     make(map[string]*biz.ScanEvent),
+			ipCounters: make(map[string]*ipCounter),
+			blockedIPs: make(map[string]time.Time),
+		},
 	}
 }
 
@@ -87,6 +99,10 @@ func (r *FirewallScan) ensureScanner() {
 	}
 
 	if !scan.Supported() {
+		if !r.unsupportedLogged {
+			r.log.Warn("eBPF scan detector unavailable on this kernel (TCX attach requires 6.6+)")
+			r.unsupportedLogged = true
+		}
 		return
 	}
 
@@ -137,7 +153,7 @@ func (r *FirewallScan) aggregate() {
 		if existing, ok := r.buffer[key]; ok {
 			existing.Count++
 			existing.LastSeen = evt.Timestamp
-		} else {
+		} else if len(r.buffer) < maxScanEntries {
 			r.buffer[key] = &biz.ScanEvent{
 				SourceIP:  evt.SourceIP,
 				Port:      uint(evt.Port),
@@ -152,7 +168,7 @@ func (r *FirewallScan) aggregate() {
 		// per-IP 计数递增
 		if counter, ok := r.ipCounters[evt.SourceIP]; ok {
 			counter.count++
-		} else {
+		} else if len(r.ipCounters) < maxScanEntries {
 			r.ipCounters[evt.SourceIP] = &ipCounter{
 				count:     1,
 				firstSeen: evt.Timestamp,
@@ -187,7 +203,10 @@ func (r *FirewallScan) flush() {
 
 	if err := r.scanRepo.Upsert(events); err != nil {
 		r.log.Warn("failed to upsert scan events", slog.Any("err", err))
+		app.Health.Report(healthKeyScanDB, app.HealthLevelError, err.Error())
+		return
 	}
+	app.Health.Clear(healthKeyScanDB)
 }
 
 // ensureFirewall 懒加载防火墙实例
@@ -357,7 +376,13 @@ func isWhitelisted(ip string, whitelist []net.IPNet) bool {
 }
 
 // cleanup 清理过期数据
+// 任务每 2 分钟触发，但数据按天过期，故限流到 6 小时一次
 func (r *FirewallScan) cleanup() {
+	if time.Since(r.cleanedAt) < 6*time.Hour {
+		return
+	}
+	r.cleanedAt = time.Now()
+
 	day, err := r.setting.GetInt(biz.SettingKeyScanAwareDays, 30)
 	if err != nil {
 		return

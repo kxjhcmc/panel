@@ -1,6 +1,7 @@
 package service
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"slices"
@@ -8,17 +9,25 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/libtnb/chix"
+	"github.com/leonelquinteros/gotext"
+	"github.com/libtnb/chix/v2"
 	"github.com/shirou/gopsutil/v4/net"
 	"github.com/shirou/gopsutil/v4/process"
 
-	"github.com/acepanel/panel/v3/internal/http/request"
+	"github.com/acepanel/panel/v3/internal/request"
+	panelnetwork "github.com/acepanel/panel/v3/pkg/network"
 )
 
-type ToolboxNetworkService struct{}
+type ToolboxNetworkService struct {
+	t       *gotext.Locale
+	network *panelnetwork.Service
+}
 
-func NewToolboxNetworkService() *ToolboxNetworkService {
-	return &ToolboxNetworkService{}
+func NewToolboxNetworkService(t *gotext.Locale) *ToolboxNetworkService {
+	return &ToolboxNetworkService{
+		t:       t,
+		network: panelnetwork.New(),
+	}
 }
 
 type networkConnection struct {
@@ -28,6 +37,60 @@ type networkConnection struct {
 	Local   string `json:"local"`   // 本地地址:端口
 	Remote  string `json:"remote"`  // 远程地址:端口
 	State   string `json:"state"`   // LISTEN, ESTABLISHED 等
+}
+
+// Interfaces 获取可管理网卡列表
+func (s *ToolboxNetworkService) Interfaces(w http.ResponseWriter, r *http.Request) {
+	result, err := s.network.Interfaces(r.Context())
+	if err != nil {
+		Error(w, http.StatusInternalServerError, s.t.Get("failed to get network interfaces: %v", err))
+		return
+	}
+
+	Success(w, result)
+}
+
+// UpdateInterface 更新网卡配置，变更后需在超时前确认，否则自动回滚
+func (s *ToolboxNetworkService) UpdateInterface(w http.ResponseWriter, r *http.Request) {
+	req, err := Bind[panelnetwork.Config](r)
+	if err != nil {
+		Error(w, http.StatusUnprocessableEntity, "%v", err)
+		return
+	}
+	if err = s.network.Update(r.Context(), *req); err != nil {
+		if errors.Is(err, panelnetwork.ErrValidation) {
+			Error(w, http.StatusUnprocessableEntity, "%v", err)
+			return
+		}
+		Error(w, http.StatusInternalServerError, s.t.Get("failed to update network interface: %v", err))
+		return
+	}
+
+	Success(w, chix.M{"confirm_timeout": int(panelnetwork.ConfirmTimeout.Seconds())})
+}
+
+// ConfirmInterface 确认保留网卡变更
+func (s *ToolboxNetworkService) ConfirmInterface(w http.ResponseWriter, r *http.Request) {
+	if err := s.network.Confirm(); err != nil {
+		Error(w, http.StatusUnprocessableEntity, "%v", err)
+		return
+	}
+
+	Success(w, nil)
+}
+
+// RollbackInterface 立即撤销网卡变更
+func (s *ToolboxNetworkService) RollbackInterface(w http.ResponseWriter, r *http.Request) {
+	if err := s.network.Rollback(r.Context()); err != nil {
+		if errors.Is(err, panelnetwork.ErrValidation) {
+			Error(w, http.StatusUnprocessableEntity, "%v", err)
+			return
+		}
+		Error(w, http.StatusInternalServerError, s.t.Get("failed to roll back network interface: %v", err))
+		return
+	}
+
+	Success(w, nil)
 }
 
 // List 获取网络连接列表

@@ -308,7 +308,7 @@ const getFilename = (path: string) => {
 
 const isCompress = (name: string) => {
   const ext = getExt(name)
-  return ['zip', 'bz2', 'tar', 'gz', 'tgz', 'xz', '7z'].includes(ext)
+  return ['zip', 'bz2', 'tar', 'gz', 'tgz', 'xz', 'zst', '7z'].includes(ext)
 }
 
 const isImage = (name: string) => {
@@ -353,6 +353,9 @@ const lastDirectory = (path: string) => {
   return parts.pop() || ''
 }
 
+// 拼接目录与名称
+const joinPath = (dir: string, name: string) => dir.replace(/\/+$/, '') + '/' + name
+
 export {
   checkName,
   checkPath,
@@ -364,6 +367,7 @@ export {
   getIconByExt,
   isCompress,
   isImage,
+  joinPath,
   languageByPath,
   lastDirectory,
 }

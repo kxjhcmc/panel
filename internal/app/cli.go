@@ -5,10 +5,7 @@ import (
 	"os"
 
 	"github.com/go-gormigrate/gormigrate/v2"
-	"github.com/gookit/color"
 	"github.com/urfave/cli/v3"
-
-	"github.com/acepanel/panel/v3/pkg/apploader"
 )
 
 type Cli struct {
@@ -16,7 +13,7 @@ type Cli struct {
 	migrator *gormigrate.Gormigrate
 }
 
-func NewCli(cmd *cli.Command, migrator *gormigrate.Gormigrate, _ *apploader.Loader) *Cli {
+func NewCli(cmd *cli.Command, migrator *gormigrate.Gormigrate) *Cli {
 	IsCli = true
 	return &Cli{
 		cmd:      cmd,
@@ -29,9 +26,6 @@ func (r *Cli) Run() error {
 	// 这里不处理错误，这么做是为了在异常时用户可以用 fix 命令尝试修复
 	_ = r.migrator.Migrate()
 
-	if err := r.cmd.Run(context.TODO(), os.Args); err != nil {
-		color.Errorf("|-%v\n", err)
-	}
-
-	return nil
+	// 错误必须向上返回，调用方据此以非零码退出，后台任务才能正确判定失败
+	return r.cmd.Run(context.TODO(), os.Args)
 }

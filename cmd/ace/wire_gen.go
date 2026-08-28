@@ -27,6 +27,7 @@ import (
 	"github.com/acepanel/panel/v3/internal/apps/openresty"
 	"github.com/acepanel/panel/v3/internal/apps/opensearch"
 	"github.com/acepanel/panel/v3/internal/apps/percona"
+	"github.com/acepanel/panel/v3/internal/apps/pgadmin"
 	"github.com/acepanel/panel/v3/internal/apps/phpmyadmin"
 	"github.com/acepanel/panel/v3/internal/apps/podman"
 	"github.com/acepanel/panel/v3/internal/apps/postgresql"
@@ -38,10 +39,11 @@ import (
 	"github.com/acepanel/panel/v3/internal/apps/s3fs"
 	"github.com/acepanel/panel/v3/internal/apps/supervisor"
 	"github.com/acepanel/panel/v3/internal/apps/valkey"
+	"github.com/acepanel/panel/v3/internal/biz"
 	"github.com/acepanel/panel/v3/internal/bootstrap"
 	"github.com/acepanel/panel/v3/internal/data"
-	"github.com/acepanel/panel/v3/internal/http/middleware"
 	"github.com/acepanel/panel/v3/internal/job"
+	"github.com/acepanel/panel/v3/internal/middleware"
 	"github.com/acepanel/panel/v3/internal/route"
 	"github.com/acepanel/panel/v3/internal/service"
 	"github.com/acepanel/panel/v3/pkg/websitestat"
@@ -53,172 +55,322 @@ import (
 
 // Injectors from wire.go:
 
-// initAce init application.
-func initAce() (*app.Ace, error) {
+func initAce() (*app.Ace, func(), error) {
 	config, err := bootstrap.NewConf()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	locale, err := bootstrap.NewT(config)
-	if err != nil {
-		return nil, err
-	}
+	locale := bootstrap.NewT(config)
+	apacheApp := apache.NewApp(locale)
 	db, err := bootstrap.NewDB(config)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	manager, err := bootstrap.NewSession(config, db)
-	if err != nil {
-		return nil, err
-	}
-	logger := bootstrap.NewLog(config)
-	cacheRepo := data.NewCacheRepo(db)
-	taskRunner := bootstrap.NewRunner(db, logger)
-	taskRepo := data.NewTaskRepo(locale, db, logger, taskRunner)
-	appRepo := data.NewAppRepo(locale, config, db, logger, cacheRepo, taskRepo)
-	userTokenRepo := data.NewUserTokenRepo(locale, config, db)
-	middlewares := middleware.NewMiddlewares(config, manager, appRepo, userTokenRepo)
-	userRepo := data.NewUserRepo(locale, db, logger)
-	userService := service.NewUserService(locale, config, manager, userRepo)
-	userPasskeyRepo := data.NewUserPasskeyRepo(db)
-	userPasskeyService := service.NewUserPasskeyService(locale, config, manager, userPasskeyRepo, userRepo)
-	userTokenService := service.NewUserTokenService(locale, userTokenRepo)
-	databaseServerRepo := data.NewDatabaseServerRepo(locale, db, logger)
-	databaseUserRepo := data.NewDatabaseUserRepo(locale, db, logger, databaseServerRepo)
-	databaseRepo := data.NewDatabaseRepo(locale, db, logger, databaseServerRepo, databaseUserRepo)
-	settingRepo := data.NewSettingRepo(locale, db, logger, config, taskRepo)
-	certRepo := data.NewCertRepo(locale, db, logger, settingRepo)
-	certAccountRepo := data.NewCertAccountRepo(locale, db, userRepo, logger)
-	websiteRepo := data.NewWebsiteRepo(locale, db, logger, cacheRepo, databaseRepo, databaseServerRepo, databaseUserRepo, certRepo, certAccountRepo, settingRepo)
-	projectRepo := data.NewProjectRepo(locale, db, logger)
-	environmentRepo := data.NewEnvironmentRepo(locale, config, cacheRepo, taskRepo)
-	cronRepo := data.NewCronRepo(locale, db, logger)
-	backupRepo := data.NewBackupRepo(locale, config, db, logger, settingRepo, websiteRepo)
-	containerRepo := data.NewContainerRepo(settingRepo)
-	homeService := service.NewHomeService(locale, config, taskRepo, websiteRepo, projectRepo, appRepo, environmentRepo, settingRepo, databaseServerRepo, cronRepo, backupRepo, containerRepo)
-	taskService := service.NewTaskService(taskRepo)
-	websiteService := service.NewWebsiteService(websiteRepo, settingRepo)
-	projectService := service.NewProjectService(projectRepo, settingRepo)
-	databaseService := service.NewDatabaseService(databaseRepo)
-	databaseServerService := service.NewDatabaseServerService(databaseServerRepo)
-	databaseRedisRepo := data.NewDatabaseRedisRepo(locale, db, logger)
-	databaseRedisService := service.NewDatabaseRedisService(databaseRedisRepo)
-	databaseElasticsearchRepo := data.NewDatabaseElasticsearchRepo(locale, db, logger)
-	databaseElasticsearchService := service.NewDatabaseElasticsearchService(databaseElasticsearchRepo)
-	databaseUserService := service.NewDatabaseUserService(databaseUserRepo)
-	backupService := service.NewBackupService(locale, backupRepo, taskRepo)
-	backupAccountRepo := data.NewBackupAccountRepo(locale, db, logger, settingRepo)
-	backupStorageService := service.NewBackupStorageService(locale, backupAccountRepo)
-	certService := service.NewCertService(locale, certRepo)
-	certDNSRepo := data.NewCertDNSRepo(db, logger)
-	certDNSService := service.NewCertDNSService(certDNSRepo)
-	certAccountService := service.NewCertAccountService(certAccountRepo)
-	apacheApp := apache.NewApp(locale)
-	clickhouseApp := clickhouse.NewApp(locale, settingRepo, databaseServerRepo)
+	databaseServerRepo := data.NewDatabaseServerRepo(db)
+	settingRepo := data.NewSettingRepo(config, db)
+	clickhouseApp := clickhouse.NewApp(locale, databaseServerRepo, settingRepo)
 	codeserverApp := codeserver.NewApp()
 	dockerApp := docker.NewApp()
 	elasticsearchApp := elasticsearch.NewApp(locale)
+	websiteRepo := data.NewWebsiteRepo(db, locale, settingRepo)
 	fail2banApp := fail2ban.NewApp(locale, websiteRepo)
-	frpApp := frp.NewApp()
+	frpApp := frp.NewApp(locale)
 	giteaApp := gitea.NewApp()
 	grafanaApp := grafana.NewApp(locale)
 	kafkaApp := kafka.NewApp(locale)
-	mariadbApp := mariadb.NewApp(locale, settingRepo, databaseServerRepo)
+	logger, cleanup, err := bootstrap.NewLogger(config)
+	if err != nil {
+		return nil, nil, err
+	}
+	slogLogger := bootstrap.NewSlog(logger)
+	notifyChannelRepo := data.NewNotifyChannelRepo(db)
+	notifyUsecase := biz.NewNotifyUsecase(locale, slogLogger, notifyChannelRepo, settingRepo)
+	taskRunner := bootstrap.NewRunner(notifyUsecase, db, locale, slogLogger)
+	taskRepo := data.NewTaskRepo(db, locale, slogLogger, taskRunner)
+	mysqlApp := mysql.NewApp(locale, databaseServerRepo, settingRepo, taskRepo)
+	mariadbApp := mariadb.NewApp(mysqlApp)
 	memcachedApp := memcached.NewApp(locale)
 	minioApp := minio.NewApp()
-	mongodbApp := mongodb.NewApp(locale, settingRepo, databaseServerRepo)
-	mysqlApp := mysql.NewApp(locale, settingRepo, databaseServerRepo)
+	mongodbApp := mongodb.NewApp(locale, databaseServerRepo, settingRepo)
 	nginxApp := nginx.NewApp(locale)
-	openrestyApp := openresty.NewApp(locale)
+	openrestyApp := openresty.NewApp(nginxApp)
 	opensearchApp := opensearch.NewApp(locale)
-	perconaApp := percona.NewApp(locale, settingRepo, databaseServerRepo)
-	phpmyadminApp := phpmyadmin.NewApp(locale)
+	perconaApp := percona.NewApp(mysqlApp)
+	pgadminApp := pgadmin.NewApp(config, locale, databaseServerRepo)
+	phpmyadminApp := phpmyadmin.NewApp(config, locale, databaseServerRepo)
 	podmanApp := podman.NewApp()
-	postgresqlApp := postgresql.NewApp(locale, settingRepo, databaseServerRepo)
-	prometheusApp := prometheus.NewApp(locale, config, taskRepo)
+	postgresqlApp := postgresql.NewApp(locale, config, databaseServerRepo, settingRepo, taskRepo)
+	prometheusApp := prometheus.NewApp(config, locale, taskRepo)
 	pureftpdApp := pureftpd.NewApp(locale)
-	redisApp := redis.NewApp(locale, databaseServerRepo)
+	redisApp := redis.NewApp(locale, databaseServerRepo, taskRepo)
 	rocketmqApp := rocketmq.NewApp(locale)
 	rsyncApp := rsync.NewApp(locale)
 	s3fsApp := s3fs.NewApp(locale)
 	supervisorApp := supervisor.NewApp(locale)
-	valkeyApp := valkey.NewApp(locale, databaseServerRepo)
-	loader := bootstrap.NewLoader(apacheApp, clickhouseApp, codeserverApp, dockerApp, elasticsearchApp, fail2banApp, frpApp, giteaApp, grafanaApp, kafkaApp, mariadbApp, memcachedApp, minioApp, mongodbApp, mysqlApp, nginxApp, openrestyApp, opensearchApp, perconaApp, phpmyadminApp, podmanApp, postgresqlApp, prometheusApp, pureftpdApp, redisApp, rocketmqApp, rsyncApp, s3fsApp, supervisorApp, valkeyApp)
-	appService := service.NewAppService(locale, appRepo, cacheRepo, settingRepo, loader)
-	environmentService := service.NewEnvironmentService(locale, environmentRepo, taskRepo)
-	environmentGoService := service.NewEnvironmentGoService(locale, environmentRepo)
-	environmentJavaService := service.NewEnvironmentJavaService(locale, environmentRepo)
-	environmentNodejsService := service.NewEnvironmentNodejsService(locale, environmentRepo)
-	environmentPHPService := service.NewEnvironmentPHPService(locale, config, environmentRepo, taskRepo)
-	environmentPythonService := service.NewEnvironmentPythonService(locale, environmentRepo)
-	environmentDotnetService := service.NewEnvironmentDotnetService(locale, environmentRepo)
-	cronService := service.NewCronService(cronRepo)
-	processService := service.NewProcessService()
-	safeRepo := data.NewSafeRepo(logger)
-	safeService := service.NewSafeService(safeRepo)
-	firewallService := service.NewFirewallService()
-	scanEventRepo, err := data.NewScanEventRepo(settingRepo)
+	valkeyApp := valkey.NewApp(locale, databaseServerRepo, taskRepo)
+	loader := bootstrap.NewLoader(apacheApp, clickhouseApp, codeserverApp, dockerApp, elasticsearchApp, fail2banApp, frpApp, giteaApp, grafanaApp, kafkaApp, mariadbApp, memcachedApp, minioApp, mongodbApp, mysqlApp, nginxApp, openrestyApp, opensearchApp, perconaApp, pgadminApp, phpmyadminApp, podmanApp, postgresqlApp, prometheusApp, pureftpdApp, redisApp, rocketmqApp, rsyncApp, s3fsApp, supervisorApp, valkeyApp)
+	manager, err := bootstrap.NewSession(config, db, slogLogger)
 	if err != nil {
-		return nil, err
+		cleanup()
+		return nil, nil, err
 	}
-	firewallScanService := service.NewFirewallScanService(scanEventRepo)
-	sshRepo := data.NewSSHRepo(locale, db, logger)
-	sshService := service.NewSSHService(sshRepo)
-	containerService := service.NewContainerService(containerRepo)
+	appRepo := data.NewAppRepo(config, db, locale, slogLogger)
+	userTokenRepo := data.NewUserTokenRepo(config, db, locale)
+	middlewares, err := middleware.NewMiddlewares(config, locale, manager, appRepo, userTokenRepo)
+	if err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	validator := bootstrap.NewValidator(config, db)
+	alertRepo, err := data.NewAlertRepo(db)
+	if err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	containerRepo := data.NewContainerRepo()
+	alertUsecase := biz.NewAlertUsecase(notifyUsecase, loader, locale, slogLogger, alertRepo, appRepo, containerRepo, databaseServerRepo, settingRepo)
+	alertService := service.NewAlertService(alertUsecase)
+	cacheRepo := data.NewCacheRepo(db)
+	appUsecase := biz.NewAppUsecase(locale, appRepo, cacheRepo, taskRepo)
+	cacheUsecase := biz.NewCacheUsecase(cacheRepo)
+	settingUsecase := biz.NewSettingUsecase(locale, slogLogger, settingRepo, taskRepo)
+	appService := service.NewAppService(loader, appUsecase, cacheUsecase, settingUsecase, locale)
+	backupRepo := data.NewBackupRepo(config, db, locale, slogLogger, settingRepo, websiteRepo)
+	backupUsecase := biz.NewBackupUsecase(notifyUsecase, locale, slogLogger, backupRepo)
+	taskUsecase := biz.NewTaskUsecase(taskRepo)
+	backupService := service.NewBackupService(backupUsecase, taskUsecase, locale)
+	backupAccountRepo := data.NewBackupAccountRepo(db)
+	backupAccountUsecase := biz.NewBackupAccountUsecase(locale, slogLogger, backupAccountRepo, settingRepo)
+	backupStorageService := service.NewBackupStorageService(backupAccountUsecase, locale)
+	certRepo := data.NewCertRepo(db, locale, slogLogger)
+	certUsecase := biz.NewCertUsecase(locale, slogLogger, certRepo, settingRepo)
+	certService := service.NewCertService(certUsecase, locale)
+	certAccountRepo := data.NewCertAccountRepo(db, locale, slogLogger)
+	userRepo := data.NewUserRepo(db, locale)
+	certAccountUsecase := biz.NewCertAccountUsecase(locale, slogLogger, certAccountRepo, userRepo)
+	certAccountService := service.NewCertAccountService(certAccountUsecase)
+	certDNSRepo := data.NewCertDNSRepo(db)
+	certDNSUsecase := biz.NewCertDNSUsecase(certDNSRepo, slogLogger)
+	certDNSService := service.NewCertDNSService(certDNSUsecase)
+	containerUsecase := biz.NewContainerUsecase(locale, containerRepo, settingRepo, taskRepo)
+	containerService := service.NewContainerService(containerUsecase)
 	containerComposeRepo := data.NewContainerComposeRepo()
-	containerComposeService := service.NewContainerComposeService(containerComposeRepo)
-	containerNetworkRepo := data.NewContainerNetworkRepo(settingRepo)
-	containerNetworkService := service.NewContainerNetworkService(containerNetworkRepo)
-	containerImageRepo := data.NewContainerImageRepo(settingRepo)
-	containerImageService := service.NewContainerImageService(containerImageRepo)
-	containerVolumeRepo := data.NewContainerVolumeRepo(settingRepo)
-	containerVolumeService := service.NewContainerVolumeService(containerVolumeRepo)
-	fileService := service.NewFileService(locale, taskRepo, containerRepo)
-	logRepo := data.NewLogRepo(db)
-	logService := service.NewLogService(locale, logRepo)
-	monitorRepo := data.NewMonitorRepo(db, settingRepo)
-	monitorService := service.NewMonitorService(settingRepo, monitorRepo)
-	settingService := service.NewSettingService(locale, db, settingRepo, certRepo, certAccountRepo)
-	systemctlService := service.NewSystemctlService(locale)
-	toolboxNetworkService := service.NewToolboxNetworkService()
-	toolboxSystemService := service.NewToolboxSystemService(locale)
-	toolboxBenchmarkService := service.NewToolboxBenchmarkService(locale)
-	toolboxSSHService := service.NewToolboxSSHService(locale)
-	toolboxDiskService := service.NewToolboxDiskService(locale)
-	toolboxLogService := service.NewToolboxLogService(locale, db, containerImageRepo, settingRepo)
-	toolboxMigrationService := service.NewToolboxMigrationService(locale, config, logger, settingRepo, websiteRepo, databaseRepo, databaseServerRepo, databaseUserRepo, projectRepo, appRepo, environmentRepo)
-	webHookRepo := data.NewWebHookRepo(locale, db, logger)
-	webHookService := service.NewWebHookService(webHookRepo)
-	templateRepo := data.NewTemplateRepo(locale, logger, cacheRepo)
-	templateService := service.NewTemplateService(locale, templateRepo, settingRepo)
+	containerComposeUsecase := biz.NewContainerComposeUsecase(containerComposeRepo)
+	containerComposeService := service.NewContainerComposeService(containerComposeUsecase)
+	containerImageRepo := data.NewContainerImageRepo()
+	containerImageUsecase := biz.NewContainerImageUsecase(locale, containerImageRepo, settingRepo, taskRepo)
+	containerImageService := service.NewContainerImageService(containerImageUsecase)
+	containerNetworkRepo := data.NewContainerNetworkRepo()
+	containerNetworkUsecase := biz.NewContainerNetworkUsecase(containerNetworkRepo, settingRepo)
+	containerNetworkService := service.NewContainerNetworkService(containerNetworkUsecase)
+	containerVolumeRepo := data.NewContainerVolumeRepo()
+	containerVolumeUsecase := biz.NewContainerVolumeUsecase(containerVolumeRepo, settingRepo)
+	containerVolumeService := service.NewContainerVolumeService(containerVolumeUsecase)
+	cronRepo := data.NewCronRepo(db, locale)
+	cronUsecase := biz.NewCronUsecase(cronRepo, slogLogger)
+	cronService := service.NewCronService(cronUsecase)
+	databaseUserRepo := data.NewDatabaseUserRepo(db)
+	databaseUserUsecase := biz.NewDatabaseUserUsecase(slogLogger, databaseServerRepo, databaseUserRepo)
+	databaseRepo := data.NewDatabaseRepo(db)
+	databaseUsecase := biz.NewDatabaseUsecase(databaseUserUsecase, locale, slogLogger, databaseRepo, databaseServerRepo)
+	databaseService := service.NewDatabaseService(databaseUsecase)
+	databaseElasticsearchRepo := data.NewDatabaseElasticsearchRepo(db, locale, slogLogger)
+	databaseElasticsearchUsecase := biz.NewDatabaseElasticsearchUsecase(databaseElasticsearchRepo)
+	databaseElasticsearchService := service.NewDatabaseElasticsearchService(databaseElasticsearchUsecase)
+	databaseRedisRepo := data.NewDatabaseRedisRepo(db, locale, slogLogger)
+	databaseRedisUsecase := biz.NewDatabaseRedisUsecase(databaseRedisRepo)
+	databaseRedisService := service.NewDatabaseRedisService(databaseRedisUsecase)
+	databaseServerUsecase := biz.NewDatabaseServerUsecase(locale, slogLogger, databaseServerRepo)
+	databaseServerService := service.NewDatabaseServerService(databaseServerUsecase)
+	databaseUserService := service.NewDatabaseUserService(databaseUserUsecase)
+	environmentRepo := data.NewEnvironmentRepo(config, locale)
+	environmentUsecase := biz.NewEnvironmentUsecase(locale, cacheRepo, environmentRepo, taskRepo)
+	environmentService := service.NewEnvironmentService(environmentUsecase, taskUsecase, locale)
+	environmentDotnetService := service.NewEnvironmentDotnetService(environmentUsecase, locale)
+	environmentGoService := service.NewEnvironmentGoService(environmentUsecase, locale)
+	environmentJavaService := service.NewEnvironmentJavaService(environmentUsecase, locale)
+	environmentNodejsService := service.NewEnvironmentNodejsService(environmentUsecase, locale)
+	environmentPHPService := service.NewEnvironmentPHPService(environmentUsecase, taskUsecase, config, locale)
+	environmentPythonService := service.NewEnvironmentPythonService(environmentUsecase, locale)
+	tamperRepo, err := data.NewTamperRepo(db)
+	if err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	tamperUsecase := biz.NewTamperUsecase(notifyUsecase, settingUsecase, locale, slogLogger, tamperRepo)
+	fileService := service.NewFileService(containerUsecase, tamperUsecase, taskUsecase, locale)
+	fileShareRepo := data.NewFileShareRepo(db, locale)
+	fileShareUsecase := biz.NewFileShareUsecase(slogLogger, fileShareRepo)
+	fileShareService := service.NewFileShareService(fileShareUsecase, locale)
+	firewallService := service.NewFirewallService(locale)
+	scanEventRepo, err := data.NewScanEventRepo()
+	if err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	scanEventUsecase := biz.NewScanEventUsecase(scanEventRepo, settingRepo)
+	firewallScanService := service.NewFirewallScanService(scanEventUsecase)
+	projectRepo := data.NewProjectRepo(db, locale)
+	projectUsecase := biz.NewProjectUsecase(locale, slogLogger, projectRepo)
 	websiteStatRepo, err := data.NewWebsiteStatRepo()
 	if err != nil {
-		return nil, err
+		cleanup()
+		return nil, nil, err
 	}
+	websiteStatUsecase := biz.NewWebsiteStatUsecase(websiteStatRepo)
+	websiteUsecase := biz.NewWebsiteUsecase(certAccountUsecase, certUsecase, databaseUsecase, databaseUserUsecase, tamperUsecase, websiteStatUsecase, locale, slogLogger, databaseServerRepo, websiteRepo)
+	homeService := service.NewHomeService(appUsecase, backupUsecase, containerUsecase, cronUsecase, databaseServerUsecase, environmentUsecase, projectUsecase, settingUsecase, taskUsecase, websiteUsecase, config, locale)
+	logRepo := data.NewLogRepo(db)
+	logUsecase := biz.NewLogUsecase(logRepo)
+	logService := service.NewLogService(logUsecase, locale)
+	monitorRepo, err := data.NewMonitorRepo()
+	if err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	monitorUsecase := biz.NewMonitorUsecase(monitorRepo, settingRepo)
+	monitorService := service.NewMonitorService(monitorUsecase, settingUsecase)
+	notifyService := service.NewNotifyService(notifyUsecase)
+	processService := service.NewProcessService()
+	projectService := service.NewProjectService(projectUsecase, settingUsecase)
+	safeRepo := data.NewSafeRepo()
+	safeUsecase := biz.NewSafeUsecase(safeRepo, slogLogger)
+	safeService := service.NewSafeService(safeUsecase)
+	settingService := service.NewSettingService(certAccountUsecase, certUsecase, settingUsecase, db, locale)
+	sshRepo := data.NewSSHRepo(db, locale)
+	sshUsecase := biz.NewSSHUsecase(sshRepo, slogLogger)
+	sshService := service.NewSSHService(sshUsecase)
+	systemctlService := service.NewSystemctlService(locale)
+	tamperService := service.NewTamperService(tamperUsecase, locale)
+	taskService := service.NewTaskService(taskUsecase)
+	templateRepo := data.NewTemplateRepo(slogLogger)
+	templateUsecase := biz.NewTemplateUsecase(locale, cacheRepo, templateRepo)
+	templateService := service.NewTemplateService(settingUsecase, templateUsecase, locale)
+	toolboxBenchmarkService := service.NewToolboxBenchmarkService(locale)
+	toolboxDiskService := service.NewToolboxDiskService(locale)
+	toolboxLogService := service.NewToolboxLogService(containerImageUsecase, settingUsecase, db, locale)
+	migrationSourceRepo := data.NewMigrationSourceRepo(locale)
+	migrationRemoteRepo := data.NewMigrationRemoteRepo(locale)
+	migrationArchiveRepo := data.NewMigrationArchiveRepo()
+	toolboxMigrationUsecase := biz.NewToolboxMigrationUsecase(locale, slogLogger, migrationSourceRepo, migrationRemoteRepo, migrationArchiveRepo, settingUsecase, websiteUsecase, databaseUsecase, databaseServerUsecase, databaseUserUsecase, backupUsecase, projectUsecase, appUsecase, environmentUsecase)
+	toolboxMigrationService := service.NewToolboxMigrationService(toolboxMigrationUsecase, config, locale, slogLogger)
+	toolboxNetworkService := service.NewToolboxNetworkService(locale)
+	toolboxSSHService := service.NewToolboxSSHService(locale)
+	toolboxSystemService := service.NewToolboxSystemService(locale)
+	userUsecase := biz.NewUserUsecase(locale, slogLogger, userRepo)
+	userService := service.NewUserService(notifyUsecase, userUsecase, config, locale, manager)
+	userPasskeyRepo := data.NewUserPasskeyRepo(db)
+	userPasskeyUsecase := biz.NewUserPasskeyUsecase(userPasskeyRepo)
+	userPasskeyService := service.NewUserPasskeyService(notifyUsecase, userPasskeyUsecase, userUsecase, config, locale, manager)
+	userTokenUsecase := biz.NewUserTokenUsecase(userTokenRepo)
+	userTokenService := service.NewUserTokenService(userTokenUsecase, locale)
+	webHookRepo := data.NewWebHookRepo(db, locale)
+	webHookUsecase := biz.NewWebHookUsecase(locale, slogLogger, webHookRepo)
+	webHookService := service.NewWebHookService(webHookUsecase)
+	websiteService := service.NewWebsiteService(settingUsecase, websiteUsecase, locale)
 	aggregator := websitestat.NewAggregator()
-	websiteStatService := service.NewWebsiteStatService(settingRepo, websiteStatRepo, websiteRepo, aggregator)
-	http := route.NewHttp(config, userService, userPasskeyService, userTokenService, homeService, taskService, websiteService, projectService, databaseService, databaseServerService, databaseRedisService, databaseElasticsearchService, databaseUserService, backupService, backupStorageService, certService, certDNSService, certAccountService, appService, environmentService, environmentGoService, environmentJavaService, environmentNodejsService, environmentPHPService, environmentPythonService, environmentDotnetService, cronService, processService, safeService, firewallService, firewallScanService, sshService, containerService, containerComposeService, containerNetworkService, containerImageService, containerVolumeService, fileService, logService, monitorService, settingService, systemctlService, toolboxNetworkService, toolboxSystemService, toolboxBenchmarkService, toolboxSSHService, toolboxDiskService, toolboxLogService, toolboxMigrationService, webHookService, templateService, websiteStatService, loader)
-	wsService := service.NewWsService(locale, config, logger, sshRepo, settingRepo, certRepo)
-	ws := route.NewWs(wsService, toolboxMigrationService)
-	mux, err := bootstrap.NewRouter(locale, middlewares, http, ws)
-	if err != nil {
-		return nil, err
+	websiteStatService := service.NewWebsiteStatService(settingUsecase, websiteStatUsecase, websiteUsecase, aggregator)
+	wsService := service.NewWsService(backupUsecase, certUsecase, sshUsecase, settingUsecase, taskUsecase, config, locale, slogLogger)
+	services := &route.Services{
+		Alert:                 alertService,
+		App:                   appService,
+		Backup:                backupService,
+		BackupStorage:         backupStorageService,
+		Cert:                  certService,
+		CertAccount:           certAccountService,
+		CertDNS:               certDNSService,
+		Container:             containerService,
+		ContainerCompose:      containerComposeService,
+		ContainerImage:        containerImageService,
+		ContainerNetwork:      containerNetworkService,
+		ContainerVolume:       containerVolumeService,
+		Cron:                  cronService,
+		Database:              databaseService,
+		DatabaseElasticsearch: databaseElasticsearchService,
+		DatabaseRedis:         databaseRedisService,
+		DatabaseServer:        databaseServerService,
+		DatabaseUser:          databaseUserService,
+		Environment:           environmentService,
+		EnvironmentDotnet:     environmentDotnetService,
+		EnvironmentGo:         environmentGoService,
+		EnvironmentJava:       environmentJavaService,
+		EnvironmentNodejs:     environmentNodejsService,
+		EnvironmentPHP:        environmentPHPService,
+		EnvironmentPython:     environmentPythonService,
+		File:                  fileService,
+		FileShare:             fileShareService,
+		Firewall:              firewallService,
+		FirewallScan:          firewallScanService,
+		Home:                  homeService,
+		Log:                   logService,
+		Monitor:               monitorService,
+		Notify:                notifyService,
+		Process:               processService,
+		Project:               projectService,
+		Safe:                  safeService,
+		Setting:               settingService,
+		SSH:                   sshService,
+		Systemctl:             systemctlService,
+		Tamper:                tamperService,
+		Task:                  taskService,
+		Template:              templateService,
+		ToolboxBenchmark:      toolboxBenchmarkService,
+		ToolboxDisk:           toolboxDiskService,
+		ToolboxLog:            toolboxLogService,
+		ToolboxMigration:      toolboxMigrationService,
+		ToolboxNetwork:        toolboxNetworkService,
+		ToolboxSSH:            toolboxSSHService,
+		ToolboxSystem:         toolboxSystemService,
+		User:                  userService,
+		UserPasskey:           userPasskeyService,
+		UserToken:             userTokenService,
+		WebHook:               webHookService,
+		Website:               websiteService,
+		WebsiteStat:           websiteStatService,
+		Ws:                    wsService,
 	}
-	reloader, err := bootstrap.NewTLSReloader(config)
+	v := route.NewEndpoints(services)
+	mux, err := bootstrap.NewRouter(loader, config, locale, middlewares, validator, v)
 	if err != nil {
-		return nil, err
+		cleanup()
+		return nil, nil, err
 	}
-	server, err := bootstrap.NewHttp(config, mux, reloader)
+	dependencies := &job.Dependencies{
+		Alert:       alertUsecase,
+		Backup:      backupUsecase,
+		Cache:       cacheUsecase,
+		Cert:        certUsecase,
+		CertAccount: certAccountUsecase,
+		FileShare:   fileShareUsecase,
+		Monitor:     monitorUsecase,
+		Notify:      notifyUsecase,
+		ScanEvent:   scanEventUsecase,
+		Setting:     settingUsecase,
+		Tamper:      tamperUsecase,
+		Task:        taskUsecase,
+		Website:     websiteUsecase,
+		WebsiteStat: websiteStatUsecase,
+		Conf:        config,
+		DB:          db,
+		T:           locale,
+		Log:         slogLogger,
+		Aggregator:  aggregator,
+	}
+	v2 := job.NewJobs(dependencies)
+	cron, err := bootstrap.NewCron(slogLogger, v2)
 	if err != nil {
-		return nil, err
+		cleanup()
+		return nil, nil, err
 	}
 	gormigrate := bootstrap.NewMigrate(db)
-	jobs := job.NewJobs(config, db, logger, aggregator, settingRepo, certRepo, certAccountRepo, backupRepo, cacheRepo, taskRepo, scanEventRepo, websiteStatRepo, websiteRepo)
-	cron, err := bootstrap.NewCron(logger, jobs)
+	reloader, err := bootstrap.NewTLSReloader(config)
 	if err != nil {
-		return nil, err
+		cleanup()
+		return nil, nil, err
 	}
-	validation := bootstrap.NewValidator(config, db)
-	ace := app.NewAce(config, mux, server, reloader, gormigrate, cron, taskRunner, validation)
-	return ace, nil
+	server := bootstrap.NewHttp(mux, config, reloader)
+	ace := app.NewAce(mux, config, cron, gormigrate, server, reloader, taskRunner)
+	return ace, func() {
+		cleanup()
+	}, nil
 }

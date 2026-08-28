@@ -22,6 +22,7 @@ import (
 	"github.com/acepanel/panel/v3/internal/apps/openresty"
 	"github.com/acepanel/panel/v3/internal/apps/opensearch"
 	"github.com/acepanel/panel/v3/internal/apps/percona"
+	"github.com/acepanel/panel/v3/internal/apps/pgadmin"
 	"github.com/acepanel/panel/v3/internal/apps/phpmyadmin"
 	"github.com/acepanel/panel/v3/internal/apps/podman"
 	"github.com/acepanel/panel/v3/internal/apps/postgresql"
@@ -36,34 +37,14 @@ import (
 )
 
 var ProviderSet = wire.NewSet(
-	apache.NewApp,
-	clickhouse.NewApp,
-	codeserver.NewApp,
-	docker.NewApp,
-	elasticsearch.NewApp,
-	fail2ban.NewApp,
-	frp.NewApp,
-	gitea.NewApp,
-	grafana.NewApp,
-	kafka.NewApp,
-	mariadb.NewApp,
-	memcached.NewApp,
-	minio.NewApp,
-	mongodb.NewApp,
-	mysql.NewApp,
-	nginx.NewApp,
-	openresty.NewApp,
-	opensearch.NewApp,
-	percona.NewApp,
-	phpmyadmin.NewApp,
-	podman.NewApp,
-	postgresql.NewApp,
-	prometheus.NewApp,
-	pureftpd.NewApp,
-	redis.NewApp,
-	rocketmq.NewApp,
-	rsync.NewApp,
-	s3fs.NewApp,
-	supervisor.NewApp,
-	valkey.NewApp,
+	apache.NewApp, clickhouse.NewApp, codeserver.NewApp,
+	docker.NewApp, elasticsearch.NewApp, fail2ban.NewApp,
+	frp.NewApp, gitea.NewApp, grafana.NewApp,
+	kafka.NewApp, mariadb.NewApp, memcached.NewApp,
+	minio.NewApp, mongodb.NewApp, mysql.NewApp,
+	nginx.NewApp, openresty.NewApp, opensearch.NewApp,
+	percona.NewApp, pgadmin.NewApp, phpmyadmin.NewApp, podman.NewApp,
+	postgresql.NewApp, prometheus.NewApp, pureftpd.NewApp,
+	redis.NewApp, rocketmq.NewApp, rsync.NewApp,
+	s3fs.NewApp, supervisor.NewApp, valkey.NewApp,
 )

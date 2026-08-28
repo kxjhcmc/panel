@@ -24,13 +24,19 @@ export default {
       ws.onerror = (e) => reject(e)
     })
   },
-  // 文件或 systemd 服务实时跟踪
-  follow: (params: { path?: string; service?: string; container?: string }): Promise<WebSocket> => {
+  // 文件或 systemd 服务实时跟踪，offset 为首屏锚点字节位置
+  follow: (params: {
+    path?: string
+    service?: string
+    container?: string
+    offset?: number
+  }): Promise<WebSocket> => {
     return new Promise((resolve, reject) => {
       const qs = new URLSearchParams()
       if (params.path) qs.set('path', params.path)
       if (params.service) qs.set('service', params.service)
       if (params.container) qs.set('container', params.container)
+      if (params.offset) qs.set('offset', String(params.offset))
       const ws = new WebSocket(`${base}/follow?${qs.toString()}`)
       ws.onopen = () => resolve(ws)
       ws.onerror = (e) => reject(e)
@@ -41,6 +47,22 @@ export default {
     return new Promise((resolve, reject) => {
       const ws = new WebSocket(`${base}/ssh?id=${id}`)
       ws.onopen = () => resolve(ws)
+      ws.onerror = (e) => reject(e)
+    })
+  },
+  // 主机间文件传输(id 为 0 表示面板本机)
+  sshTransfer: (params: {
+    src_id: number
+    src_path: string
+    dst_id: number
+    dst_path: string
+  }): Promise<WebSocket> => {
+    return new Promise((resolve, reject) => {
+      const ws = new WebSocket(`${base}/ssh/transfer`)
+      ws.onopen = () => {
+        ws.send(JSON.stringify(params))
+        resolve(ws)
+      }
       ws.onerror = (e) => reject(e)
     })
   },
@@ -97,6 +119,14 @@ export default {
         ws.send(JSON.stringify({ id }))
         resolve(ws)
       }
+      ws.onerror = (e) => reject(e)
+    })
+  },
+  // 面板升级进度
+  panelUpdate: (): Promise<WebSocket> => {
+    return new Promise((resolve, reject) => {
+      const ws = new WebSocket(`${base}/panel/update`)
+      ws.onopen = () => resolve(ws)
       ws.onerror = (e) => reject(e)
     })
   },

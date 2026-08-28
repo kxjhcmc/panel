@@ -1,50 +1,30 @@
 package data
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"log/slog"
 	"path/filepath"
-	"time"
 
-	"github.com/leonelquinteros/gotext"
-	"github.com/libtnb/cache"
 	"github.com/spf13/cast"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
 	"github.com/acepanel/panel/v3/internal/app"
 	"github.com/acepanel/panel/v3/internal/biz"
-	"github.com/acepanel/panel/v3/internal/http/request"
-	"github.com/acepanel/panel/v3/pkg/cert"
+	"github.com/acepanel/panel/v3/internal/request"
 	"github.com/acepanel/panel/v3/pkg/config"
-	"github.com/acepanel/panel/v3/pkg/firewall"
 	"github.com/acepanel/panel/v3/pkg/io"
-	"github.com/acepanel/panel/v3/pkg/os"
-	"github.com/acepanel/panel/v3/pkg/tools"
 )
 
-const settingCacheTTL = 5 * time.Minute
-
 type settingRepo struct {
-	t     *gotext.Locale
-	db    *gorm.DB
-	log   *slog.Logger
-	conf  *config.Config
-	cache cache.Cache
-	task  biz.TaskRepo
+	db   *gorm.DB
+	conf *config.Config
 }
 
-func NewSettingRepo(t *gotext.Locale, db *gorm.DB, log *slog.Logger, conf *config.Config, task biz.TaskRepo) biz.SettingRepo {
+func NewSettingRepo(conf *config.Config, db *gorm.DB) biz.SettingRepo {
 	return &settingRepo{
-		t:     t,
-		db:    db,
-		log:   log,
-		conf:  conf,
-		cache: cache.NewCache(),
-		task:  task,
+		db:   db,
+		conf: conf,
 	}
 }
 
@@ -113,15 +93,10 @@ func (r *settingRepo) GetSlice(key biz.SettingKey, defaultValue ...[]string) ([]
 }
 
 func (r *settingRepo) Set(key biz.SettingKey, value string) error {
-	if err := r.db.Clauses(clause.OnConflict{
+	return r.db.Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "key"}},
 		DoUpdates: clause.AssignmentColumns([]string{"value"}),
-	}).Create(&biz.Setting{Key: key, Value: value}).Error; err != nil {
-		return err
-	}
-
-	r.cache.Forget(r.cacheKey(key))
-	return nil
+	}).Create(&biz.Setting{Key: key, Value: value}).Error
 }
 
 func (r *settingRepo) SetSlice(key biz.SettingKey, value []string) error {
@@ -138,78 +113,58 @@ func (r *settingRepo) SetSlice(key biz.SettingKey, value []string) error {
 }
 
 func (r *settingRepo) Delete(key biz.SettingKey) error {
-	setting := new(biz.Setting)
-	if err := r.db.Where("key = ?", key).Delete(setting).Error; err != nil {
-		return err
-	}
-
-	r.cache.Forget(r.cacheKey(key))
-	return nil
+	return r.db.Where("key = ?", key).Delete(new(biz.Setting)).Error
 }
 
 func (r *settingRepo) GetPanel() (*request.SettingPanel, error) {
-	name, err := r.Get(biz.SettingKeyName)
+	values, err := r.getMany(
+		biz.SettingKeyName,
+		biz.SettingKeyChannel,
+		biz.SettingKeyOfflineMode,
+		biz.SettingKeyAutoUpdate,
+		biz.SettingKeyWebsitePath,
+		biz.SettingKeyBackupPath,
+		biz.SettingKeyBackupFormat,
+		biz.SettingKeyProjectPath,
+		biz.SettingKeyContainerSock,
+		biz.SettingHiddenMenu,
+		biz.SettingKeyCustomLogo,
+		biz.SettingKeyIPDBType,
+		biz.SettingKeyIPDBURL,
+		biz.SettingKeyIPDBPath,
+		biz.SettingKeyPublicIPs,
+	)
 	if err != nil {
 		return nil, err
 	}
-	channel, err := r.Get(biz.SettingKeyChannel)
-	if err != nil {
-		return nil, err
+
+	name := values[biz.SettingKeyName]
+	channel := values[biz.SettingKeyChannel]
+	offlineMode := cast.ToBool(values[biz.SettingKeyOfflineMode])
+	autoUpdate := cast.ToBool(values[biz.SettingKeyAutoUpdate])
+	websitePath := values[biz.SettingKeyWebsitePath]
+	backupPath := values[biz.SettingKeyBackupPath]
+	projectPath := values[biz.SettingKeyProjectPath]
+	containerSock := values[biz.SettingKeyContainerSock]
+	customLogo := values[biz.SettingKeyCustomLogo]
+	ipdbType := values[biz.SettingKeyIPDBType]
+	ipdbURL := values[biz.SettingKeyIPDBURL]
+	ipdbPath := values[biz.SettingKeyIPDBPath]
+
+	backupFormat := values[biz.SettingKeyBackupFormat]
+	if backupFormat == "" {
+		backupFormat = "tar.xz"
 	}
-	offlineMode, err := r.GetBool(biz.SettingKeyOfflineMode)
-	if err != nil {
-		return nil, err
+
+	hiddenMenu := make([]string, 0)
+	if raw := values[biz.SettingHiddenMenu]; raw != "" {
+		if err = json.Unmarshal([]byte(raw), &hiddenMenu); err != nil {
+			return nil, err
+		}
 	}
-	autoUpdate, err := r.GetBool(biz.SettingKeyAutoUpdate)
-	if err != nil {
-		return nil, err
-	}
-	websitePath, err := r.Get(biz.SettingKeyWebsitePath)
-	if err != nil {
-		return nil, err
-	}
-	backupPath, err := r.Get(biz.SettingKeyBackupPath)
-	if err != nil {
-		return nil, err
-	}
-	backupFormat, err := r.Get(biz.SettingKeyBackupFormat, "tar.xz")
-	if err != nil {
-		return nil, err
-	}
-	projectPath, err := r.Get(biz.SettingKeyProjectPath)
-	if err != nil {
-		return nil, err
-	}
-	containerSock, err := r.Get(biz.SettingKeyContainerSock)
-	if err != nil {
-		return nil, err
-	}
-	hiddenMenu, err := r.GetSlice(biz.SettingHiddenMenu)
-	if err != nil {
-		return nil, err
-	}
-	customLogo, err := r.Get(biz.SettingKeyCustomLogo)
-	if err != nil {
-		return nil, err
-	}
-	ipdbType, err := r.Get(biz.SettingKeyIPDBType)
-	if err != nil {
-		return nil, err
-	}
-	ipdbURL, err := r.Get(biz.SettingKeyIPDBURL)
-	if err != nil {
-		return nil, err
-	}
-	ipdbPath, err := r.Get(biz.SettingKeyIPDBPath)
-	if err != nil {
-		return nil, err
-	}
-	ip, err := r.Get(biz.SettingKeyPublicIPs)
-	if err != nil {
-		return nil, err
-	}
+
 	publicIP := make([]string, 0)
-	if err = json.Unmarshal([]byte(ip), &publicIP); err != nil {
+	if err = json.Unmarshal([]byte(values[biz.SettingKeyPublicIPs]), &publicIP); err != nil {
 		return nil, err
 	}
 
@@ -248,212 +203,28 @@ func (r *settingRepo) GetPanel() (*request.SettingPanel, error) {
 	}, nil
 }
 
-func (r *settingRepo) UpdatePanel(ctx context.Context, req *request.SettingPanel) (bool, error) {
-	if err := r.Set(biz.SettingKeyName, req.Name); err != nil {
-		return false, err
-	}
-	if err := r.Set(biz.SettingKeyChannel, req.Channel); err != nil {
-		return false, err
-	}
-	if err := r.Set(biz.SettingKeyOfflineMode, cast.ToString(req.OfflineMode)); err != nil {
-		return false, err
-	}
-	if err := r.Set(biz.SettingKeyAutoUpdate, cast.ToString(req.AutoUpdate)); err != nil {
-		return false, err
-	}
-	if err := r.Set(biz.SettingKeyWebsitePath, req.WebsitePath); err != nil {
-		return false, err
-	}
-	if err := r.Set(biz.SettingKeyBackupPath, req.BackupPath); err != nil {
-		return false, err
-	}
-	if err := r.Set(biz.SettingKeyBackupFormat, req.BackupFormat); err != nil {
-		return false, err
-	}
-	if err := r.Set(biz.SettingKeyProjectPath, req.ProjectPath); err != nil {
-		return false, err
-	}
-	if err := r.Set(biz.SettingKeyContainerSock, req.ContainerSock); err != nil {
-		return false, err
-	}
-	if err := r.SetSlice(biz.SettingHiddenMenu, req.HiddenMenu); err != nil {
-		return false, err
-	}
-	if err := r.Set(biz.SettingKeyCustomLogo, req.CustomLogo); err != nil {
-		return false, err
-	}
-	if err := r.Set(biz.SettingKeyIPDBType, req.IPDBType); err != nil {
-		return false, err
-	}
-	ipdbURL := req.IPDBURL
-	if req.IPDBType == "subscribe" && ipdbURL == "" {
-		// https://github.com/metowolf/qqwry.ipdb
-		ipdbURL = "https://fastly.jsdelivr.net/npm/qqwry.ipdb/qqwry.ipdb"
-	}
-	if err := r.Set(biz.SettingKeyIPDBURL, ipdbURL); err != nil {
-		return false, err
-	}
-	if err := r.Set(biz.SettingKeyIPDBPath, req.IPDBPath); err != nil {
-		return false, err
-	}
-	if err := r.SetSlice(biz.SettingKeyPublicIPs, req.PublicIP); err != nil {
-		return false, err
+// getMany 一次取出多个设置项
+func (r *settingRepo) getMany(keys ...biz.SettingKey) (map[biz.SettingKey]string, error) {
+	settings := make([]*biz.Setting, 0, len(keys))
+	if err := r.db.Where("key IN ?", keys).Find(&settings).Error; err != nil {
+		return nil, err
 	}
 
-	// 订阅模式后台下载 IPDB
-	if req.IPDBType == "subscribe" && ipdbURL != "" {
-		go func() {
-			destPath := filepath.Join(app.Root, "panel/storage/geo.ipdb")
-			if err := io.DownloadFile(ipdbURL, destPath); err != nil {
-				r.log.Warn("failed to download ipdb", slog.String("url", ipdbURL), slog.Any("err", err))
-			} else {
-				r.log.Info("ipdb downloaded", slog.String("url", ipdbURL))
-			}
-		}()
+	values := make(map[biz.SettingKey]string, len(keys))
+	for _, setting := range settings {
+		values[setting.Key] = setting.Value
 	}
 
-	// 下面是需要需要重启的设置
-	// 面板HTTPS
-	restartFlag := false
-
-	// 自签模式
-	if req.TLS == "self-signed" {
-		needGen := req.Cert == "" || req.Key == ""
-		if !needGen {
-			if _, err := cert.ParseCert([]byte(req.Cert)); err != nil {
-				needGen = true
-			}
-		}
-		if needGen {
-			crt, key, err := cert.GenerateSelfSigned(tools.CollectLocalNames())
-			if err != nil {
-				return false, errors.New(r.t.Get("failed to generate self-signed certificate: %v", err))
-			}
-			req.Cert = string(crt)
-			req.Key = string(key)
-		}
-	}
-
-	oldCert, _ := io.Read(filepath.Join(app.Root, "panel/storage/cert.pem"))
-	oldKey, _ := io.Read(filepath.Join(app.Root, "panel/storage/cert.key"))
-	if oldCert != req.Cert || oldKey != req.Key {
-		if r.task.HasRunningTask() {
-			return false, errors.New(r.t.Get("background task is running, modifying some settings is prohibited, please try again later"))
-		}
-		restartFlag = true
-	}
-	// custom 模式需要验证证书格式
-	if req.TLS == "custom" {
-		if _, err := cert.ParseCert([]byte(req.Cert)); err != nil {
-			return false, errors.New(r.t.Get("failed to parse certificate: %v", err))
-		}
-		if _, err := cert.ParseKey([]byte(req.Key)); err != nil {
-			return false, errors.New(r.t.Get("failed to parse private key: %v", err))
-		}
-	}
-	if err := io.Write(filepath.Join(app.Root, "panel/storage/cert.pem"), req.Cert, 0600); err != nil {
-		return false, err
-	}
-	if err := io.Write(filepath.Join(app.Root, "panel/storage/cert.key"), req.Key, 0600); err != nil {
-		return false, err
-	}
-
-	// 面板主配置
-	conf, err := config.Load()
-	if err != nil {
-		return false, err
-	}
-
-	if req.Port != conf.HTTP.Port {
-		if os.TCPPortInUse(req.Port) {
-			return false, errors.New(r.t.Get("port is already in use"))
-		}
-		// 放行端口
-		fw := firewall.NewFirewall()
-		if ok, _ := fw.Status(); ok {
-			err = fw.Port(firewall.FireInfo{
-				Type:      firewall.TypeNormal,
-				PortStart: req.Port,
-				PortEnd:   req.Port,
-				Protocol:  firewall.ProtocolTCPUDP,
-				Strategy:  firewall.StrategyAccept,
-				Direction: firewall.DirectionIn,
-			}, firewall.OperationAdd)
-			if err != nil {
-				return false, err
-			}
-		}
-	}
-
-	conf.App.Locale = req.Locale
-	conf.HTTP.Port = req.Port
-	conf.HTTP.Entrance = req.Entrance
-	conf.HTTP.EntranceError = req.EntranceError
-	conf.HTTP.LoginCaptcha = req.LoginCaptcha
-	conf.HTTP.TLS = req.TLS
-	conf.HTTP.IPHeader = req.IPHeader
-	conf.HTTP.BindDomain = req.BindDomain
-	conf.HTTP.BindIP = req.BindIP
-	conf.HTTP.BindUA = req.BindUA
-	conf.Session.Lifetime = req.Lifetime
-
-	// 检查配置是否有变更
-	if same, _ := config.Check(conf); !same {
-		if r.task.HasRunningTask() {
-			return false, errors.New(r.t.Get("background task is running, modifying some settings is prohibited, please try again later"))
-		}
-		restartFlag = true
-	}
-	if err = config.Save(conf); err != nil {
-		return false, err
-	}
-
-	// 记录日志
-	r.log.Info("panel settings updated", slog.String("type", biz.OperationTypeSetting), slog.Uint64("operator_id", getOperatorID(ctx)))
-
-	return restartFlag, nil
+	return values, nil
 }
 
-func (r *settingRepo) UpdateCert(req *request.SettingCert) error {
-	if r.task.HasRunningTask() {
-		return errors.New(r.t.Get("background task is running, modifying some settings is prohibited, please try again later"))
-	}
-	if _, err := cert.ParseCert([]byte(req.Cert)); err != nil {
-		return errors.New(r.t.Get("failed to parse certificate: %v", err))
-	}
-	if _, err := cert.ParseKey([]byte(req.Key)); err != nil {
-		return errors.New(r.t.Get("failed to parse private key: %v", err))
-	}
-
-	if err := io.Write(filepath.Join(app.Root, "panel/storage/cert.pem"), req.Cert, 0600); err != nil {
-		return err
-	}
-	if err := io.Write(filepath.Join(app.Root, "panel/storage/cert.key"), req.Key, 0600); err != nil {
-		return err
-	}
-
-	return nil
-}
-
-// cacheKey 生成设置项的缓存 key
-func (r *settingRepo) cacheKey(key biz.SettingKey) string {
-	return fmt.Sprintf("setting:%s", key)
-}
-
-// getRaw 从缓存或数据库获取设置项的原始字符串值
+// getRaw 从数据库获取设置项的原始字符串值
 func (r *settingRepo) getRaw(key biz.SettingKey) (string, error) {
-	cacheKey := r.cacheKey(key)
-	if r.cache.Has(cacheKey) {
-		return r.cache.GetString(cacheKey), nil
-	}
-
 	setting := new(biz.Setting)
 	if err := r.db.Where("key = ?", key).First(setting).Error; err != nil {
 		if !errors.Is(err, gorm.ErrRecordNotFound) {
 			return "", err
 		}
 	}
-
-	_ = r.cache.Put(cacheKey, setting.Value, settingCacheTTL)
 	return setting.Value, nil
 }

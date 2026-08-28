@@ -3,19 +3,19 @@ package service
 import (
 	"net/http"
 
-	"github.com/libtnb/chix"
+	"github.com/libtnb/chix/v2"
 
 	"github.com/acepanel/panel/v3/internal/biz"
-	"github.com/acepanel/panel/v3/internal/http/request"
+	"github.com/acepanel/panel/v3/internal/request"
 )
 
 type ContainerComposeService struct {
-	containerComposeRepo biz.ContainerComposeRepo
+	containerComposeRepo *biz.ContainerComposeUsecase
 }
 
-func NewContainerComposeService(containerCompose biz.ContainerComposeRepo) *ContainerComposeService {
+func NewContainerComposeService(containerComposeUsecase *biz.ContainerComposeUsecase) *ContainerComposeService {
 	return &ContainerComposeService{
-		containerComposeRepo: containerCompose,
+		containerComposeRepo: containerComposeUsecase,
 	}
 }
 

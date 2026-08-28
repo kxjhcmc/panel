@@ -10,6 +10,9 @@ export default {
     http.Get('/firewall/rule', { params: { page, limit } }),
   // 创建防火墙规则
   createRule: (rule: any): any => http.Post('/firewall/rule', rule),
+  // 更新防火墙规则策略
+  updateRuleStrategy: (rule: any, strategy: string): any =>
+    http.Put('/firewall/rule', { ...rule, new_strategy: strategy }),
   // 删除防火墙规则
   deleteRule: (rule: any): any => http.Delete('/firewall/rule', rule),
   // 获取防火墙IP规则
@@ -29,6 +32,10 @@ export default {
   // 获取端口占用进程信息
   portUsage: (port: number, protocol: string): any =>
     http.Get('/firewall/rule/port_usage', { params: { port, protocol } }),
+  // 导出防火墙规则
+  ruleExportUrl: '/api/firewall/rule/export',
+  // 导入防火墙规则
+  importRules: (formData: FormData): any => http.Post('/firewall/rule/import', formData),
   // 扫描感知 - 获取设置
   scanSetting: (): any => http.Get('/firewall/scan/setting'),
   // 扫描感知 - 更新设置

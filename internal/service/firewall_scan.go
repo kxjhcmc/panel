@@ -3,21 +3,21 @@ package service
 import (
 	"net/http"
 
-	"github.com/libtnb/chix"
+	"github.com/libtnb/chix/v2"
 	"github.com/spf13/cast"
 
 	"github.com/acepanel/panel/v3/internal/biz"
-	"github.com/acepanel/panel/v3/internal/http/request"
+	"github.com/acepanel/panel/v3/internal/request"
 	"github.com/acepanel/panel/v3/pkg/firewall/scan"
 )
 
 type FirewallScanService struct {
-	scanRepo biz.ScanEventRepo
+	scanRepo *biz.ScanEventUsecase
 }
 
-func NewFirewallScanService(scanRepo biz.ScanEventRepo) *FirewallScanService {
+func NewFirewallScanService(scanEventUsecase *biz.ScanEventUsecase) *FirewallScanService {
 	return &FirewallScanService{
-		scanRepo: scanRepo,
+		scanRepo: scanEventUsecase,
 	}
 }
 

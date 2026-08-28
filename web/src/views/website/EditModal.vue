@@ -20,8 +20,12 @@ const current = ref('listen')
 const loading = ref(false)
 const saveLoading = ref(false)
 const resetLoading = ref(false)
+const switchTypeLoading = ref(false)
 const clearLogLoading = ref(false)
 const id = ref(0)
+const targetType = ref('')
+const targetPHP = ref<number | null>(null)
+const targetProxy = ref('')
 const initialSetting = {
   id: 0,
   name: '',
@@ -53,7 +57,7 @@ const initialSetting = {
   redirects: [],
   rate_limit: null,
   real_ip: null,
-  basic_auth: {},
+  basic_auth: [],
   custom_configs: [],
 }
 const setting = ref<any>({ ...initialSetting })
@@ -62,6 +66,9 @@ const fetchSetting = () => {
   useRequest(website.config(id.value))
     .onSuccess(({ data }: any) => {
       setting.value = data
+      targetType.value = ''
+      targetPHP.value = null
+      targetProxy.value = ''
     })
     .onComplete(() => {
       loading.value = false
@@ -95,6 +102,28 @@ const { data: installedEnvironment } = useRequest(home.installedEnvironment, {
 
 // 是否为 Nginx
 const isNginx = computed(() => installedEnvironment.value.webserver === 'nginx')
+const websiteTypeOptions = computed(() => [
+  { label: $gettext('Reverse Proxy'), value: 'proxy', disabled: setting.value.type === 'proxy' },
+  { label: $gettext('PHP'), value: 'php', disabled: setting.value.type === 'php' },
+  { label: $gettext('Pure Static'), value: 'static', disabled: setting.value.type === 'static' },
+])
+const switchPHPOptions = computed(() =>
+  installedEnvironment.value.php.filter((item: any) => item.value !== 0),
+)
+const websiteTypeLabel = (type: string) =>
+  websiteTypeOptions.value.find((item) => item.value === type)?.label ?? type
+const canSwitchType = computed(() => {
+  if (!targetType.value || targetType.value === setting.value.type) {
+    return false
+  }
+  if (targetType.value === 'php') {
+    return Boolean(targetPHP.value)
+  }
+  if (targetType.value === 'proxy') {
+    return targetProxy.value.trim() !== ''
+  }
+  return true
+})
 const certs = ref<any>([])
 useRequest(cert.certs(1, 10000)).onSuccess(({ data }) => {
   certs.value = data.items
@@ -124,23 +153,38 @@ const certOptions = computed(() => {
 const selectedCert = ref(null)
 
 const handleSave = () => {
+  // 目录级基本认证规则必须填写目录
+  if (setting.value.basic_auth.some((a: any) => a._scope === 'dir' && !a.path?.trim())) {
+    window.$message.error($gettext('Please enter the directory for basic authentication rules'))
+    return
+  }
   // 如果开启了ssl但没有任何监听地址设置了ssl，则自动添加443
   if (setting.value.ssl && !setting.value.listens.some((item: any) => item.args?.includes('ssl'))) {
     const args = ['ssl']
     if (isNginx.value) {
       args.push('quic')
     }
+    // 存在 IPv6 监听时同步添加 IPv6 SSL 监听
+    if (setting.value.listens.some((item: any) => item.address?.startsWith('[::]'))) {
+      setting.value.listens.push({
+        address: '[::]:443',
+        args: [...args],
+      })
+    }
     setting.value.listens.push({
       address: '443',
       args,
     })
   }
-  // 如果关闭了ssl，自动禁用所有ssl和quic
+  // 如果关闭了ssl，移除所有 SSL 监听（443、[::]:443 及带 ssl/quic 参数的地址）
   if (!setting.value.ssl) {
-    setting.value.listens = setting.value.listens.filter((item: any) => item.address !== '443') // 443直接删掉
-    setting.value.listens.forEach((item: any) => {
-      item.args = []
-    })
+    setting.value.listens = setting.value.listens.filter(
+      (item: any) =>
+        item.address !== '443' &&
+        !item.address?.endsWith(':443') &&
+        !item.args?.includes('ssl') &&
+        !item.args?.includes('quic'),
+    )
   }
 
   // 将真实 IP 文本转回数组
@@ -163,11 +207,44 @@ const handleSave = () => {
     })
 }
 
+const handleSwitchType = () => {
+  const from = websiteTypeLabel(setting.value.type)
+  const to = websiteTypeLabel(targetType.value)
+  window.$dialog.warning({
+    title: $gettext('Confirm Website Type Switch'),
+    content: $gettext(
+      'Switch the website type from %{ from } to %{ to }? Common settings and website files will be preserved. The original type-specific configuration will be deleted and rebuilt for the new type.',
+      { from, to },
+    ),
+    positiveText: $gettext('Confirm Switch'),
+    negativeText: $gettext('Cancel'),
+    onPositiveClick: () => {
+      switchTypeLoading.value = true
+      useRequest(
+        website.switchType(id.value, {
+          type: targetType.value,
+          php: targetType.value === 'php' ? targetPHP.value : 0,
+          proxy: targetType.value === 'proxy' ? targetProxy.value.trim() : '',
+        }),
+      )
+        .onSuccess(() => {
+          fetchSetting()
+          window.$bus.emit('website:refresh')
+          window.$message.success($gettext('Website type switched successfully'))
+        })
+        .onComplete(() => {
+          switchTypeLoading.value = false
+        })
+    },
+  })
+}
+
 const handleReset = () => {
   resetLoading.value = true
   useRequest(website.resetConfig(id.value))
     .onSuccess(() => {
       fetchSetting()
+      window.$bus.emit('website:refresh')
       window.$message.success($gettext('Reset successfully'))
     })
     .onComplete(() => {
@@ -313,6 +390,11 @@ const ensureItemIds = () => {
   })
   setting.value.custom_configs?.forEach((item: any) => {
     if (!item._id) item._id = generateId()
+  })
+  if (!Array.isArray(setting.value.basic_auth)) setting.value.basic_auth = []
+  setting.value.basic_auth.forEach((item: any) => {
+    if (!item._id) item._id = generateId()
+    if (!item._scope) item._scope = !item.path || item.path === '/' ? 'site' : 'dir'
   })
 }
 
@@ -824,6 +906,29 @@ const realIPFrom = computed({
     }
   },
 })
+
+// ========== 基本认证相关 ==========
+// 是否已存在其他整站规则（整站规则最多一条）
+const hasSiteBasicAuth = (self?: any) =>
+  setting.value.basic_auth.some((a: any) => a !== self && a._scope === 'site')
+
+// 添加基本认证规则
+const addBasicAuth = () => {
+  const rule: any = { _id: generateId(), users: {} }
+  setBasicAuthScope(rule, hasSiteBasicAuth() ? 'dir' : 'site')
+  setting.value.basic_auth.push(rule)
+}
+
+// 删除基本认证规则
+const removeBasicAuth = (index: number) => {
+  setting.value.basic_auth.splice(index, 1)
+}
+
+// 切换基本认证规则的生效范围
+const setBasicAuthScope = (auth: any, scope: string) => {
+  auth._scope = scope
+  auth.path = scope === 'site' ? '/' : ''
+}
 
 // ========== 自定义配置相关 ==========
 // 添加自定义配置
@@ -1830,6 +1935,52 @@ const removeCustomConfig = (index: number) => {
         </n-tab-pane>
         <n-tab-pane name="advanced" :tab="$gettext('Advanced Settings')">
           <n-collapse accordion>
+            <n-collapse-item :title="$gettext('Website Type')" name="website_type">
+              <n-form label-placement="left" label-width="140px">
+                <n-form-item :label="$gettext('Current Website Type')">
+                  <n-tag>{{ websiteTypeLabel(setting.type) }}</n-tag>
+                </n-form-item>
+                <n-form-item :label="$gettext('Target Website Type')">
+                  <n-select
+                    v-model:value="targetType"
+                    :options="websiteTypeOptions"
+                    :placeholder="$gettext('Select Website Type')"
+                  />
+                </n-form-item>
+                <n-form-item v-if="targetType === 'php'" :label="$gettext('PHP Version')">
+                  <n-select
+                    v-model:value="targetPHP"
+                    :options="switchPHPOptions"
+                    :placeholder="$gettext('Select PHP Version')"
+                  />
+                </n-form-item>
+                <n-form-item
+                  v-if="targetType === 'proxy'"
+                  :label="$gettext('Proxy Target')"
+                >
+                  <n-input
+                    v-model:value="targetProxy"
+                    :placeholder="$gettext('For example: http://127.0.0.1:3000')"
+                  />
+                </n-form-item>
+                <n-alert type="warning" mb-4>
+                  {{
+                    $gettext(
+                      'After switching, common settings and website files will be preserved. The original type-specific configuration will be deleted and rebuilt for the new type.',
+                    )
+                  }}
+                </n-alert>
+                <n-button
+                  type="warning"
+                  :loading="switchTypeLoading"
+                  :disabled="!canSwitchType || switchTypeLoading || loading"
+                  @click="handleSwitchType"
+                >
+                  {{ $gettext('Switch Website Type') }}
+                </n-button>
+              </n-form>
+            </n-collapse-item>
+
             <!-- 访问统计（仅 nginx） -->
             <n-collapse-item
               v-if="isNginx"
@@ -1973,26 +2124,52 @@ const removeCustomConfig = (index: number) => {
 
             <!-- 基本认证设置 -->
             <n-collapse-item :title="$gettext('Basic Authentication')" name="basic_auth">
-              <n-form label-placement="left" label-width="140px">
-                <n-form-item :label="$gettext('User Credentials')">
-                  <key-value-editor
-                    v-model="setting.basic_auth"
-                    :key-placeholder="$gettext('Username')"
-                    :value-placeholder="$gettext('Password')"
-                    :add-button-text="$gettext('Add User')"
-                    default-key-prefix="user"
-                    value-type="password"
-                    :show-password-toggle="true"
-                  />
-                </n-form-item>
-              </n-form>
-              <n-alert v-if="Object.keys(setting.basic_auth || {}).length > 0" type="info">
-                {{
-                  $gettext(
-                    'Visitors will need to enter a username and password to access this website.',
-                  )
-                }}
-              </n-alert>
+              <n-flex vertical>
+                <n-card
+                  v-for="(auth, index) in setting.basic_auth as any[]"
+                  :key="auth._id"
+                  closable
+                  @close="removeBasicAuth(index)"
+                >
+                  <n-form label-placement="left" label-width="140px">
+                    <n-form-item :label="$gettext('Scope')">
+                      <n-radio-group
+                        :value="auth._scope"
+                        @update:value="(v: string) => setBasicAuthScope(auth, v)"
+                      >
+                        <n-radio value="site" :disabled="hasSiteBasicAuth(auth)">
+                          {{ $gettext('Entire Website') }}
+                        </n-radio>
+                        <n-radio value="dir">{{ $gettext('Specific Directory') }}</n-radio>
+                      </n-radio-group>
+                    </n-form-item>
+                    <n-form-item v-if="auth._scope === 'dir'" :label="$gettext('Directory')">
+                      <n-input v-model:value="auth.path" placeholder="/admin" />
+                    </n-form-item>
+                    <n-form-item :label="$gettext('User Credentials')">
+                      <key-value-editor
+                        v-model="auth.users"
+                        :key-placeholder="$gettext('Username')"
+                        :value-placeholder="$gettext('Password')"
+                        :add-button-text="$gettext('Add User')"
+                        default-key-prefix="user"
+                        value-type="password"
+                        :show-password-toggle="true"
+                      />
+                    </n-form-item>
+                  </n-form>
+                </n-card>
+                <n-button type="primary" dashed @click="addBasicAuth">
+                  {{ $gettext('Add Rule') }}
+                </n-button>
+                <n-alert v-if="setting.basic_auth.length > 0" type="info">
+                  {{
+                    $gettext(
+                      'Visitors will need to enter a username and password to access the protected directories.',
+                    )
+                  }}
+                </n-alert>
+              </n-flex>
             </n-collapse-item>
           </n-collapse>
         </n-tab-pane>

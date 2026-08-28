@@ -1,7 +1,9 @@
 package db
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
@@ -26,8 +28,15 @@ type Redis struct {
 	address  string
 }
 
-func NewRedis(username, password, address string) (*Redis, error) {
-	conn, err := redis.Dial("tcp", address, redis.DialUsername(username), redis.DialPassword(password))
+func NewRedis(ctx context.Context, username, password, address string) (*Redis, error) {
+	// 限制建连与读写超时，避免不可达地址阻塞调用方
+	conn, err := redis.DialContext(ctx, "tcp", address,
+		redis.DialUsername(username),
+		redis.DialPassword(password),
+		redis.DialConnectTimeout(5*time.Second),
+		redis.DialReadTimeout(10*time.Second),
+		redis.DialWriteTimeout(10*time.Second),
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -117,7 +126,7 @@ func (r *Redis) Get(key string) (*RedisKV, error) {
 		return nil, fmt.Errorf("key not found: %v", err)
 	}
 	if keyType == "none" {
-		return nil, fmt.Errorf("key not found")
+		return nil, errors.New("key not found")
 	}
 
 	kv := &RedisKV{Key: key, Type: keyType}

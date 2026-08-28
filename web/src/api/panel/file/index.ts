@@ -5,13 +5,18 @@ export default {
   create: (path: string, dir: boolean): any => http.Post('/file/create', { path, dir }),
   // 获取文件内容
   content: (path: string): any => http.Get('/file/content', { params: { path } }),
-  // 反向分页读取文件或 systemd 服务日志(从末尾起跳过 offset 行,读 limit 行)
+  // 反向分页读取文件/容器/systemd 日志
+  // 文件/容器: 用 offset 从末尾跳过 offset 行，读 limit 行
+  // 文件: 翻页额外传首屏返回的 size 作为锚点，避免期间写入的新日志顶偏移量
+  // systemd 服务: 首次不传 cursor，翻页传上一页返回的 next_cursor，每次读 limit 行
   tail: (params: {
     path?: string
     service?: string
     container?: string
-    offset: number
+    offset?: number
     limit: number
+    cursor?: string
+    size?: number
   }): any => http.Get('/file/tail', { params }),
   // 保存文件
   save: (path: string, content: string): any => http.Post('/file/save', { path, content }),
@@ -69,4 +74,11 @@ export default {
     chunk_count: number
     force?: boolean
   }): any => http.Post('/file/chunk/finish', data),
+  // 分享列表
+  shareList: (): any => http.Get('/file_share'),
+  // 创建分享
+  shareCreate: (path: string, maxDownloads: number, expireHours: number): any =>
+    http.Post('/file_share', { path, max_downloads: maxDownloads, expire_hours: expireHours }),
+  // 取消分享
+  shareDelete: (id: number): any => http.Delete(`/file_share/${id}`),
 }

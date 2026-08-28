@@ -4,16 +4,16 @@ import (
 	"net/http"
 
 	"github.com/acepanel/panel/v3/internal/biz"
-	"github.com/acepanel/panel/v3/internal/http/request"
+	"github.com/acepanel/panel/v3/internal/request"
 )
 
 type SafeService struct {
-	safeRepo biz.SafeRepo
+	safeRepo *biz.SafeUsecase
 }
 
-func NewSafeService(safe biz.SafeRepo) *SafeService {
+func NewSafeService(safeUsecase *biz.SafeUsecase) *SafeService {
 	return &SafeService{
-		safeRepo: safe,
+		safeRepo: safeUsecase,
 	}
 }
 

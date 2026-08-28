@@ -3,30 +3,22 @@ package data
 import (
 	"context"
 	"fmt"
-	"log/slog"
-	"slices"
 
-	"github.com/leonelquinteros/gotext"
+	lop "github.com/samber/lo/parallel"
 	"gorm.io/gorm"
 
 	"github.com/acepanel/panel/v3/internal/biz"
-	"github.com/acepanel/panel/v3/internal/http/request"
+	"github.com/acepanel/panel/v3/internal/request"
 	"github.com/acepanel/panel/v3/pkg/db"
 )
 
 type databaseUserRepo struct {
-	t      *gotext.Locale
-	db     *gorm.DB
-	log    *slog.Logger
-	server biz.DatabaseServerRepo
+	db *gorm.DB
 }
 
-func NewDatabaseUserRepo(t *gotext.Locale, db *gorm.DB, log *slog.Logger, server biz.DatabaseServerRepo) biz.DatabaseUserRepo {
+func NewDatabaseUserRepo(db *gorm.DB) biz.DatabaseUserRepo {
 	return &databaseUserRepo{
-		t:      t,
-		db:     db,
-		log:    log,
-		server: server,
+		db: db,
 	}
 }
 
@@ -39,7 +31,7 @@ func (r *databaseUserRepo) Count() (int64, error) {
 	return count, nil
 }
 
-func (r *databaseUserRepo) List(page, limit uint, typ string) ([]*biz.DatabaseUser, int64, error) {
+func (r *databaseUserRepo) List(ctx context.Context, page, limit uint, typ string) ([]*biz.DatabaseUser, int64, error) {
 	user := make([]*biz.DatabaseUser, 0)
 	var total int64
 	query := r.db.Model(&biz.DatabaseUser{}).Preload("Server").Order("id desc")
@@ -48,259 +40,49 @@ func (r *databaseUserRepo) List(page, limit uint, typ string) ([]*biz.DatabaseUs
 	}
 	err := query.Count(&total).Offset(int((page - 1) * limit)).Limit(int(limit)).Find(&user).Error
 
-	for u := range slices.Values(user) {
-		r.fillUser(u)
-	}
+	// 并发填充
+	lop.ForEach(user, func(u *biz.DatabaseUser, _ int) {
+		r.fillUser(ctx, u)
+	})
 
 	return user, total, err
 }
 
-func (r *databaseUserRepo) Get(id uint) (*biz.DatabaseUser, error) {
+func (r *databaseUserRepo) Get(ctx context.Context, id uint) (*biz.DatabaseUser, error) {
 	user := new(biz.DatabaseUser)
 	if err := r.db.Preload("Server").Where("id = ?", id).First(user).Error; err != nil {
 		return nil, err
 	}
 
-	r.fillUser(user)
+	r.fillUser(ctx, user)
 
 	return user, nil
 }
 
-func (r *databaseUserRepo) Create(ctx context.Context, req *request.DatabaseUserCreate) error {
-	server, err := r.server.Get(req.ServerID)
-	if err != nil {
-		return err
-	}
-
-	operator, err := r.getOperator(server)
-	if err != nil {
-		return err
-	}
-	defer operator.Close()
-
-	// 创建用户
-	if err = operator.UserCreate(req.Username, req.Password, req.Host); err != nil {
-		return err
-	}
-
-	// 创建数据库并授权
-	for name := range slices.Values(req.Privileges) {
-		if err = operator.DatabaseCreate(name); err != nil {
-			return err
-		}
-		if err = operator.PrivilegesGrant(req.Username, name, req.Host); err != nil {
-			return err
-		}
-	}
-
-	user := &biz.DatabaseUser{
-		ServerID: req.ServerID,
-		Username: req.Username,
-		Host:     req.Host,
-		Password: req.Password,
-		Remark:   req.Remark,
-	}
-
-	if err = r.db.FirstOrInit(user, user).Error; err != nil {
-		return err
-	}
-
-	if err = r.db.Save(user).Error; err != nil {
-		return err
-	}
-
-	// 记录日志
-	r.log.Info("database user created", slog.String("type", biz.OperationTypeDatabaseUser), slog.Uint64("operator_id", getOperatorID(ctx)), slog.String("username", req.Username), slog.Uint64("server_id", uint64(req.ServerID)))
-
-	return nil
-}
-
-func (r *databaseUserRepo) Update(req *request.DatabaseUserUpdate) error {
-	user, err := r.Get(req.ID)
-	if err != nil {
-		return err
-	}
-
-	server, err := r.server.Get(user.ServerID)
-	if err != nil {
-		return err
-	}
-
-	operator, err := r.getOperator(server)
-	if err != nil {
-		return err
-	}
-	defer operator.Close()
-
-	// 更新密码
-	if req.Password != "" {
-		if err = operator.UserPassword(user.Username, req.Password, user.Host); err != nil {
-			return err
-		}
-		user.Password = req.Password
-	}
-
-	// 撤销被移除的权限
-	currentPrivileges, _ := operator.UserPrivileges(user.Username, user.Host)
-	for name := range slices.Values(currentPrivileges) {
-		if !slices.Contains(req.Privileges, name) {
-			_ = operator.PrivilegesRevoke(user.Username, name, user.Host)
-		}
-	}
-
-	// 创建数据库并授权
-	for name := range slices.Values(req.Privileges) {
-		if err = operator.DatabaseCreate(name); err != nil {
-			return err
-		}
-		if err = operator.PrivilegesGrant(user.Username, name, user.Host); err != nil {
-			return err
-		}
-	}
-
-	user.Remark = req.Remark
-
-	return r.db.Save(user).Error
-}
-
-func (r *databaseUserRepo) UpdateRemark(req *request.DatabaseUserUpdateRemark) error {
-	user, err := r.Get(req.ID)
+func (r *databaseUserRepo) UpdateRemark(ctx context.Context, req *request.DatabaseUserUpdateRemark) error {
+	user, err := r.Get(ctx, req.ID)
 	if err != nil {
 		return err
 	}
 
 	user.Remark = req.Remark
 
-	return r.db.Save(user).Error
+	return r.db.Omit("Server").Save(user).Error
 }
 
-func (r *databaseUserRepo) Delete(ctx context.Context, id uint) error {
-	user, err := r.Get(id)
-	if err != nil {
-		return err
-	}
-
-	server, err := r.server.Get(user.ServerID)
-	if err != nil {
-		return err
-	}
-
-	operator, err := r.getOperator(server)
-	if err != nil {
-		return err
-	}
-	defer operator.Close()
-
-	_ = operator.UserDrop(user.Username, user.Host)
-
-	if err = r.db.Where("id = ?", id).Delete(&biz.DatabaseUser{}).Error; err != nil {
-		return err
-	}
-
-	// 记录日志
-	r.log.Info("database user deleted", slog.String("type", biz.OperationTypeDatabaseUser), slog.Uint64("operator_id", getOperatorID(ctx)), slog.Uint64("id", uint64(id)), slog.String("username", user.Username))
-
-	return nil
-}
-
-func (r *databaseUserRepo) DeleteByNames(serverID uint, names []string) error {
-	server, err := r.server.Get(serverID)
-	if err != nil {
-		return err
-	}
-
-	operator, err := r.getOperator(server)
-	if err != nil {
-		return err
-	}
-	defer operator.Close()
-
+// Operator 获取数据库操作句柄
+func (r *databaseUserRepo) Operator(ctx context.Context, server *biz.DatabaseServer) (db.Operator, error) {
 	switch server.Type {
 	case biz.DatabaseTypeMysql:
-		users := make([]*biz.DatabaseUser, 0)
-		if err = r.db.Where("server_id = ? AND username IN ?", serverID, names).Find(&users).Error; err != nil {
-			return err
-		}
-		for name := range slices.Values(names) {
-			host := "localhost"
-			for u := range slices.Values(users) {
-				if u.Username == name {
-					host = u.Host
-					break
-				}
-			}
-			_ = operator.UserDrop(name, host)
-		}
-	case biz.DatabaseTypePostgresql, biz.DatabaseTypeClickHouse:
-		for name := range slices.Values(names) {
-			_ = operator.UserDrop(name)
-		}
-	}
-
-	return r.db.Where("server_id = ? AND username IN ?", serverID, names).Delete(&biz.DatabaseUser{}).Error
-}
-
-func (r *databaseUserRepo) fillUser(user *biz.DatabaseUser) {
-	server, err := r.server.Get(user.ServerID)
-	if err == nil {
-		operator, err := r.getOperator(server)
-		if err == nil {
-			defer operator.Close()
-			switch server.Type {
-			case biz.DatabaseTypeMysql:
-				privileges, _ := operator.UserPrivileges(user.Username, user.Host)
-				user.Privileges = privileges
-				if mysql2, err := db.NewMySQL(user.Username, user.Password, fmt.Sprintf("%s:%d", server.Host, server.Port)); err == nil {
-					mysql2.Close()
-					user.Status = biz.DatabaseUserStatusValid
-				} else {
-					user.Status = biz.DatabaseUserStatusInvalid
-				}
-			case biz.DatabaseTypePostgresql:
-				privileges, _ := operator.UserPrivileges(user.Username)
-				user.Privileges = privileges
-				if postgres2, err := db.NewPostgres(user.Username, user.Password, server.Host, server.Port); err == nil {
-					postgres2.Close()
-					user.Status = biz.DatabaseUserStatusValid
-				} else {
-					user.Status = biz.DatabaseUserStatusInvalid
-				}
-			case biz.DatabaseTypeClickHouse:
-				privileges, _ := operator.UserPrivileges(user.Username)
-				user.Privileges = privileges
-				if ch2, err := db.NewClickHouse(user.Username, user.Password, fmt.Sprintf("%s:%d", server.Host, server.Port)); err == nil {
-					ch2.Close()
-					user.Status = biz.DatabaseUserStatusValid
-				} else {
-					user.Status = biz.DatabaseUserStatusInvalid
-				}
-			}
-		} else {
-			user.Status = biz.DatabaseUserStatusInvalid
-		}
-	}
-	// 初始化，防止 nil
-	if user.Privileges == nil {
-		user.Privileges = make([]string, 0)
-	}
-}
-
-func (r *databaseUserRepo) getOperator(server *biz.DatabaseServer) (db.Operator, error) {
-	switch server.Type {
-	case biz.DatabaseTypeMysql:
-		mysql, err := db.NewMySQL(server.Username, server.Password, fmt.Sprintf("%s:%d", server.Host, server.Port))
-		if err != nil {
-			return nil, err
-		}
-		return mysql, nil
+		return newMySQLOperator(ctx, server.Username, server.Password, server.Host, server.Port)
 	case biz.DatabaseTypePostgresql:
-		postgres, err := db.NewPostgres(server.Username, server.Password, server.Host, server.Port)
+		postgres, err := db.NewPostgres(ctx, server.Username, server.Password, server.Host, server.Port)
 		if err != nil {
 			return nil, err
 		}
 		return postgres, nil
 	case biz.DatabaseTypeClickHouse:
-		clickhouse, err := db.NewClickHouse(server.Username, server.Password, fmt.Sprintf("%s:%d", server.Host, server.Port))
+		clickhouse, err := db.NewClickHouse(ctx, server.Username, server.Password, fmt.Sprintf("%s:%d", server.Host, server.Port))
 		if err != nil {
 			return nil, err
 		}
@@ -308,4 +90,103 @@ func (r *databaseUserRepo) getOperator(server *biz.DatabaseServer) (db.Operator,
 	default:
 		return nil, fmt.Errorf("unsupported database type: %s", server.Type)
 	}
+}
+
+// Upsert 创建或更新用户记录（FirstOrInit + Save，非原子保留）
+func (r *databaseUserRepo) Upsert(user *biz.DatabaseUser) error {
+	if err := r.db.FirstOrInit(user, user).Error; err != nil {
+		return err
+	}
+
+	return r.db.Omit("Server").Save(user).Error
+}
+
+// Save 保存用户记录
+func (r *databaseUserRepo) Save(user *biz.DatabaseUser) error {
+	return r.db.Omit("Server").Save(user).Error
+}
+
+// DeleteByID 按 ID 删除用户记录
+func (r *databaseUserRepo) DeleteByID(id uint) error {
+	return r.db.Where("id = ?", id).Delete(&biz.DatabaseUser{}).Error
+}
+
+// ListByNames 查询指定服务器下匹配用户名的用户记录
+func (r *databaseUserRepo) ListByNames(serverID uint, names []string) ([]*biz.DatabaseUser, error) {
+	users := make([]*biz.DatabaseUser, 0)
+	if err := r.db.Where("server_id = ? AND username IN ?", serverID, names).Find(&users).Error; err != nil {
+		return nil, err
+	}
+
+	return users, nil
+}
+
+// DeleteByServerNames 按服务器与用户名删除用户记录
+func (r *databaseUserRepo) DeleteByServerNames(serverID uint, names []string) error {
+	return r.db.Where("server_id = ? AND username IN ?", serverID, names).Delete(&biz.DatabaseUser{}).Error
+}
+
+func (r *databaseUserRepo) fillUser(ctx context.Context, user *biz.DatabaseUser) {
+	// 初始化，防止 nil
+	defer func() {
+		if user.Privileges == nil {
+			user.Privileges = make([]string, 0)
+		}
+	}()
+
+	// 避免每行再查一次服务器记录
+	server := user.Server
+	if server == nil {
+		var err error
+		if server, err = r.loadServer(user.ServerID); err != nil {
+			return
+		}
+	}
+
+	operator, err := r.Operator(ctx, server)
+	if err != nil {
+		user.Status = biz.DatabaseUserStatusInvalid
+		return
+	}
+	defer operator.Close()
+
+	switch server.Type {
+	case biz.DatabaseTypeMysql:
+		privileges, _ := operator.UserPrivileges(user.Username, user.Host)
+		user.Privileges = privileges
+		if mysql2, err := newMySQLOperator(ctx, user.Username, user.Password, server.Host, server.Port); err == nil {
+			mysql2.Close()
+			user.Status = biz.DatabaseUserStatusValid
+		} else {
+			user.Status = biz.DatabaseUserStatusInvalid
+		}
+	case biz.DatabaseTypePostgresql:
+		privileges, _ := operator.UserPrivileges(user.Username)
+		user.Privileges = privileges
+		if postgres2, err := db.NewPostgres(ctx, user.Username, user.Password, server.Host, server.Port); err == nil {
+			postgres2.Close()
+			user.Status = biz.DatabaseUserStatusValid
+		} else {
+			user.Status = biz.DatabaseUserStatusInvalid
+		}
+	case biz.DatabaseTypeClickHouse:
+		privileges, _ := operator.UserPrivileges(user.Username)
+		user.Privileges = privileges
+		if ch2, err := db.NewClickHouse(ctx, user.Username, user.Password, fmt.Sprintf("%s:%d", server.Host, server.Port)); err == nil {
+			ch2.Close()
+			user.Status = biz.DatabaseUserStatusValid
+		} else {
+			user.Status = biz.DatabaseUserStatusInvalid
+		}
+	}
+}
+
+// loadServer 直读服务器记录，断开 repo→repo，仅取连接信息
+func (r *databaseUserRepo) loadServer(id uint) (*biz.DatabaseServer, error) {
+	server := new(biz.DatabaseServer)
+	if err := r.db.Where("id = ?", id).First(server).Error; err != nil {
+		return nil, err
+	}
+
+	return server, nil
 }

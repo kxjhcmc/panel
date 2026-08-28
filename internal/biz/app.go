@@ -1,8 +1,15 @@
 package biz
 
 import (
+	"encoding/json"
+	"errors"
+	"slices"
 	"time"
 
+	"github.com/leonelquinteros/gotext"
+	"github.com/samber/lo"
+
+	"github.com/acepanel/panel/v3/internal/app"
 	"github.com/acepanel/panel/v3/pkg/api"
 	"github.com/acepanel/panel/v3/pkg/types"
 )
@@ -18,19 +25,300 @@ type App struct {
 	UpdatedAt time.Time `json:"updated_at"`
 }
 
+// AppCustom 自定义编译参数(前置脚本在 configure 前执行,参数追加到 configure 末尾)
+type AppCustom struct {
+	PreScript string `json:"pre_script"`
+	Args      string `json:"args"`
+}
+
+// 支持自定义编译参数的应用与环境类型(源码编译类)
+var (
+	customCompileApps     = []string{"apache", "memcached", "nginx", "openresty", "pureftpd", "s3fs"}
+	customCompileEnvTypes = []string{"php", "python"}
+)
+
+// CustomCompileApp 判断应用是否支持自定义编译参数
+func CustomCompileApp(slug string) bool {
+	return slices.Contains(customCompileApps, slug)
+}
+
+// CustomCompileEnv 判断环境类型是否支持自定义编译参数
+func CustomCompileEnv(typ string) bool {
+	return slices.Contains(customCompileEnvTypes, typ)
+}
+
 type AppRepo interface {
-	Categories() []types.LV
-	All() api.Apps
-	Get(slug string) (*api.App, error)
-	UpdateExist(slug string) bool
 	Installed() ([]*App, error)
 	GetInstalled(slug string) (*App, error)
 	GetInstalledAll(query string, cond ...string) ([]*App, error)
-	GetHomeShow() ([]map[string]string, error)
+	ListHomeShow() ([]*App, error)
 	IsInstalled(query string, cond ...any) (bool, error)
-	Install(channel, slug string) error
-	UnInstall(slug string) error
-	Update(slug string) error
 	UpdateShow(slug string, show bool) error
 	UpdateOrder(slugs []string) error
+	DownloadCallback(slug string)
+	CheckPanelVersion() error
+	ResolveScript(item *api.App, matchChannel, action, execVersion string) (string, error)
+	ExecScript(script string) error
+	PreCheck(item *api.App, catalog api.Apps) error
+	GetCustom(slug string) (*AppCustom, error)
+	SaveCustom(slug string, custom *AppCustom) error
+}
+
+type AppUsecase struct {
+	repo  AppRepo
+	cache CacheRepo
+	task  TaskRepo
+	t     *gotext.Locale
+}
+
+func NewAppUsecase(t *gotext.Locale, appRepo AppRepo, cacheRepo CacheRepo, taskRepo TaskRepo) *AppUsecase {
+	return &AppUsecase{
+		repo:  appRepo,
+		cache: cacheRepo,
+		task:  taskRepo,
+		t:     t,
+	}
+}
+
+func (uc *AppUsecase) Categories() []types.LV {
+	cached, err := uc.cache.Get(CacheKeyCategories)
+	if err != nil {
+		return nil
+	}
+
+	var categories api.Categories
+	if err = json.Unmarshal([]byte(cached), &categories); err != nil {
+		return nil
+	}
+
+	slices.SortFunc(categories, func(a, b *api.Category) int {
+		return a.Order - b.Order
+	})
+
+	return lo.Map(categories, func(item *api.Category, _ int) types.LV {
+		return types.LV{Label: item.Name, Value: item.Slug}
+	})
+}
+
+func (uc *AppUsecase) All() api.Apps {
+	cached, err := uc.cache.Get(CacheKeyApps)
+	if err != nil {
+		return nil
+	}
+	var apps api.Apps
+	if err = json.Unmarshal([]byte(cached), &apps); err != nil {
+		return nil
+	}
+	return apps
+}
+
+func (uc *AppUsecase) Get(slug string) (*api.App, error) {
+	for item := range slices.Values(uc.All()) {
+		if item.Slug == slug {
+			return item, nil
+		}
+	}
+	return nil, errors.New(uc.t.Get("app %s not found", slug))
+}
+
+func (uc *AppUsecase) UpdateExist(slug string) bool {
+	item, err := uc.Get(slug)
+	if err != nil {
+		return false
+	}
+	installed, err := uc.repo.GetInstalled(slug)
+	if err != nil {
+		return false
+	}
+
+	for channel := range slices.Values(item.Channels) {
+		if channel.Slug == installed.Channel {
+			if channel.Version != installed.Version {
+				return true
+			}
+		}
+	}
+
+	return false
+}
+
+func (uc *AppUsecase) Installed() ([]*App, error) {
+	return uc.repo.Installed()
+}
+
+func (uc *AppUsecase) GetInstalled(slug string) (*App, error) {
+	return uc.repo.GetInstalled(slug)
+}
+
+func (uc *AppUsecase) GetInstalledAll(query string, cond ...string) ([]*App, error) {
+	return uc.repo.GetInstalledAll(query, cond...)
+}
+
+func (uc *AppUsecase) GetHomeShow() ([]map[string]string, error) {
+	apps, err := uc.repo.ListHomeShow()
+	if err != nil {
+		return nil, err
+	}
+
+	// 目录只加载一次
+	catalog := lo.KeyBy(uc.All(), func(item *api.App) string { return item.Slug })
+
+	filtered := make([]map[string]string, 0)
+	for item := range slices.Values(apps) {
+		loaded, ok := catalog[item.Slug]
+		if !ok {
+			continue
+		}
+		filtered = append(filtered, map[string]string{
+			"name":        loaded.Name,
+			"description": loaded.Description,
+			"slug":        loaded.Slug,
+			"version":     item.Version,
+		})
+	}
+
+	return filtered, nil
+}
+
+func (uc *AppUsecase) IsInstalled(query string, cond ...any) (bool, error) {
+	return uc.repo.IsInstalled(query, cond...)
+}
+
+func (uc *AppUsecase) Install(channel, slug string) error {
+	item, err := uc.Get(slug)
+	if err != nil {
+		return err
+	}
+
+	// 恢复原编排：非法面板版本应在存在性检查前报错
+	if err = uc.repo.CheckPanelVersion(); err != nil {
+		return err
+	}
+
+	if installed, _ := uc.repo.IsInstalled(slug); installed {
+		return errors.New(uc.t.Get("app %s already installed", slug))
+	}
+
+	script, err := uc.repo.ResolveScript(item, channel, "install", "")
+	if err != nil {
+		return err
+	}
+
+	if err = uc.repo.PreCheck(item, uc.All()); err != nil {
+		return err
+	}
+
+	uc.repo.DownloadCallback(slug)
+
+	if app.IsCli {
+		return uc.repo.ExecScript(script)
+	}
+
+	task := new(Task)
+	task.Key = "app:" + slug
+	task.Name = uc.t.Get("Install app %s", item.Name)
+	task.Status = TaskStatusWaiting
+	task.Shell = script
+
+	return uc.task.Push(task)
+}
+
+func (uc *AppUsecase) UnInstall(slug string) error {
+	item, err := uc.Get(slug)
+	if err != nil {
+		return err
+	}
+
+	// 恢复原编排：非法面板版本应在存在性检查前报错
+	if err = uc.repo.CheckPanelVersion(); err != nil {
+		return err
+	}
+
+	if installed, _ := uc.repo.IsInstalled(slug); !installed {
+		return errors.New(uc.t.Get("app %s not installed", item.Name))
+	}
+	installed, err := uc.repo.GetInstalled(slug)
+	if err != nil {
+		return err
+	}
+
+	script, err := uc.repo.ResolveScript(item, installed.Channel, "uninstall", installed.Version)
+	if err != nil {
+		return err
+	}
+
+	if err = uc.repo.PreCheck(item, uc.All()); err != nil {
+		return err
+	}
+
+	if app.IsCli {
+		return uc.repo.ExecScript(script)
+	}
+
+	task := new(Task)
+	task.Key = "app:" + slug
+	task.Name = uc.t.Get("Uninstall app %s", item.Name)
+	task.Status = TaskStatusWaiting
+	task.Shell = script
+
+	return uc.task.Push(task)
+}
+
+func (uc *AppUsecase) Update(slug string) error {
+	item, err := uc.Get(slug)
+	if err != nil {
+		return err
+	}
+
+	// 恢复原编排：非法面板版本应在存在性检查前报错
+	if err = uc.repo.CheckPanelVersion(); err != nil {
+		return err
+	}
+
+	if installed, _ := uc.repo.IsInstalled(slug); !installed {
+		return errors.New(uc.t.Get("app %s not installed", item.Name))
+	}
+	installed, err := uc.repo.GetInstalled(slug)
+	if err != nil {
+		return err
+	}
+
+	script, err := uc.repo.ResolveScript(item, installed.Channel, "update", "")
+	if err != nil {
+		return err
+	}
+
+	if err = uc.repo.PreCheck(item, uc.All()); err != nil {
+		return err
+	}
+
+	uc.repo.DownloadCallback(slug)
+
+	if app.IsCli {
+		return uc.repo.ExecScript(script)
+	}
+
+	task := new(Task)
+	task.Key = "app:" + slug
+	task.Name = uc.t.Get("Update app %s", item.Name)
+	task.Status = TaskStatusWaiting
+	task.Shell = script
+
+	return uc.task.Push(task)
+}
+
+func (uc *AppUsecase) UpdateShow(slug string, show bool) error {
+	return uc.repo.UpdateShow(slug, show)
+}
+
+func (uc *AppUsecase) GetCustom(slug string) (*AppCustom, error) {
+	return uc.repo.GetCustom(slug)
+}
+
+func (uc *AppUsecase) SaveCustom(slug string, custom *AppCustom) error {
+	return uc.repo.SaveCustom(slug, custom)
+}
+
+func (uc *AppUsecase) UpdateOrder(slugs []string) error {
+	return uc.repo.UpdateOrder(slugs)
 }

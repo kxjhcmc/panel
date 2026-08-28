@@ -1,11 +1,13 @@
-//go:build !windows
-
 package service
 
 import (
+	"bufio"
+	"bytes"
+	"cmp"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	stdio "io"
 	"mime/multipart"
@@ -19,14 +21,14 @@ import (
 	"time"
 
 	"github.com/leonelquinteros/gotext"
-	"github.com/libtnb/chix"
+	"github.com/libtnb/chix/v2"
 	"github.com/libtnb/utils/file"
 	"github.com/samber/lo"
 	"github.com/spf13/cast"
 
 	"github.com/acepanel/panel/v3/internal/app"
 	"github.com/acepanel/panel/v3/internal/biz"
-	"github.com/acepanel/panel/v3/internal/http/request"
+	"github.com/acepanel/panel/v3/internal/request"
 	"github.com/acepanel/panel/v3/pkg/chattr"
 	"github.com/acepanel/panel/v3/pkg/io"
 	"github.com/acepanel/panel/v3/pkg/os"
@@ -36,15 +38,17 @@ import (
 
 type FileService struct {
 	t             *gotext.Locale
-	taskRepo      biz.TaskRepo
-	containerRepo biz.ContainerRepo
+	taskRepo      *biz.TaskUsecase
+	containerRepo *biz.ContainerUsecase
+	tamperRepo    *biz.TamperUsecase
 }
 
-func NewFileService(t *gotext.Locale, task biz.TaskRepo, container biz.ContainerRepo) *FileService {
+func NewFileService(containerUsecase *biz.ContainerUsecase, tamperUsecase *biz.TamperUsecase, taskUsecase *biz.TaskUsecase, t *gotext.Locale) *FileService {
 	return &FileService{
 		t:             t,
-		taskRepo:      task,
-		containerRepo: container,
+		taskRepo:      taskUsecase,
+		containerRepo: containerUsecase,
+		tamperRepo:    tamperUsecase,
 	}
 }
 
@@ -125,9 +129,8 @@ func (s *FileService) Tail(w http.ResponseWriter, r *http.Request) {
 	if req.Limit > 5000 {
 		req.Limit = 5000
 	}
-	if req.Offset < 0 {
-		req.Offset = 0
-	}
+	// 限制回溯深度，三种日志源共用；再深的历史交给下载原始日志
+	req.Offset = min(max(req.Offset, 0), 10000)
 
 	if req.Path == "" && req.Service == "" && req.Container == "" {
 		Error(w, http.StatusUnprocessableEntity, s.t.Get("path, service or container is required"))
@@ -161,30 +164,36 @@ func (s *FileService) Tail(w http.ResponseWriter, r *http.Request) {
 		Success(w, chix.M{"lines": []string{}, "has_more": false, "size": size})
 		return
 	}
+	// 以首屏返回的大小为锚点反向分页，否则跟踪期间写入的新行会顶掉偏移量导致翻页重复
+	anchor := size
+	if req.Size > 0 {
+		anchor = min(req.Size, size)
+	}
 
-	// 从尾部反向读取，直到攒够 offset+limit+1 个换行符（多 1 是为了避免读到不完整的首行）
-	const chunkSize = int64(8192)
-	pos := size
-	var data []byte
+	// 从锚点反向读取，直到攒够 offset+limit+1 个换行符（多 1 是为了避免读到不完整的首行）
+	// 首块按预估行长一次读足，绝大多数请求一两次系统调用即可完成；maxScan 兜住超长行
+	const maxScan = int64(64 << 20)
 	needLines := req.Offset + req.Limit + 1
+	readSize := min(int64(needLines)*256, maxScan)
+	pos := anchor
+	chunks := make([][]byte, 0, 4)
 	newlineCount := 0
-	for pos > 0 && newlineCount < needLines {
-		readSize := chunkSize
-		if pos < chunkSize {
-			readSize = pos
-		}
+	for pos > 0 && newlineCount < needLines && anchor-pos < maxScan {
+		readSize = min(readSize, pos)
 		pos -= readSize
 		buf := make([]byte, readSize)
 		if _, rerr := f.ReadAt(buf, pos); rerr != nil && rerr != stdio.EOF {
 			Error(w, http.StatusInternalServerError, "%v", rerr)
 			return
 		}
-		data = append(buf, data...)
-		newlineCount = strings.Count(string(data), "\n")
+		newlineCount += bytes.Count(buf, []byte{'\n'})
+		chunks = append(chunks, buf)
 	}
+	slices.Reverse(chunks)
+	data := bytes.Join(chunks, nil)
 
-	// 切分行
-	all := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+	// 按字节切分，只把真正返回的那一页转成 string，避免整个扫描窗口再复制一份
+	all := bytes.Split(bytes.TrimRight(data, "\n"), []byte{'\n'})
 	totalLoaded := len(all)
 
 	// 当 pos > 0 时第一行可能不完整，丢弃以避免半行被显示
@@ -194,10 +203,7 @@ func (s *FileService) Tail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	endIdx := totalLoaded - req.Offset
-	startIdx := endIdx - req.Limit
-	if startIdx < startBoundary {
-		startIdx = startBoundary
-	}
+	startIdx := max(endIdx-req.Limit, startBoundary)
 	if endIdx < startIdx {
 		endIdx = startIdx
 	}
@@ -207,9 +213,9 @@ func (s *FileService) Tail(w http.ResponseWriter, r *http.Request) {
 
 	hasMore := pos > 0 || startIdx > startBoundary
 
-	result := []string{}
-	if startIdx < endIdx {
-		result = all[startIdx:endIdx]
+	result := make([]string, 0, max(endIdx-startIdx, 0))
+	for _, line := range all[startIdx:endIdx] {
+		result = append(result, string(line))
 	}
 
 	Success(w, chix.M{
@@ -248,6 +254,11 @@ func (s *FileService) Save(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 防篡改保护中的文件先解锁再写入,写后恢复
+	if s.tamperRepo.Unlock(req.Path) {
+		defer s.tamperRepo.Relock(req.Path)
+	}
+
 	if err = io.Write(req.Path, req.Content, fileInfo.Mode()); err != nil {
 		Error(w, http.StatusInternalServerError, "%v", err)
 		return
@@ -269,7 +280,12 @@ func (s *FileService) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 解除防篡改保护后再删除
+	unlocked := s.tamperRepo.Unlock(req.Path)
 	if err = io.Remove(req.Path); err != nil {
+		if unlocked {
+			s.tamperRepo.Relock(req.Path)
+		}
 		Error(w, http.StatusInternalServerError, "%v", err)
 		return
 	}
@@ -297,6 +313,9 @@ func (s *FileService) Upload(w http.ResponseWriter, r *http.Request) {
 
 	// 强制覆盖时先删除已有文件，避免覆盖正在运行的二进制文件时出现 ETXTBSY 错误
 	if force && io.Exists(path) {
+		if s.tamperRepo.Unlock(path) {
+			defer s.tamperRepo.Relock(path)
+		}
 		_ = stdos.Remove(path)
 	}
 
@@ -367,9 +386,14 @@ func (s *FileService) Move(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		// 源受保护则先解锁,移动后按目标路径恢复
+		relock := s.tamperRepo.Unlock(item.Source)
 		if err := io.Mv(item.Source, item.Target); err != nil {
 			Error(w, http.StatusInternalServerError, "%v", err)
 			return
+		}
+		if relock {
+			s.tamperRepo.Relock(item.Target)
 		}
 	}
 
@@ -440,9 +464,11 @@ func (s *FileService) RemoteDownload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	task := new(biz.Task)
+	task.Key = "download:" + req.Path
 	task.Name = s.t.Get("Download remote file %v", filepath.Base(req.Path))
 	task.Status = biz.TaskStatusWaiting
-	task.Shell = fmt.Sprintf(`aria2c -c --file-allocation=falloc --allow-overwrite=true --auto-file-renaming=false --retry-wait=5 --max-tries=5 -x 16 -s 16 -k 1M -d '%s' -o '%s' '%s' && chmod 0755 '%s' && chown www:www '%s'`, filepath.Dir(req.Path), filepath.Base(req.Path), req.URL, req.Path, req.Path)
+	task.Shell = fmt.Sprintf(`aria2c -c --file-allocation=falloc --allow-overwrite=true --auto-file-renaming=false --check-certificate=false --retry-wait=5 --max-tries=5 -x 16 -s 16 -k 1M -d '%s' -o '%s' '%s' && chmod 0755 '%s' && chown www:www '%s'`, filepath.Dir(req.Path), filepath.Base(req.Path), req.URL, req.Path, req.Path)
+	task.CancelShell = fmt.Sprintf(`rm -f '%s' '%s.aria2'`, req.Path, req.Path)
 
 	if err = s.taskRepo.Push(task); err != nil {
 		Error(w, http.StatusInternalServerError, "%v", err)
@@ -561,12 +587,24 @@ func (s *FileService) Compress(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err = io.Compress(req.Dir, req.Paths, req.File); err != nil {
+	cmd, err := io.CompressShell(req.Dir, req.Paths, req.File)
+	if err != nil {
 		Error(w, http.StatusInternalServerError, "%v", err)
 		return
 	}
 
-	s.setPermission(req.File, 0755, "www", "www")
+	task := new(biz.Task)
+	task.Key = "compress:" + req.File
+	task.Name = s.t.Get("Compress %v", filepath.Base(req.File))
+	task.Status = biz.TaskStatusWaiting
+	task.Shell = fmt.Sprintf(`%s && chmod 0755 '%s' && chown www:www '%s'`, cmd, req.File, req.File)
+	task.CancelShell = fmt.Sprintf(`rm -f '%s'`, req.File)
+
+	if err = s.taskRepo.Push(task); err != nil {
+		Error(w, http.StatusInternalServerError, "%v", err)
+		return
+	}
+
 	Success(w, nil)
 }
 
@@ -577,19 +615,21 @@ func (s *FileService) UnCompress(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err = io.UnCompress(req.File, req.Path); err != nil {
-		Error(w, http.StatusInternalServerError, "%v", err)
-		return
-	}
-
-	list, err := io.ListCompress(req.File)
+	cmd, err := io.UnCompressShell(req.File, req.Path)
 	if err != nil {
 		Error(w, http.StatusInternalServerError, "%v", err)
 		return
 	}
 
-	for item := range slices.Values(list) {
-		s.setPermission(filepath.Join(req.Path, item), 0755, "www", "www")
+	task := new(biz.Task)
+	task.Key = fmt.Sprintf("uncompress:%s:%s", req.File, req.Path)
+	task.Name = s.t.Get("Uncompress %v", filepath.Base(req.File))
+	task.Status = biz.TaskStatusWaiting
+	task.Shell = fmt.Sprintf(`%s && chmod -R 0755 '%s' && chown -R www:www '%s'`, cmd, req.Path, req.Path)
+
+	if err = s.taskRepo.Push(task); err != nil {
+		Error(w, http.StatusInternalServerError, "%v", err)
+		return
 	}
 
 	Success(w, nil)
@@ -650,38 +690,23 @@ func (s *FileService) List(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 
-		var cmp int
+		var order int
 		switch sortKey {
 		case "size":
 			// 按大小排序
-			if a.info.Size() < b.info.Size() {
-				cmp = -1
-			} else if a.info.Size() > b.info.Size() {
-				cmp = 1
-			} else {
-				cmp = 0
-			}
+			order = cmp.Compare(a.info.Size(), b.info.Size())
 		case "modify":
 			// 按修改时间排序
-			if a.info.ModTime().Before(b.info.ModTime()) {
-				cmp = -1
-			} else if a.info.ModTime().After(b.info.ModTime()) {
-				cmp = 1
-			} else {
-				cmp = 0
-			}
-		case "name":
-			// 按名称排序
-			cmp = strings.Compare(strings.ToLower(a.info.Name()), strings.ToLower(b.info.Name()))
+			order = a.info.ModTime().Compare(b.info.ModTime())
 		default:
 			// 默认按名称排序
-			cmp = strings.Compare(strings.ToLower(a.info.Name()), strings.ToLower(b.info.Name()))
+			order = strings.Compare(strings.ToLower(a.info.Name()), strings.ToLower(b.info.Name()))
 		}
 
 		if sortDesc {
-			cmp = -cmp
+			order = -order
 		}
-		return cmp
+		return order
 	})
 
 	// 转换回 DirEntry 列表
@@ -941,42 +966,89 @@ func (s *FileService) getChunkTempFilePrefix(fileName, fileHash string) string {
 	return fmt.Sprintf(".%s.%s.chunk.", fileName, hashPrefix)
 }
 
-// tailService 用 journalctl 反向读取 systemd 服务日志
+// tailService 用 journalctl cursor 反向分页读取 systemd 服务日志
 func (s *FileService) tailService(w http.ResponseWriter, req *request.FileTail) {
-	total := req.Offset + req.Limit
-	out, err := shell.Execf("journalctl --no-pager -n %d -u %s", total, req.Service)
+	cmd := fmt.Sprintf("journalctl --no-pager -o json -u %s -n %d", req.Service, req.Limit)
+	if req.Cursor != "" {
+		cmd += fmt.Sprintf(" --before-cursor %q", req.Cursor)
+	}
+	out, err := shell.Execf(cmd)
 	if err != nil {
 		Error(w, http.StatusInternalServerError, "%v", err)
 		return
 	}
-	all := strings.Split(strings.TrimRight(out, "\n"), "\n")
-	totalLoaded := len(all)
-	endIdx := totalLoaded - req.Offset
-	startIdx := endIdx - req.Limit
-	if startIdx < 0 {
-		startIdx = 0
+
+	type entry struct {
+		Cursor    string `json:"__CURSOR"`
+		Timestamp string `json:"__REALTIME_TIMESTAMP"`
+		Hostname  string `json:"_HOSTNAME"`
+		Ident     string `json:"SYSLOG_IDENTIFIER"`
+		Comm      string `json:"_COMM"`
+		PID       string `json:"_PID"`
+		Message   string `json:"MESSAGE"`
 	}
-	if endIdx < startIdx {
-		endIdx = startIdx
+
+	entries := make([]entry, 0, req.Limit)
+	scanner := bufio.NewScanner(strings.NewReader(out))
+	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	for scanner.Scan() {
+		var e entry
+		if json.Unmarshal(scanner.Bytes(), &e) != nil {
+			continue
+		}
+		entries = append(entries, e)
 	}
-	if endIdx > totalLoaded {
-		endIdx = totalLoaded
+
+	lines := make([]string, 0, len(entries))
+	for _, e := range entries {
+		lines = append(lines, formatJournalLine(e.Timestamp, e.Hostname, e.Ident, e.Comm, e.PID, e.Message))
 	}
-	result := []string{}
-	if startIdx < endIdx {
-		result = all[startIdx:endIdx]
+
+	// next_cursor 是本次结果中最早那条的 cursor，供下一页 --before-cursor 继续往前翻
+	nextCursor := ""
+	if len(entries) > 0 {
+		nextCursor = entries[0].Cursor
 	}
-	// journalctl -n 拿到的就是末尾,如果 totalLoaded == total 说明可能还有更早
-	hasMore := totalLoaded >= total
+	hasMore := len(lines) >= req.Limit
+
 	Success(w, chix.M{
-		"lines":    result,
-		"has_more": hasMore,
-		"size":     0,
+		"lines":       lines,
+		"has_more":    hasMore,
+		"next_cursor": nextCursor,
+		"size":        0,
 	})
+}
+
+// formatJournalLine 按 syslog 风格拼装单行日志
+func formatJournalLine(ts, hostname, ident, comm, pid, message string) string {
+	var sb strings.Builder
+	if us, err := strconv.ParseInt(ts, 10, 64); err == nil {
+		sb.WriteString(time.Unix(0, us*int64(time.Microsecond)).Format("Jan 02 15:04:05"))
+		sb.WriteByte(' ')
+	}
+	if hostname != "" {
+		sb.WriteString(hostname)
+		sb.WriteByte(' ')
+	}
+	if ident == "" {
+		ident = comm
+	}
+	if ident != "" {
+		sb.WriteString(ident)
+		if pid != "" {
+			sb.WriteByte('[')
+			sb.WriteString(pid)
+			sb.WriteByte(']')
+		}
+		sb.WriteString(": ")
+	}
+	sb.WriteString(message)
+	return sb.String()
 }
 
 // tailContainer 反向读取容器末尾日志
 func (s *FileService) tailContainer(w http.ResponseWriter, req *request.FileTail) {
+	// 容器日志只能整段拉取再切片，回溯深度由 Tail 顶部统一钳制
 	total := req.Offset + req.Limit
 	out, err := s.containerRepo.Logs(req.Container, total)
 	if err != nil {
@@ -986,10 +1058,7 @@ func (s *FileService) tailContainer(w http.ResponseWriter, req *request.FileTail
 	all := strings.Split(strings.TrimRight(out, "\n"), "\n")
 	totalLoaded := len(all)
 	endIdx := totalLoaded - req.Offset
-	startIdx := endIdx - req.Limit
-	if startIdx < 0 {
-		startIdx = 0
-	}
+	startIdx := max(endIdx-req.Limit, 0)
 	if endIdx < startIdx {
 		endIdx = startIdx
 	}

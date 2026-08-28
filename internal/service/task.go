@@ -3,19 +3,19 @@ package service
 import (
 	"net/http"
 
-	"github.com/libtnb/chix"
+	"github.com/libtnb/chix/v2"
 
 	"github.com/acepanel/panel/v3/internal/biz"
-	"github.com/acepanel/panel/v3/internal/http/request"
+	"github.com/acepanel/panel/v3/internal/request"
 )
 
 type TaskService struct {
-	taskRepo biz.TaskRepo
+	taskRepo *biz.TaskUsecase
 }
 
-func NewTaskService(task biz.TaskRepo) *TaskService {
+func NewTaskService(taskUsecase *biz.TaskUsecase) *TaskService {
 	return &TaskService{
-		taskRepo: task,
+		taskRepo: taskUsecase,
 	}
 }
 
@@ -69,6 +69,21 @@ func (s *TaskService) Delete(w http.ResponseWriter, r *http.Request) {
 
 	err = s.taskRepo.Delete(req.ID)
 	if err != nil {
+		Error(w, http.StatusInternalServerError, "%v", err)
+		return
+	}
+
+	Success(w, nil)
+}
+
+func (s *TaskService) Cancel(w http.ResponseWriter, r *http.Request) {
+	req, err := Bind[request.ID](r)
+	if err != nil {
+		Error(w, http.StatusUnprocessableEntity, "%v", err)
+		return
+	}
+
+	if err = s.taskRepo.Cancel(req.ID); err != nil {
 		Error(w, http.StatusInternalServerError, "%v", err)
 		return
 	}

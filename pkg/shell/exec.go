@@ -10,15 +10,20 @@ import (
 	"os/exec"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/creack/pty"
 )
 
+func ApplyEnv(cmd *exec.Cmd, env ...string) {
+	cmd.Env = append(os.Environ(), append([]string{"LC_ALL=C"}, env...)...)
+}
+
 // Exec 执行 shell 命令
 func Exec(shell string) (string, error) {
-	_ = os.Setenv("LC_ALL", "C")
 	cmd := exec.Command("bash", "-c", shell)
+	ApplyEnv(cmd)
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -32,21 +37,29 @@ func Exec(shell string) (string, error) {
 }
 
 // ExecWithLog 执行 shell 命令并将输出写入指定的日志文件
-func ExecWithLog(shell string, logFile string) error {
-	_ = os.Setenv("LC_ALL", "C")
-
+// ctx 取消时会杀死整个进程组
+func ExecWithLog(ctx context.Context, shell string, logFile string) error {
 	f, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
 	if err != nil {
 		return err
 	}
 	defer func(f *os.File) { _ = f.Close() }(f)
 
-	cmd := exec.Command("bash", "-c", shell)
+	cmd := exec.CommandContext(ctx, "bash", "-c", shell)
+	ApplyEnv(cmd)
 	cmd.Stdout = f
 	cmd.Stderr = f
+	// 命令会派生子进程（下载、压缩等），放入独立进程组以便取消时整组杀死
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
 
 	if err = cmd.Run(); err != nil {
-		return fmt.Errorf("run %s failed, err: %w", shell, err)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		return fmt.Errorf("run shell failed: %w", err)
 	}
 
 	return nil
@@ -61,8 +74,54 @@ func Execf(shell string, args ...any) (string, error) {
 		shell = fmt.Sprintf(shell, args...)
 	}
 
-	_ = os.Setenv("LC_ALL", "C")
 	cmd := exec.Command("bash", "-c", shell)
+	ApplyEnv(cmd)
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		return strings.TrimSpace(stdout.String()), fmt.Errorf("run %s failed, err: %w, stderr: %s", shell, err, strings.TrimSpace(stderr.String()))
+	}
+
+	return strings.TrimSpace(stdout.String()), nil
+}
+
+// ExecfWithEnv 安全执行 shell 命令，环境变量仅注入子进程
+func ExecfWithEnv(env []string, shell string, args ...any) (string, error) {
+	if !preCheckArg(args) {
+		return "", errors.New("command contains illegal characters")
+	}
+	if len(args) > 0 {
+		shell = fmt.Sprintf(shell, args...)
+	}
+
+	cmd := exec.Command("bash", "-c", shell)
+	ApplyEnv(cmd, env...)
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	if err := cmd.Run(); err != nil {
+		return strings.TrimSpace(stdout.String()), fmt.Errorf("run %s failed, err: %w, stderr: %s", shell, err, strings.TrimSpace(stderr.String()))
+	}
+
+	return strings.TrimSpace(stdout.String()), nil
+}
+
+// ExecfWithContext 安全执行 shell 命令，ctx 取消时终止进程
+func ExecfWithContext(ctx context.Context, shell string, args ...any) (string, error) {
+	if !preCheckArg(args) {
+		return "", errors.New("command contains illegal characters")
+	}
+	if len(args) > 0 {
+		shell = fmt.Sprintf(shell, args...)
+	}
+
+	cmd := exec.CommandContext(ctx, "bash", "-c", shell)
+	ApplyEnv(cmd)
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -84,8 +143,8 @@ func ExecfAsync(shell string, args ...any) error {
 		shell = fmt.Sprintf(shell, args...)
 	}
 
-	_ = os.Setenv("LC_ALL", "C")
 	cmd := exec.Command("bash", "-c", shell)
+	ApplyEnv(cmd)
 
 	err := cmd.Start()
 	if err != nil {
@@ -110,8 +169,8 @@ func ExecfWithTimeout(timeout time.Duration, shell string, args ...any) (string,
 		shell = fmt.Sprintf(shell, args...)
 	}
 
-	_ = os.Setenv("LC_ALL", "C")
 	cmd := exec.Command("bash", "-c", shell)
+	ApplyEnv(cmd)
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -149,8 +208,8 @@ func ExecfWithOutput(shell string, args ...any) error {
 		shell = fmt.Sprintf(shell, args...)
 	}
 
-	_ = os.Setenv("LC_ALL", "C")
 	cmd := exec.Command("bash", "-c", shell)
+	ApplyEnv(cmd)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
@@ -166,8 +225,8 @@ func ExecfWithPipe(ctx context.Context, shell string, args ...any) (io.ReadClose
 		shell = fmt.Sprintf(shell, args...)
 	}
 
-	_ = os.Setenv("LC_ALL", "C")
 	cmd := exec.CommandContext(ctx, "bash", "-c", shell)
+	ApplyEnv(cmd)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -198,8 +257,8 @@ func ExecfWithDir(dir, shell string, args ...any) (string, error) {
 		shell = fmt.Sprintf(shell, args...)
 	}
 
-	_ = os.Setenv("LC_ALL", "C")
 	cmd := exec.Command("bash", "-c", shell)
+	ApplyEnv(cmd)
 	cmd.Dir = dir
 
 	var stdout, stderr bytes.Buffer
@@ -222,8 +281,8 @@ func ExecfWithTTY(shell string, args ...any) (string, error) {
 		shell = fmt.Sprintf(shell, args...)
 	}
 
-	_ = os.Setenv("LC_ALL", "C")
 	cmd := exec.Command("bash", "-i", "-c", shell)
+	ApplyEnv(cmd)
 
 	var out bytes.Buffer
 	var stderr bytes.Buffer

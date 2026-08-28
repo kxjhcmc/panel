@@ -1,18 +1,23 @@
 package data
 
 import (
+	"archive/tar"
 	"context"
 	"errors"
 	"fmt"
+	stdio "io"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/leonelquinteros/gotext"
 	"github.com/samber/lo"
+	"github.com/spf13/cast"
 	"gorm.io/gorm"
 
 	"github.com/acepanel/panel/v3/internal/app"
@@ -28,25 +33,38 @@ import (
 )
 
 type backupRepo struct {
-	hr      string
-	t       *gotext.Locale
-	conf    *config.Config
-	db      *gorm.DB
-	log     *slog.Logger
-	setting biz.SettingRepo
-	website biz.WebsiteRepo
+	hr       string
+	t        *gotext.Locale
+	conf     *config.Config
+	db       *gorm.DB
+	log      *slog.Logger
+	setting  biz.SettingRepo
+	website  biz.WebsiteRepo
+	updating atomic.Bool // 面板升级进行中标志，防止并发触发
 }
 
-func NewBackupRepo(t *gotext.Locale, conf *config.Config, db *gorm.DB, log *slog.Logger, setting biz.SettingRepo, website biz.WebsiteRepo) biz.BackupRepo {
+func NewBackupRepo(conf *config.Config, db *gorm.DB, t *gotext.Locale, log *slog.Logger, settingRepo biz.SettingRepo, websiteRepo biz.WebsiteRepo) biz.BackupRepo {
 	return &backupRepo{
 		hr:      "+----------------------------------------------------",
 		t:       t,
 		conf:    conf,
 		db:      db,
 		log:     log,
-		setting: setting,
-		website: website,
+		setting: settingRepo,
+		website: websiteRepo,
 	}
+}
+
+// GetStorage 获取备份存储
+func (r *backupRepo) GetStorage(id uint) (*biz.BackupStorage, error) {
+	backupStorage := new(biz.BackupStorage)
+	if err := r.db.First(backupStorage, id).Error; err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, errors.New(r.t.Get("backup storage not found"))
+		}
+		return nil, err
+	}
+	return backupStorage, nil
 }
 
 // List 备份列表
@@ -83,12 +101,11 @@ func (r *backupRepo) List(typ biz.BackupType) ([]*types.BackupFile, error) {
 // storage 备份存储ID
 func (r *backupRepo) Create(ctx context.Context, typ biz.BackupType, target string, storage uint) error {
 	// 取备份存储，0 为本地备份
-	backupStorage := new(biz.BackupStorage)
+	var backupStorage *biz.BackupStorage
 	if storage != 0 {
-		if err := r.db.First(backupStorage, storage).Error; err != nil {
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return errors.New(r.t.Get("backup storage not found"))
-			}
+		var err error
+		backupStorage, err = r.GetStorage(storage)
+		if err != nil {
 			return err
 		}
 	} else {
@@ -145,25 +162,25 @@ func (r *backupRepo) Create(ctx context.Context, typ biz.BackupType, target stri
 		fmt.Println(r.hr)
 	}
 	if err != nil {
+		if app.IsCli {
+			fmt.Println(r.t.Get("☆ Backup failed: %v [%s]", err, time.Now().Format(time.DateTime)))
+		}
 		r.log.Warn("backup failed",
 			slog.String("type", biz.OperationTypeBackup),
 			slog.Uint64("operator_id", getOperatorID(ctx)),
 			slog.String("backup_type", string(typ)),
 			slog.String("target", target),
 		)
-		if app.IsCli {
-			fmt.Println(r.t.Get("☆ Backup failed: %v [%s]", err, time.Now().Format(time.DateTime)))
-		}
 	} else {
+		if app.IsCli {
+			fmt.Println(r.t.Get("☆ Backup completed [%s]", time.Now().Format(time.DateTime)))
+		}
 		r.log.Info("backup created",
 			slog.String("type", biz.OperationTypeBackup),
 			slog.Uint64("operator_id", getOperatorID(ctx)),
 			slog.String("backup_type", string(typ)),
 			slog.String("target", target),
 		)
-		if app.IsCli {
-			fmt.Println(r.t.Get("☆ Backup completed [%s]", time.Now().Format(time.DateTime)))
-		}
 	}
 
 	if app.IsCli {
@@ -178,26 +195,35 @@ func (r *backupRepo) Create(ctx context.Context, typ biz.BackupType, target stri
 func (r *backupRepo) CreatePanel() error {
 	start := time.Now()
 
-	backup := filepath.Join(r.GetDefaultPath(biz.BackupTypePanel), fmt.Sprintf("panel_%s%s", time.Now().Format("20060102150405"), r.backupExt()))
+	backup := filepath.Join(r.GetDefaultPath(biz.BackupTypePanel), fmt.Sprintf("panel_%s.tar.xz", time.Now().Format("20060102150405")))
 
-	temp, err := os.MkdirTemp("", "ace-backup-*")
-	if err != nil {
-		return err
-	}
-	defer func(path string) { _ = os.RemoveAll(path) }(temp)
+	// 备份前 checkpoint 主库
+	_ = r.db.Exec("PRAGMA wal_checkpoint(TRUNCATE);").Error
 
-	if err = io.Cp(filepath.Join(app.Root, "panel"), temp); err != nil {
-		return err
-	}
-	if err = io.Cp("/usr/local/sbin/acepanel", temp); err != nil {
-		return err
+	// 只备份恢复面板运行所必需的核心文件；checkpoint 后 -wal 已并入 panel.db、
+	// -shm 为纯临时共享内存，均无需备份
+	var files []string
+	for _, f := range []string{
+		"panel/ace",
+		"panel/storage/panel.db",
+		"panel/storage/config.yml",
+		"panel/storage/cert.pem",
+		"panel/storage/cert.key",
+		"panel/storage/customize",
+	} {
+		if io.Exists(filepath.Join(app.Root, f)) {
+			files = append(files, f)
+		}
 	}
 
-	_ = io.Chmod(temp, 0600)
-	if err = io.Compress(temp, nil, backup); err != nil {
+	// 两个 -C 把 panel 内的核心文件与 panel 外的 cli 二进制收进同一个包
+	if _, err := shell.Execf(
+		"tar -cJf '%s' -C '%s' %s -C /usr/local/sbin acepanel",
+		backup, app.Root, strings.Join(files, " "),
+	); err != nil {
 		return err
 	}
-	if err = io.Chmod(backup, 0600); err != nil {
+	if err := io.Chmod(backup, 0600); err != nil {
 		return err
 	}
 
@@ -210,16 +236,13 @@ func (r *backupRepo) CreatePanel() error {
 }
 
 // Delete 删除备份
-func (r *backupRepo) Delete(ctx context.Context, typ biz.BackupType, name string) error {
+func (r *backupRepo) Delete(typ biz.BackupType, name string) error {
 	path := r.GetDefaultPath(typ)
 
 	file := filepath.Join(path, name)
 	if err := io.Remove(file); err != nil {
 		return err
 	}
-
-	// 记录日志
-	r.log.Info("backup deleted", slog.String("type", biz.OperationTypeBackup), slog.Uint64("operator_id", getOperatorID(ctx)), slog.String("backup_type", string(typ)), slog.String("name", name))
 
 	return nil
 }
@@ -228,12 +251,22 @@ func (r *backupRepo) Delete(ctx context.Context, typ biz.BackupType, name string
 // typ 备份类型
 // backup 备份压缩包，可以是绝对路径或者相对路径
 // target 目标名称
-func (r *backupRepo) Restore(ctx context.Context, typ biz.BackupType, backup, target string) error {
+func (r *backupRepo) Restore(typ biz.BackupType, backup, target string) error {
 	if !io.Exists(backup) {
 		backup = filepath.Join(r.GetDefaultPath(typ), backup)
 	}
 	if !io.Exists(backup) {
 		return errors.New(r.t.Get("backup file not exists"))
+	}
+
+	start := time.Now()
+	if app.IsCli {
+		fmt.Println(r.hr)
+		fmt.Println(r.t.Get("★ Start restore [%s]", start.Format(time.DateTime)))
+		fmt.Println(r.hr)
+		fmt.Println(r.t.Get("|-Restore type: %s", string(typ)))
+		fmt.Println(r.t.Get("|-Restore target: %s", target))
+		fmt.Println(r.t.Get("|-Backup file: %s", filepath.Base(backup)))
 	}
 
 	var err error
@@ -250,23 +283,27 @@ func (r *backupRepo) Restore(ctx context.Context, typ biz.BackupType, backup, ta
 		err = r.restoreRedisLike(backup, "redis")
 	case biz.BackupTypeValkey:
 		err = r.restoreRedisLike(backup, "valkey")
+	case biz.BackupTypePanel:
+		err = r.restorePanel(backup)
 	default:
+		if app.IsCli {
+			fmt.Println(r.hr)
+		}
 		return errors.New(r.t.Get("unknown backup type"))
 	}
 
-	if err != nil {
-		return err
+	if app.IsCli {
+		fmt.Println(r.t.Get("|-Restore time: %s", time.Since(start).String()))
+		fmt.Println(r.hr)
+		if err != nil {
+			fmt.Println(r.t.Get("☆ Restore failed: %v [%s]", err, time.Now().Format(time.DateTime)))
+		} else {
+			fmt.Println(r.t.Get("☆ Restore completed [%s]", time.Now().Format(time.DateTime)))
+		}
+		fmt.Println(r.hr)
 	}
 
-	// 记录日志
-	r.log.Info("backup restored",
-		slog.String("type", biz.OperationTypeBackup),
-		slog.Uint64("operator_id", getOperatorID(ctx)),
-		slog.String("backup_type", string(typ)),
-		slog.String("target", target),
-	)
-
-	return nil
+	return err
 }
 
 // GetDefaultPath 获取默认备份路径
@@ -278,6 +315,19 @@ func (r *backupRepo) GetDefaultPath(typ biz.BackupType) string {
 	path := filepath.Join(backupPath, string(typ))
 	_ = os.MkdirAll(path, 0755)
 	return path
+}
+
+// tmpDir 创建备份临时目录，优先使用 TMPDIR（任务队列为取消清理设置的独享目录），
+// 未设置时使用面板目录，避免大文件撑爆 /tmp（常为内存盘）
+func (r *backupRepo) tmpDir() (string, error) {
+	base := os.Getenv("TMPDIR")
+	if base == "" {
+		base = filepath.Join(app.Root, "tmp")
+		if err := os.MkdirAll(base, 0755); err != nil {
+			return "", err
+		}
+	}
+	return os.MkdirTemp(base, "ace-backup-*")
 }
 
 // CutoffLog 切割日志
@@ -304,11 +354,8 @@ func (r *backupRepo) CutoffLog(path, target string) (string, error) {
 
 // CutoffUpload 将指定的切割日志文件上传到远程存储
 func (r *backupRepo) CutoffUpload(account uint, typ biz.BackupType, name string, files []string) error {
-	backupStorage := new(biz.BackupStorage)
-	if err := r.db.First(backupStorage, account).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return errors.New(r.t.Get("backup storage not found"))
-		}
+	backupStorage, err := r.GetStorage(account)
+	if err != nil {
 		return err
 	}
 
@@ -384,12 +431,12 @@ func (r *backupRepo) ClearExpired(path, prefix string, save uint) error {
 }
 
 // ClearStorageExpired 清理备份账号过期备份
-func (r *backupRepo) ClearStorageExpired(storage uint, typ biz.BackupType, prefix string, save uint) error {
-	backupStorage := new(biz.BackupStorage)
-	if err := r.db.First(backupStorage, storage).Error; err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return errors.New(r.t.Get("backup storage not found"))
-		}
+// dir 存储器内的目标目录，备份为 <类型>，切割日志为 cutoff/<类型>/<目标>
+// prefix 目标文件前缀
+// save 保存份数
+func (r *backupRepo) ClearStorageExpired(storage uint, dir, prefix string, save uint) error {
+	backupStorage, err := r.GetStorage(storage)
+	if err != nil {
 		return err
 	}
 
@@ -398,7 +445,7 @@ func (r *backupRepo) ClearStorageExpired(storage uint, typ biz.BackupType, prefi
 		return err
 	}
 
-	files, err := client.List(string(typ))
+	files, err := client.List(dir)
 	if err != nil {
 		return err
 	}
@@ -410,7 +457,7 @@ func (r *backupRepo) ClearStorageExpired(storage uint, typ biz.BackupType, prefi
 	var filtered []fileInfo
 	for _, file := range files {
 		if strings.HasPrefix(file, prefix) && r.isBackupArchive(file) {
-			lastModified, modErr := client.LastModified(filepath.Join(string(typ), file))
+			lastModified, modErr := client.LastModified(filepath.Join(dir, file))
 			if modErr != nil {
 				continue
 			}
@@ -435,7 +482,7 @@ func (r *backupRepo) ClearStorageExpired(storage uint, typ biz.BackupType, prefi
 	// 切片保留 save 份，删除剩余
 	toDelete := filtered[save:]
 	for _, file := range toDelete {
-		filePath := filepath.Join(string(typ), file.name)
+		filePath := filepath.Join(dir, file.name)
 		if app.IsCli {
 			fmt.Println(r.t.Get("|-Cleaning expired file: %s", filePath))
 		}
@@ -462,7 +509,7 @@ func (r *backupRepo) getStorage(backupStorage biz.BackupStorage) (storage.Storag
 			Scheme:          backupStorage.Info.Scheme,
 			BasePath:        backupStorage.Info.Path,
 			AddressingStyle: storage.S3AddressingStyle(backupStorage.Info.Style),
-		})
+		}), nil
 	case biz.BackupStorageTypeSFTP:
 		return storage.NewSFTP(storage.SFTPConfig{
 			Host:       backupStorage.Info.Host,
@@ -492,7 +539,7 @@ func (r *backupRepo) createWebsite(name string, storage storage.Storage, target 
 	}
 
 	// 创建用于压缩的临时目录
-	tmpDir, err := os.MkdirTemp("", "ace-backup-*")
+	tmpDir, err := r.tmpDir()
 	if err != nil {
 		return err
 	}
@@ -503,7 +550,7 @@ func (r *backupRepo) createWebsite(name string, storage storage.Storage, target 
 	}
 
 	// 压缩网站
-	name = name + r.backupExt()
+	name += r.backupExt()
 	if err = io.Compress(website.Path, nil, filepath.Join(tmpDir, name)); err != nil {
 		return err
 	}
@@ -532,7 +579,7 @@ func (r *backupRepo) createMySQL(name string, storage storage.Storage, target st
 	if err != nil {
 		return err
 	}
-	mysql, err := db.NewMySQL("root", rootPassword, "/tmp/mysql.sock", "unix")
+	mysql, err := db.NewMySQL(context.Background(), "root", rootPassword, db.MySQLSocket(app.Root), "unix")
 	if err != nil {
 		return err
 	}
@@ -542,7 +589,7 @@ func (r *backupRepo) createMySQL(name string, storage storage.Storage, target st
 	}
 
 	// 创建用于压缩的临时目录
-	tmpDir, err := os.MkdirTemp("", "ace-backup-*")
+	tmpDir, err := r.tmpDir()
 	if err != nil {
 		return err
 	}
@@ -553,12 +600,21 @@ func (r *backupRepo) createMySQL(name string, storage storage.Storage, target st
 	}
 
 	// 导出数据库
-	name = name + ".sql"
-	_ = os.Setenv("MYSQL_PWD", rootPassword)
-	if _, err = shell.Execf(`mysqldump -u root --single-transaction --quick '%s' > '%s'`, target, filepath.Join(tmpDir, name)); err != nil {
+	var gtidMode string
+	dumpArgs := "--single-transaction --quick --routines --events --max-allowed-packet=1G"
+	if mysql.QueryRow(`SELECT @@gtid_mode`).Scan(&gtidMode) == nil {
+		dumpArgs += " --set-gtid-purged=OFF"
+	}
+	name += ".sql"
+	if _, err = shell.ExecfWithEnv(
+		[]string{"MYSQL_PWD=" + rootPassword},
+		`mysqldump -u root %s '%s' > '%s'`,
+		dumpArgs,
+		target,
+		filepath.Join(tmpDir, name),
+	); err != nil {
 		return err
 	}
-	_ = os.Unsetenv("MYSQL_PWD")
 
 	// 压缩备份文件
 	if err = io.Compress(tmpDir, []string{name}, filepath.Join(tmpDir, name+r.backupExt())); err != nil {
@@ -566,7 +622,7 @@ func (r *backupRepo) createMySQL(name string, storage storage.Storage, target st
 	}
 
 	// 上传备份文件到存储器
-	name = name + r.backupExt()
+	name += r.backupExt()
 	file, err := os.Open(filepath.Join(tmpDir, name))
 	if err != nil {
 		return err
@@ -590,7 +646,8 @@ func (r *backupRepo) createPostgres(name string, storage storage.Storage, target
 	if err != nil {
 		return err
 	}
-	postgres, err := db.NewPostgres("postgres", postgresPassword, "127.0.0.1", 5432)
+	port := db.PostgresPort(app.Root)
+	postgres, err := db.NewPostgres(context.Background(), "postgres", postgresPassword, "127.0.0.1", port)
 	if err != nil {
 		return err
 	}
@@ -600,7 +657,7 @@ func (r *backupRepo) createPostgres(name string, storage storage.Storage, target
 	}
 
 	// 创建用于压缩的临时目录
-	tmpDir, err := os.MkdirTemp("", "ace-backup-*")
+	tmpDir, err := r.tmpDir()
 	if err != nil {
 		return err
 	}
@@ -611,12 +668,16 @@ func (r *backupRepo) createPostgres(name string, storage storage.Storage, target
 	}
 
 	// 导出数据库
-	name = name + ".sql"
-	_ = os.Setenv("PGPASSWORD", postgresPassword)
-	if _, err = shell.Execf(`pg_dump -h 127.0.0.1 -U postgres '%s' > '%s'`, target, filepath.Join(tmpDir, name)); err != nil {
+	name += ".sql"
+	if _, err = shell.ExecfWithEnv(
+		[]string{"PGPASSWORD=" + postgresPassword},
+		`pg_dump -h 127.0.0.1 -p %d -U postgres --clean --if-exists '%s' > '%s'`,
+		port,
+		target,
+		filepath.Join(tmpDir, name),
+	); err != nil {
 		return err
 	}
-	_ = os.Unsetenv("PGPASSWORD")
 
 	// 压缩备份文件
 	if err = io.Compress(tmpDir, []string{name}, filepath.Join(tmpDir, name+r.backupExt())); err != nil {
@@ -624,7 +685,7 @@ func (r *backupRepo) createPostgres(name string, storage storage.Storage, target
 	}
 
 	// 上传备份文件到存储器
-	name = name + r.backupExt()
+	name += r.backupExt()
 	file, err := os.Open(filepath.Join(tmpDir, name))
 	if err != nil {
 		return err
@@ -661,7 +722,7 @@ func (r *backupRepo) createClickHouse(name string, storage storage.Storage, targ
 	}
 
 	// 创建用于压缩的临时目录
-	tmpDir, err := os.MkdirTemp("", "ace-backup-*")
+	tmpDir, err := r.tmpDir()
 	if err != nil {
 		return err
 	}
@@ -693,7 +754,7 @@ func (r *backupRepo) createClickHouse(name string, storage storage.Storage, targ
 		}
 		stmt := strings.TrimSpace(create)
 		stmt = strings.ReplaceAll(stmt, fmt.Sprintf("`%s`.", target), "")
-		stmt = strings.ReplaceAll(stmt, fmt.Sprintf("%s.", target), "")
+		stmt = strings.ReplaceAll(stmt, target+".", "")
 		schema.WriteString(stmt)
 		schema.WriteString(";\n")
 	}
@@ -712,7 +773,7 @@ func (r *backupRepo) createClickHouse(name string, storage storage.Storage, targ
 	}
 
 	// 压缩备份文件
-	name = name + r.backupExt()
+	name += r.backupExt()
 	if err = io.Compress(tmpDir, files, filepath.Join(tmpDir, name)); err != nil {
 		return err
 	}
@@ -765,7 +826,7 @@ func (r *backupRepo) createPath(name string, storage storage.Storage, target str
 	}
 
 	// 创建用于压缩的临时目录
-	tmpDir, err := os.MkdirTemp("", "ace-backup-*")
+	tmpDir, err := r.tmpDir()
 	if err != nil {
 		return err
 	}
@@ -776,7 +837,7 @@ func (r *backupRepo) createPath(name string, storage storage.Storage, target str
 	}
 
 	// 压缩目录
-	name = name + r.backupExt()
+	name += r.backupExt()
 	if err = io.Compress(target, nil, filepath.Join(tmpDir, name)); err != nil {
 		return err
 	}
@@ -806,11 +867,53 @@ func (r *backupRepo) restoreWebsite(backup, target string) error {
 		return err
 	}
 
+	// 先解压到同级暂存目录，确认产物有效后再替换，避免解压失败把原站点清空
+	// 放同级目录保证与网站目录同分区，rename 才是原子的
+	stage, err := os.MkdirTemp(filepath.Dir(website.Path), ".ace-restore-*")
+	if err != nil {
+		return err
+	}
+	defer func(path string) { _ = os.RemoveAll(path) }(stage)
+
+	if app.IsCli {
+		fmt.Println(r.t.Get("|-Website path: %s", website.Path))
+		fmt.Println(r.t.Get("|-Uncompressing backup..."))
+	}
+	cmd, err := io.UnCompressShell(backup, stage)
+	if err != nil {
+		return err
+	}
+	if _, err = shell.Execf("%s", cmd); err != nil {
+		return err
+	}
+
+	// 解压命令容忍单条目失败（如 .user.ini 带 chattr +i），这里用产物非空兜底，
+	// 避免归档损坏或磁盘写满时清空网站却报告成功
+	entries, err := os.ReadDir(stage)
+	if err != nil {
+		return err
+	}
+	if len(entries) == 0 {
+		return errors.New(r.t.Get("uncompressed backup is empty, restore aborted"))
+	}
+
+	content, err := r.selectWebsiteBackup(stage)
+	if err != nil {
+		return err
+	}
+
+	if app.IsCli {
+		fmt.Println(r.t.Get("|-Replacing website files..."))
+	}
 	if err = io.Remove(website.Path); err != nil {
 		return err
 	}
-	if err = io.UnCompress(backup, website.Path); err != nil {
+	if err = os.Rename(content, website.Path); err != nil {
 		return err
+	}
+
+	if app.IsCli {
+		fmt.Println(r.t.Get("|-Fixing file permissions..."))
 	}
 	if err = io.Chmod(website.Path, 0755); err != nil {
 		return err
@@ -822,13 +925,46 @@ func (r *backupRepo) restoreWebsite(backup, target string) error {
 	return nil
 }
 
+// importFile 把备份文件喂给数据库客户端 stdin，并按秒级周期打印大致进度
+// pipe 有背压，已写入字节数 ≈ 客户端已消费字节数，足以作为进度参考
+func (r *backupRepo) importFile(path, name string, env, args []string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer func(f *os.File) { _ = f.Close() }(f)
+
+	var total int64
+	if stat, err := f.Stat(); err == nil {
+		total = stat.Size()
+	}
+
+	var progress func(written, total int64, rate float64)
+	if app.IsCli {
+		fmt.Println(r.t.Get("|-File size: %s", tools.FormatBytes(float64(total))))
+		progress = func(written, total int64, rate float64) {
+			if total > 0 {
+				fmt.Println(r.t.Get("|-Importing: %s / %s (%.1f%%, %s/s)",
+					tools.FormatBytes(float64(written)), tools.FormatBytes(float64(total)),
+					float64(written)*100/float64(total), tools.FormatBytes(rate)))
+			} else {
+				fmt.Println(r.t.Get("|-Importing: %s (%s/s)",
+					tools.FormatBytes(float64(written)), tools.FormatBytes(rate)))
+			}
+		}
+	}
+
+	_, err = shell.ExecWithStdinProgress(context.Background(), name, args, env, f, total, 5*time.Second, progress)
+	return err
+}
+
 // restoreMySQL 恢复 MySQL 备份
 func (r *backupRepo) restoreMySQL(backup, target string) error {
 	rootPassword, err := r.setting.Get(biz.SettingKeyMySQLRootPassword)
 	if err != nil {
 		return err
 	}
-	mysql, err := db.NewMySQL("root", rootPassword, "/tmp/mysql.sock", "unix")
+	mysql, err := db.NewMySQL(context.Background(), "root", rootPassword, db.MySQLSocket(app.Root), "unix")
 	if err != nil {
 		return err
 	}
@@ -837,25 +973,21 @@ func (r *backupRepo) restoreMySQL(backup, target string) error {
 		return errors.New(r.t.Get("database does not exist: %s", target))
 	}
 
-	clean := false
-	if !strings.HasSuffix(backup, ".sql") {
-		backup, err = r.autoUnCompressSQL(backup)
-		if err != nil {
-			return err
-		}
-		clean = true
-	}
-
-	_ = os.Setenv("MYSQL_PWD", rootPassword)
-	if _, err = shell.Execf(`mysql -u root '%s' < '%s'`, target, backup); err != nil {
+	backup, cleanDir, err := r.prepareDatabaseBackup(backup, target)
+	if err != nil {
 		return err
 	}
-	_ = os.Unsetenv("MYSQL_PWD")
-	if clean {
-		_ = io.Remove(filepath.Dir(backup))
+	if cleanDir != "" {
+		defer func() { _ = os.RemoveAll(cleanDir) }()
+		if app.IsCli {
+			fmt.Println(r.t.Get("|-Uncompressing backup..."))
+		}
 	}
 
-	return nil
+	if app.IsCli {
+		fmt.Println(r.t.Get("|-Importing SQL into database..."))
+	}
+	return r.importFile(backup, "mysql", []string{"MYSQL_PWD=" + rootPassword}, []string{"-u", "root", "--max-allowed-packet=1G", "--database=" + target})
 }
 
 // restorePostgres 恢复 PostgreSQL 备份
@@ -864,7 +996,8 @@ func (r *backupRepo) restorePostgres(backup, target string) error {
 	if err != nil {
 		return err
 	}
-	postgres, err := db.NewPostgres("postgres", postgresPassword, "127.0.0.1", 5432)
+	port := db.PostgresPort(app.Root)
+	postgres, err := db.NewPostgres(context.Background(), "postgres", postgresPassword, "127.0.0.1", port)
 	if err != nil {
 		return err
 	}
@@ -873,25 +1006,35 @@ func (r *backupRepo) restorePostgres(backup, target string) error {
 		return errors.New(r.t.Get("database does not exist: %s", target))
 	}
 
-	clean := false
-	if !strings.HasSuffix(backup, ".sql") {
-		backup, err = r.autoUnCompressSQL(backup)
+	archive := r.postgresArchive(backup)
+	cleanDir := ""
+	if !archive {
+		backup, cleanDir, err = r.prepareDatabaseBackup(backup, target)
 		if err != nil {
 			return err
 		}
-		clean = true
+		archive = r.postgresArchive(backup)
+	}
+	if cleanDir != "" {
+		defer func() { _ = os.RemoveAll(cleanDir) }()
+		if app.IsCli {
+			fmt.Println(r.t.Get("|-Uncompressing backup..."))
+		}
 	}
 
-	_ = os.Setenv("PGPASSWORD", postgresPassword)
-	if _, err = shell.Execf(`psql -h 127.0.0.1 -U postgres '%s' < '%s'`, target, backup); err != nil {
-		return err
+	if app.IsCli {
+		fmt.Println(r.t.Get("|-Importing PostgreSQL backup..."))
 	}
-	_ = os.Unsetenv("PGPASSWORD")
-	if clean {
-		_ = io.Remove(filepath.Dir(backup))
+	if archive {
+		command := exec.Command("pg_restore", "--exit-on-error", "-h", "127.0.0.1", "-p", cast.ToString(port), "-U", "postgres", "--dbname="+target, backup)
+		shell.ApplyEnv(command, "PGPASSWORD="+postgresPassword)
+		if output, restoreErr := command.CombinedOutput(); restoreErr != nil {
+			return fmt.Errorf("%w: %s", restoreErr, strings.TrimSpace(string(output)))
+		}
+		return nil
 	}
-
-	return nil
+	return r.importFile(backup, "psql", []string{"PGPASSWORD=" + postgresPassword},
+		[]string{"-h", "127.0.0.1", "-p", cast.ToString(port), "-U", "postgres", "-v", "ON_ERROR_STOP=1", "--single-transaction", "--dbname=" + target})
 }
 
 // restoreClickHouse 恢复 ClickHouse 备份
@@ -901,6 +1044,7 @@ func (r *backupRepo) restoreClickHouse(backup, target string) error {
 		return err
 	}
 	conn := fmt.Sprintf("--host 127.0.0.1 --port 9000 --user default --password '%s'", password)
+	connArgs := []string{"--host", "127.0.0.1", "--port", "9000", "--user", "default", "--password", password}
 
 	// 校验目标数据库是否存在
 	exist, err := shell.Execf("clickhouse-client %s --query \"SELECT count() FROM system.databases WHERE name = '%s'\"", conn, target)
@@ -913,17 +1057,23 @@ func (r *backupRepo) restoreClickHouse(backup, target string) error {
 
 	// 纯 SQL 文件直接执行
 	if strings.HasSuffix(backup, ".sql") {
-		_, err = shell.Execf("clickhouse-client %s --database '%s' --multiquery < '%s'", conn, target, backup)
-		return err
+		if app.IsCli {
+			fmt.Println(r.t.Get("|-Importing SQL into database..."))
+		}
+		return r.importFile(backup, "clickhouse-client", nil, append(slices.Clone(connArgs), "--database", target, "--multiquery"))
 	}
 
 	// 解压到临时目录
-	tmpDir, err := os.MkdirTemp("", "acepanel-ch-*")
+	tmpDir, err := r.tmpDir()
 	if err != nil {
 		return err
 	}
 	defer func(path string) { _ = os.RemoveAll(path) }(tmpDir)
 
+	if app.IsCli {
+		fmt.Println(r.t.Get("|-Temporary directory: %s", tmpDir))
+		fmt.Println(r.t.Get("|-Uncompressing backup..."))
+	}
 	if err = io.UnCompress(backup, tmpDir); err != nil {
 		return err
 	}
@@ -931,7 +1081,10 @@ func (r *backupRepo) restoreClickHouse(backup, target string) error {
 	// 先恢复结构（视图已排在末尾，源表先建好，规避物化视图依赖顺序问题）
 	schemaPath := filepath.Join(tmpDir, "schema.sql")
 	if io.Exists(schemaPath) {
-		if _, err = shell.Execf("clickhouse-client %s --database '%s' --multiquery < '%s'", conn, target, schemaPath); err != nil {
+		if app.IsCli {
+			fmt.Println(r.t.Get("|-Restoring schema..."))
+		}
+		if err = r.importFile(schemaPath, "clickhouse-client", nil, append(slices.Clone(connArgs), "--database", target, "--multiquery")); err != nil {
 			return err
 		}
 	}
@@ -946,7 +1099,11 @@ func (r *backupRepo) restoreClickHouse(backup, target string) error {
 			continue
 		}
 		tbl := strings.TrimSuffix(entry.Name(), ".native")
-		if _, err = shell.Execf("clickhouse-client %s --database '%s' --query 'INSERT INTO `%s` FORMAT Native' < '%s'", conn, target, tbl, filepath.Join(tmpDir, entry.Name())); err != nil {
+		if app.IsCli {
+			fmt.Println(r.t.Get("|-Importing table: %s", tbl))
+		}
+		query := fmt.Sprintf("INSERT INTO `%s` FORMAT Native", tbl)
+		if err = r.importFile(filepath.Join(tmpDir, entry.Name()), "clickhouse-client", nil, append(slices.Clone(connArgs), "--database", target, "--query", query)); err != nil {
 			return err
 		}
 	}
@@ -1018,14 +1175,14 @@ func (r *backupRepo) createRedisLike(name string, storage storage.Storage, kind 
 	if err != nil {
 		return err
 	}
-	// 用环境变量传密码，避免密码出现在命令行/进程列表
+
+	var env []string
 	if conf.password != "" {
-		_ = os.Setenv(conf.authEnv, conf.password)
-		defer func() { _ = os.Unsetenv(conf.authEnv) }()
+		env = append(env, conf.authEnv+"="+conf.password)
 	}
 
 	// 创建用于压缩的临时目录
-	tmpDir, err := os.MkdirTemp("", "ace-backup-*")
+	tmpDir, err := r.tmpDir()
 	if err != nil {
 		return err
 	}
@@ -1037,7 +1194,7 @@ func (r *backupRepo) createRedisLike(name string, storage storage.Storage, kind 
 
 	// 通过复制协议拉取整实例 RDB 快照到本地文件
 	rdb := filepath.Join(tmpDir, "dump.rdb")
-	if _, err = shell.Execf("%s -h 127.0.0.1 -p %s --rdb '%s'", conf.cli, conf.port, rdb); err != nil {
+	if _, err = shell.ExecfWithEnv(env, "%s -h 127.0.0.1 -p %s --rdb '%s'", conf.cli, conf.port, rdb); err != nil {
 		return err
 	}
 	if !io.Exists(rdb) {
@@ -1045,7 +1202,7 @@ func (r *backupRepo) createRedisLike(name string, storage storage.Storage, kind 
 	}
 
 	// 压缩备份文件
-	name = name + r.backupExt()
+	name += r.backupExt()
 	if err = io.Compress(tmpDir, []string{"dump.rdb"}, filepath.Join(tmpDir, name)); err != nil {
 		return err
 	}
@@ -1079,11 +1236,15 @@ func (r *backupRepo) restoreRedisLike(backup, kind string) error {
 	// 准备 dump.rdb：裸 .rdb 直接用，否则解压取包内的 dump.rdb
 	rdb := backup
 	if !strings.HasSuffix(backup, ".rdb") {
-		tmpDir, err := os.MkdirTemp("", "acepanel-rdb-*")
+		tmpDir, err := r.tmpDir()
 		if err != nil {
 			return err
 		}
 		defer func(path string) { _ = os.RemoveAll(path) }(tmpDir)
+		if app.IsCli {
+			fmt.Println(r.t.Get("|-Temporary directory: %s", tmpDir))
+			fmt.Println(r.t.Get("|-Uncompressing backup..."))
+		}
 		if err = io.UnCompress(backup, tmpDir); err != nil {
 			return err
 		}
@@ -1093,7 +1254,9 @@ func (r *backupRepo) restoreRedisLike(backup, kind string) error {
 		}
 	}
 
-	// 停止服务
+	if app.IsCli {
+		fmt.Println(r.t.Get("|-Stopping %s service...", conf.kind))
+	}
 	if err = systemctl.Stop(conf.kind); err != nil {
 		return err
 	}
@@ -1102,6 +1265,9 @@ func (r *backupRepo) restoreRedisLike(backup, kind string) error {
 	_ = io.Remove(filepath.Join(conf.dataDir, "appendonlydir"))
 	_ = io.Remove(filepath.Join(conf.dataDir, "appendonly.aof"))
 
+	if app.IsCli {
+		fmt.Println(r.t.Get("|-Replacing dump.rdb..."))
+	}
 	// 覆盖 dump.rdb
 	target := filepath.Join(conf.dataDir, "dump.rdb")
 	if err = io.Cp(rdb, target); err != nil {
@@ -1119,6 +1285,9 @@ func (r *backupRepo) restoreRedisLike(backup, kind string) error {
 		}
 	}
 
+	if app.IsCli {
+		fmt.Println(r.t.Get("|-Starting %s service (loading RDB)...", conf.kind))
+	}
 	// 启动服务（Type=notify，返回即已加载 RDB）
 	if err = systemctl.Start(conf.kind); err != nil {
 		return err
@@ -1126,12 +1295,15 @@ func (r *backupRepo) restoreRedisLike(backup, kind string) error {
 
 	// 原本开启 AOF 的，在线转回并持久化配置
 	if conf.appendonly {
-		if conf.password != "" {
-			_ = os.Setenv(conf.authEnv, conf.password)
-			defer func() { _ = os.Unsetenv(conf.authEnv) }()
+		if app.IsCli {
+			fmt.Println(r.t.Get("|-Re-enabling AOF..."))
 		}
-		_, _ = shell.Execf("%s -h 127.0.0.1 -p %s config set appendonly yes", conf.cli, conf.port)
-		_, _ = shell.Execf("%s -h 127.0.0.1 -p %s config rewrite", conf.cli, conf.port)
+		var env []string
+		if conf.password != "" {
+			env = append(env, conf.authEnv+"="+conf.password)
+		}
+		_, _ = shell.ExecfWithEnv(env, "%s -h 127.0.0.1 -p %s config set appendonly yes", conf.cli, conf.port)
+		_, _ = shell.ExecfWithEnv(env, "%s -h 127.0.0.1 -p %s config rewrite", conf.cli, conf.port)
 	}
 
 	return nil
@@ -1164,32 +1336,266 @@ func (r *backupRepo) disableAppendonly(confPath string) error {
 	return io.Write(confPath, strings.Join(lines, "\n"), 0644)
 }
 
-// autoUnCompressSQL 自动处理压缩文件
-func (r *backupRepo) autoUnCompressSQL(backup string) (string, error) {
-	temp, err := os.MkdirTemp("", "acepanel-sql-*")
+// selectWebsiteBackup 逐层展开归档，从不同面板导出的目录结构中定位网站文件根目录。
+func (r *backupRepo) selectWebsiteBackup(root string) (string, error) {
+	current, onePanel := root, false
+	for range 4 {
+		entries, err := os.ReadDir(current)
+		if err != nil {
+			return "", err
+		}
+		// 1Panel 的备份是「元数据 + 内层归档」，website.json 是它的标记
+		if lo.SomeBy(entries, func(entry os.DirEntry) bool { return entry.Name() == "website.json" }) {
+			onePanel = true
+		}
+
+		archives := lo.Filter(entries, func(entry os.DirEntry, _ int) bool {
+			return !entry.IsDir() && r.databaseArchiveExt(filepath.Join(current, entry.Name())) != ""
+		})
+		// PHP 站点的包里还有一份运行环境归档，网站文件在 .web 那个里面
+		if onePanel && len(archives) > 1 {
+			archives = lo.Filter(archives, func(entry os.DirEntry, _ int) bool {
+				return strings.Contains(entry.Name(), ".web.")
+			})
+		}
+
+		// 仅元数据旁或目录中只此一个文件时才当外层包装，否则可能是网站自带的压缩包
+		wrapped := len(archives) == 1 && (onePanel || len(entries) == 1)
+		if wrapped {
+			stage, err := os.MkdirTemp(root, ".ace-nested-*")
+			if err != nil {
+				return "", err
+			}
+			if err = io.UnCompress(filepath.Join(current, archives[0].Name()), stage); err != nil {
+				return "", err
+			}
+			current = stage
+			continue
+		}
+
+		// 归档常带一层同名目录
+		if len(entries) == 1 && entries[0].IsDir() {
+			current = filepath.Join(current, entries[0].Name())
+			continue
+		}
+
+		// 1Panel 站点目录下的 index 才是文件根，同级的 log、ssl 属于面板附属目录
+		if index := filepath.Join(current, "index"); onePanel && io.IsDir(index) {
+			return index, nil
+		}
+
+		return current, nil
+	}
+
+	return current, nil
+}
+
+// prepareDatabaseBackup 自动展开常见压缩格式，并从不同软件生成的目录结构中定位数据库备份。
+func (r *backupRepo) prepareDatabaseBackup(backup, target string) (string, string, error) {
+	if r.databaseArchiveExt(backup) == "" {
+		return backup, "", nil
+	}
+
+	temp, err := r.tmpDir()
+	if err != nil {
+		return "", "", err
+	}
+	fail := func(err error) (string, string, error) {
+		_ = os.RemoveAll(temp)
+		return "", "", err
+	}
+
+	current := backup
+	for depth := range 4 {
+		ext := r.databaseArchiveExt(current)
+		if ext == "" {
+			return current, temp, nil
+		}
+
+		stage := filepath.Join(temp, fmt.Sprintf("stage-%d", depth))
+		if err = os.MkdirAll(stage, 0755); err != nil {
+			return fail(err)
+		}
+		source := filepath.Join(temp, fmt.Sprintf("archive-%d%s", depth, ext))
+		if err = os.Symlink(current, source); err != nil {
+			return fail(err)
+		}
+		if err = io.UnCompress(source, stage); err != nil {
+			return fail(err)
+		}
+		current, err = r.selectDatabaseBackup(stage, target)
+		if err != nil {
+			return fail(err)
+		}
+	}
+
+	return fail(errors.New(r.t.Get("database backup contains too many nested archives")))
+}
+
+func (r *backupRepo) selectDatabaseBackup(root, target string) (string, error) {
+	files := make([]string, 0)
+	var directoryDump string
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() {
+			if entry.Name() == "__MACOSX" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if entry.Name() == "toc.dat" {
+			directoryDump = filepath.Dir(path)
+		}
+		if entry.Type().IsRegular() && entry.Name() != ".DS_Store" {
+			files = append(files, path)
+		}
+		return nil
+	})
 	if err != nil {
 		return "", err
 	}
+	if directoryDump != "" {
+		return directoryDump, nil
+	}
+	if len(files) == 1 {
+		return files[0], nil
+	}
 
-	if err = io.UnCompress(backup, temp); err != nil {
+	candidates := make([]string, 0, len(files))
+	for _, file := range files {
+		lower := strings.ToLower(file)
+		if strings.HasSuffix(lower, ".sql") || strings.HasSuffix(lower, ".dump") || strings.HasSuffix(lower, ".backup") || strings.HasSuffix(lower, ".bak") || r.databaseArchiveExt(file) != "" || r.postgresArchive(file) {
+			candidates = append(candidates, file)
+		}
+	}
+	if len(candidates) == 0 {
+		return "", errors.New(r.t.Get("could not find database backup file"))
+	}
+	if len(candidates) == 1 {
+		return candidates[0], nil
+	}
+
+	lowerTarget := strings.ToLower(target)
+	matches := make([]string, 0, len(candidates))
+	for _, candidate := range candidates {
+		name := strings.ToLower(filepath.Base(candidate))
+		if name == lowerTarget || strings.HasPrefix(name, lowerTarget+".") || strings.HasPrefix(name, lowerTarget+"_") || strings.HasPrefix(name, lowerTarget+"-") {
+			matches = append(matches, candidate)
+		}
+	}
+	if len(matches) == 1 {
+		return matches[0], nil
+	}
+	if len(matches) > 1 {
+		candidates = matches
+	}
+	for _, candidate := range candidates {
+		if r.databaseArchiveExt(candidate) != "" || r.postgresArchive(candidate) {
+			return "", errors.New(r.t.Get("database backup archive contains multiple dump files"))
+		}
+	}
+
+	slices.Sort(candidates)
+	combined := filepath.Join(root, "combined.sql")
+	output, err := os.Create(combined)
+	if err != nil {
 		return "", err
 	}
-
-	backup = "" // 置空，防止干扰后续判断
-	if files, err := os.ReadDir(temp); err == nil {
-		if len(files) != 1 {
-			return "", errors.New(r.t.Get("The number of files contained in the compressed file is not 1, actual %d", len(files)))
+	for _, candidate := range candidates {
+		input, openErr := os.Open(candidate)
+		if openErr != nil {
+			_ = output.Close()
+			return "", openErr
 		}
-		if strings.HasSuffix(files[0].Name(), ".sql") {
-			backup = filepath.Join(temp, files[0].Name())
+		_, copyErr := stdio.Copy(output, input)
+		_ = input.Close()
+		if copyErr != nil {
+			_ = output.Close()
+			return "", copyErr
+		}
+		if _, err = output.WriteString("\n"); err != nil {
+			_ = output.Close()
+			return "", err
 		}
 	}
+	if err = output.Close(); err != nil {
+		return "", err
+	}
+	return combined, nil
+}
 
-	if backup == "" {
-		return "", errors.New(r.t.Get("could not find .sql backup file"))
+func (r *backupRepo) databaseArchiveExt(path string) string {
+	file, err := os.Open(path)
+	if err == nil {
+		defer func() { _ = file.Close() }()
+		header := make([]byte, 512)
+		n, _ := file.Read(header)
+		header = header[:n]
+		switch {
+		case len(header) >= 2 && header[0] == 0x1f && header[1] == 0x8b:
+			return ".gz"
+		case len(header) >= 4 && string(header[:4]) == "PK\x03\x04":
+			return ".zip"
+		case len(header) >= 6 && string(header[:6]) == "7z\xbc\xaf'\x1c":
+			return ".7z"
+		case len(header) >= 7 && string(header[:7]) == "Rar!\x1a\x07":
+			return ".7z"
+		case len(header) >= 3 && string(header[:3]) == "BZh":
+			return ".bz2"
+		case len(header) >= 6 && string(header[:6]) == "\xfd7zXZ\x00":
+			return ".xz"
+		case len(header) >= 4 && header[0] == 0x28 && header[1] == 0xb5 && header[2] == 0x2f && header[3] == 0xfd:
+			return ".zst"
+		case len(header) >= 262 && string(header[257:262]) == "ustar":
+			return ".tar"
+		}
+	}
+	for _, suffix := range []string{".tar.gz", ".tar.bz2", ".tar.xz", ".tar.zst", ".tgz", ".tbz2", ".txz", ".zip", ".7z", ".tar", ".gz", ".bz2", ".xz", ".zst"} {
+		if strings.HasSuffix(strings.ToLower(path), suffix) {
+			return filepath.Ext(path)
+		}
+	}
+	return ""
+}
+
+func (r *backupRepo) postgresArchive(path string) bool {
+	info, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	if info.IsDir() {
+		_, err = os.Stat(filepath.Join(path, "toc.dat"))
+		return err == nil
 	}
 
-	return backup, nil
+	file, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer func() { _ = file.Close() }()
+	header := make([]byte, 5)
+	if n, _ := file.Read(header); n == len(header) && string(header) == "PGDMP" {
+		return true
+	}
+	if _, err = file.Seek(0, 0); err != nil {
+		return false
+	}
+	reader := tar.NewReader(file)
+	for range 8 {
+		entry, readErr := reader.Next()
+		if readErr != nil {
+			return false
+		}
+		if filepath.Base(entry.Name) == "toc.dat" {
+			return true
+		}
+		if entry.Size > 0 {
+			return false
+		}
+	}
+	return false
 }
 
 func (r *backupRepo) FixPanel() error {
@@ -1200,10 +1606,9 @@ func (r *backupRepo) FixPanel() error {
 	// 检查关键文件是否正常
 	panelBroken := !io.Exists(filepath.Join(app.Root, "panel", "ace")) ||
 		!io.Exists(filepath.Join(app.Root, "panel", "storage", "config.yml")) ||
-		!io.Exists(filepath.Join(app.Root, "panel", "storage", "panel.db")) ||
-		io.Exists("/tmp/panel-storage.zip")
-	// 检查主数据库连接
-	if err := r.db.Exec("VACUUM").Error; err != nil {
+		!io.Exists(filepath.Join(app.Root, "panel", "storage", "panel.db"))
+	// 检查主数据库完整性
+	if !quickCheck(r.db) {
 		panelBroken = true
 	}
 	if err := r.db.Exec("PRAGMA wal_checkpoint(TRUNCATE);").Error; err != nil {
@@ -1212,15 +1617,19 @@ func (r *backupRepo) FixPanel() error {
 
 	// 检查辅助数据库是否异常
 	var brokenAuxDBs []string
-	for _, name := range []string{"stat", "scan"} {
+	for _, name := range []string{"stat", "scan", "tamper", "monitor"} {
 		auxDB, err := openDB(name)
-		if err == nil {
-			if sqlDB, dbErr := auxDB.DB(); dbErr == nil {
-				_ = sqlDB.Close()
-			}
+		if err != nil {
+			brokenAuxDBs = append(brokenAuxDBs, name)
 			continue
 		}
-		brokenAuxDBs = append(brokenAuxDBs, name)
+		ok := quickCheck(auxDB)
+		if sqlDB, dbErr := auxDB.DB(); dbErr == nil {
+			_ = sqlDB.Close()
+		}
+		if !ok {
+			brokenAuxDBs = append(brokenAuxDBs, name)
+		}
 	}
 
 	// 一切正常，无需修复
@@ -1251,22 +1660,6 @@ func (r *backupRepo) FixPanel() error {
 		return nil
 	}
 
-	// 再次确认是否需要修复
-	if io.Exists("/tmp/panel-storage.zip") {
-		// 文件齐全情况下只移除临时文件
-		if io.Exists(filepath.Join(app.Root, "panel", "ace")) &&
-			io.Exists(filepath.Join(app.Root, "panel", "storage", "config.yml")) &&
-			io.Exists(filepath.Join(app.Root, "panel", "storage", "panel.db")) {
-			if err := io.Remove("/tmp/panel-storage.zip"); err != nil {
-				return errors.New(r.t.Get("failed to clean temporary files: %v", err))
-			}
-			if app.IsCli {
-				fmt.Println(r.t.Get("|-Cleaned up temporary files, please run acepanel update to update the panel"))
-			}
-			return nil
-		}
-	}
-
 	// 从备份目录中找最新的备份文件
 	files, err := os.ReadDir(r.GetDefaultPath(biz.BackupTypePanel))
 	if err != nil {
@@ -1295,14 +1688,19 @@ func (r *backupRepo) FixPanel() error {
 		fmt.Println(r.t.Get("|-Backup file used: %s", latest.Name()))
 	}
 
+	return r.restorePanel(latestPath)
+}
+
+// restorePanel 用指定的面板备份覆盖当前面板，完成后重启面板
+func (r *backupRepo) restorePanel(backup string) error {
 	// 解压备份文件
 	if app.IsCli {
 		fmt.Println(r.t.Get("|-Unzip backup file..."))
 	}
-	if err = io.Remove("/tmp/panel-fix"); err != nil {
+	if err := io.Remove("/tmp/panel-fix"); err != nil {
 		return errors.New(r.t.Get("Cleaning temporary directory failed: %v", err))
 	}
-	if err = io.UnCompress(latestPath, "/tmp/panel-fix"); err != nil {
+	if err := io.UnCompress(backup, "/tmp/panel-fix"); err != nil {
 		return errors.New(r.t.Get("Unzip backup file failed: %v", err))
 	}
 
@@ -1311,35 +1709,33 @@ func (r *backupRepo) FixPanel() error {
 		fmt.Println(r.t.Get("|-Move backup file..."))
 	}
 	if io.Exists(filepath.Join("/tmp/panel-fix", "panel")) && io.IsDir(filepath.Join("/tmp/panel-fix", "panel")) {
-		if err = io.Remove(filepath.Join(app.Root, "panel")); err != nil {
+		// 整体替换 panel 目录前先保住自定义编译参数
+		customize := filepath.Join(app.Root, "panel", "storage", "customize")
+		keep := filepath.Join(app.Root, ".customize-keep")
+		_ = io.Remove(keep)
+		if io.Exists(customize) {
+			_ = io.Mv(customize, keep)
+		}
+		if err := io.Remove(filepath.Join(app.Root, "panel")); err != nil {
 			return errors.New(r.t.Get("Remove panel file failed: %v", err))
 		}
-		if err = io.Mv(filepath.Join("/tmp/panel-fix", "panel"), filepath.Join(app.Root)); err != nil {
+		if err := io.Mv(filepath.Join("/tmp/panel-fix", "panel"), filepath.Clean(app.Root)); err != nil {
 			return errors.New(r.t.Get("Move panel file failed: %v", err))
+		}
+		if io.Exists(keep) {
+			_ = io.Remove(customize)
+			_ = io.Mv(keep, customize)
 		}
 	}
 	if io.Exists(filepath.Join("/tmp/panel-fix", "acepanel")) {
-		if err = io.Mv(filepath.Join("/tmp/panel-fix", "acepanel"), "/usr/local/sbin/acepanel"); err != nil {
+		if err := io.Mv(filepath.Join("/tmp/panel-fix", "acepanel"), "/usr/local/sbin/acepanel"); err != nil {
 			return errors.New(r.t.Get("Move acepanel file failed: %v", err))
-		}
-	}
-
-	// tmp 目录下如果有 storage 备份，则解压回去
-	if app.IsCli {
-		fmt.Println(r.t.Get("|-Restore panel data..."))
-	}
-	if io.Exists("/tmp/panel-storage.zip") {
-		if err = io.UnCompress("/tmp/panel-storage.zip", filepath.Join(app.Root, "panel")); err != nil {
-			return errors.New(r.t.Get("Unzip panel data failed: %v", err))
-		}
-		if err = io.Remove("/tmp/panel-storage.zip"); err != nil {
-			return errors.New(r.t.Get("Cleaning temporary file failed: %v", err))
 		}
 	}
 
 	// 下载服务文件
 	if !io.Exists("/etc/systemd/system/acepanel.service") {
-		if _, err = shell.Execf(`wget -O /etc/systemd/system/acepanel.service https://%s/acepanel.service && sed -i "s|/opt/ace|%s|g" /etc/systemd/system/acepanel.service`, r.conf.App.DownloadEndpoint, app.Root); err != nil {
+		if _, err := shell.Execf(`wget -O /etc/systemd/system/acepanel.service https://%s/acepanel.service && sed -i "s|/opt/ace|%s|g" /etc/systemd/system/acepanel.service`, r.conf.App.DownloadEndpoint, app.Root); err != nil {
 			return err
 		}
 	}
@@ -1348,23 +1744,23 @@ func (r *backupRepo) FixPanel() error {
 	if app.IsCli {
 		fmt.Println(r.t.Get("|-Set key file permissions..."))
 	}
-	if err = io.Chmod(filepath.Join(app.Root, "panel", "storage", "config.yml"), 0600); err != nil {
+	if err := io.Chmod(filepath.Join(app.Root, "panel", "storage", "config.yml"), 0600); err != nil {
 		return err
 	}
-	if err = io.Chmod(filepath.Join(app.Root, "panel", "storage", "panel.db"), 0600); err != nil {
+	if err := io.Chmod(filepath.Join(app.Root, "panel", "storage", "panel.db"), 0600); err != nil {
 		return err
 	}
-	if err = io.Chmod("/etc/systemd/system/acepanel.service", 0644); err != nil {
+	if err := io.Chmod("/etc/systemd/system/acepanel.service", 0644); err != nil {
 		return err
 	}
-	if err = io.Chmod("/usr/local/sbin/acepanel", 0700); err != nil {
+	if err := io.Chmod("/usr/local/sbin/acepanel", 0700); err != nil {
 		return err
 	}
-	if err = io.Chmod(filepath.Join(app.Root, "panel"), 0700); err != nil {
+	if err := io.Chmod(filepath.Join(app.Root, "panel"), 0700); err != nil {
 		return err
 	}
 
-	if err = io.Remove("/tmp/panel-fix"); err != nil {
+	if err := io.Remove("/tmp/panel-fix"); err != nil {
 		return err
 	}
 
@@ -1376,132 +1772,170 @@ func (r *backupRepo) FixPanel() error {
 	return nil
 }
 
-func (r *backupRepo) UpdatePanel(version, url, checksum string) error {
-	// 预先优化数据库
-	if err := r.db.Exec("VACUUM").Error; err != nil {
+// UpdatePanel 升级面板
+func (r *backupRepo) UpdatePanel(version, url, checksum string, progress func(string)) error {
+	if progress == nil {
+		progress = func(string) {}
+	}
+
+	// 进程级升级锁
+	if !r.updating.CompareAndSwap(false, true) {
+		return errors.New(r.t.Get("panel is already updating, please try again later"))
+	}
+	defer r.updating.Store(false)
+
+	panelDir := filepath.Join(app.Root, "panel")
+	workDir := filepath.Join(panelDir, ".update-work") // staging 目录固定在 panel 内，绝不用 /tmp（可能跨分区）
+	newDir := filepath.Join(workDir, "new")
+	name := filepath.Base(url)
+
+	// 失败回滚
+	rollback := func(err error) error {
+		_ = io.Remove(workDir)
+		app.Status = app.StatusNormal
 		return err
+	}
+
+	app.Status = app.StatusUpgrade
+
+	progress(r.t.Get("Preparing to update to %s...", version))
+	if err := io.Remove(workDir); err != nil {
+		return rollback(errors.New(r.t.Get("Failed to clean up temporary directory: %v", err)))
 	}
 	if err := r.db.Exec("PRAGMA wal_checkpoint(TRUNCATE);").Error; err != nil {
-		return err
+		return rollback(errors.New(r.t.Get("Failed to optimize database: %v", err)))
 	}
 
-	name := filepath.Base(url)
-	if app.IsCli {
-		fmt.Println(r.t.Get("|-Target version: %s", version))
-		fmt.Println(r.t.Get("|-Download link: %s", url))
-		fmt.Println(r.t.Get("|-File name: %s", name))
-	}
-
-	if app.IsCli {
-		fmt.Println(r.t.Get("|-Downloading..."))
-	}
-	if _, err := shell.Execf("aria2c -c --file-allocation=falloc --allow-overwrite=true --auto-file-renaming=false --retry-wait=5 --max-tries=5 -x 16 -s 16 -k 1M -d /tmp -o %s %s", name, url); err != nil {
-		return errors.New(r.t.Get("Download failed: %v", err))
-	}
-	if _, err := shell.Execf("aria2c -c --file-allocation=falloc --allow-overwrite=true --auto-file-renaming=false --retry-wait=5 --max-tries=5 -x 1 -s 1 -k 1M -d /tmp -o %s %s", name+".sha256", checksum); err != nil {
-		return errors.New(r.t.Get("Download failed: %v", err))
-	}
-	if !io.Exists(filepath.Join("/tmp", name)) || !io.Exists(filepath.Join("/tmp", name+".sha256")) {
-		return errors.New(r.t.Get("Download file check failed"))
-	}
-
-	if app.IsCli {
-		fmt.Println(r.t.Get("|-Verify download file..."))
-	}
-	if check, err := shell.Execf("cd /tmp && sha256sum -c %s --ignore-missing", name+".sha256"); check != name+": OK" || err != nil {
-		return errors.New(r.t.Get("Verify download file failed: %v", err))
-	}
-	if err := io.Remove(filepath.Join("/tmp", name+".sha256")); err != nil {
-		return errors.New(r.t.Get("|-Clean up verification file failed: %v", err))
-	}
-
-	if io.Exists("/tmp/panel-storage.zip") {
-		return errors.New(r.t.Get("Temporary file detected in /tmp, this may be caused by the last update failure, please run acepanel fix to repair and try again"))
-	}
-
-	if app.IsCli {
-		fmt.Println(r.t.Get("|-Backup panel data..."))
-	}
-	// 备份面板
+	// 备份留档
+	progress(r.t.Get("Backing up panel data..."))
 	if err := r.CreatePanel(); err != nil {
-		return errors.New(r.t.Get("|-Backup panel data failed: %v", err))
-	}
-	if err := io.Compress(filepath.Join(app.Root, "panel/storage"), nil, "/tmp/panel-storage.zip"); err != nil {
-		return errors.New(r.t.Get("|-Backup panel data failed: %v", err))
-	}
-	if !io.Exists("/tmp/panel-storage.zip") {
-		return errors.New(r.t.Get("|-Backup panel data failed, missing file"))
+		r.log.Warn("failed to backup panel before update", slog.Any("err", err))
 	}
 
-	if app.IsCli {
-		fmt.Println(r.t.Get("|-Cleaning old version..."))
+	// 下载新版本
+	if err := os.MkdirAll(workDir, 0700); err != nil {
+		return rollback(errors.New(r.t.Get("Failed to create temporary directory: %v", err)))
 	}
-	if _, err := shell.Execf("rm -rf %s/panel/*", app.Root); err != nil {
-		return errors.New(r.t.Get("|-Cleaning old version failed: %v", err))
+	progress(r.t.Get("Downloading new version..."))
+	if _, err := shell.Execf("aria2c -c --file-allocation=falloc --allow-overwrite=true --auto-file-renaming=false --retry-wait=5 --max-tries=5 -x 16 -s 16 -k 1M -d %s -o %s %s", workDir, name, url); err != nil {
+		return rollback(errors.New(r.t.Get("Download failed: %v", err)))
 	}
-
-	if app.IsCli {
-		fmt.Println(r.t.Get("|-Unzip new version..."))
+	if _, err := shell.Execf("aria2c -c --file-allocation=falloc --allow-overwrite=true --auto-file-renaming=false --retry-wait=5 --max-tries=5 -x 1 -s 1 -k 1M -d %s -o %s %s", workDir, name+".sha256", checksum); err != nil {
+		return rollback(errors.New(r.t.Get("Download failed: %v", err)))
 	}
-	if err := io.UnCompress(filepath.Join("/tmp", name), filepath.Join(app.Root, "panel")); err != nil {
-		return errors.New(r.t.Get("|-Unzip new version failed: %v", err))
-	}
-	if !io.Exists(filepath.Join(app.Root, "panel", "ace")) {
-		return errors.New(r.t.Get("|-Unzip new version failed, missing file"))
-	}
-	if err := io.Remove(filepath.Join("/tmp", name)); err != nil {
-		return errors.New(r.t.Get("|-Clean up temporary file failed: %v", err))
+	if !io.Exists(filepath.Join(workDir, name)) || !io.Exists(filepath.Join(workDir, name+".sha256")) {
+		return rollback(errors.New(r.t.Get("Download file check failed")))
 	}
 
-	if app.IsCli {
-		fmt.Println(r.t.Get("|-Restore panel data..."))
-	}
-	if err := io.UnCompress("/tmp/panel-storage.zip", filepath.Join(app.Root, "panel", "storage")); err != nil {
-		return errors.New(r.t.Get("|-Restore panel data failed: %v", err))
-	}
-	if !io.Exists(filepath.Join(app.Root, "panel/storage/panel.db")) {
-		return errors.New(r.t.Get("|-Restore panel data failed, missing file"))
+	// 校验 sha256
+	progress(r.t.Get("Verifying download file..."))
+	if check, err := shell.ExecfWithDir(workDir, "sha256sum -c %s --ignore-missing", name+".sha256"); check != name+": OK" || err != nil {
+		return rollback(errors.New(r.t.Get("Verify download file failed: %v", err)))
 	}
 
-	if app.IsCli {
-		fmt.Println(r.t.Get("|-Run post-update script..."))
+	// 解压
+	progress(r.t.Get("Extracting new version..."))
+	if err := io.UnCompress(filepath.Join(workDir, name), newDir); err != nil {
+		return rollback(errors.New(r.t.Get("Unzip new version failed: %v", err)))
 	}
-	if _, err := shell.Execf("curl -sSLm 10 https://%s/auto_update.sh | bash", r.conf.App.DownloadEndpoint); err != nil {
-		return errors.New(r.t.Get("|-Run post-update script failed: %v", err))
-	}
-	if _, err := shell.Execf(
-		`wget -O /etc/systemd/system/acepanel.service https://%s/acepanel.service && sed -i "s|/www|%s|g" /etc/systemd/system/acepanel.service`,
-		r.conf.App.DownloadEndpoint, app.Root,
-	); err != nil {
-		return errors.New(r.t.Get("|-Download panel service file failed: %v", err))
-	}
-	if _, err := shell.Execf("acepanel setting write version %s", version); err != nil {
-		return errors.New(r.t.Get("|-Write new panel version failed: %v", err))
-	}
-	if err := io.Mv(filepath.Join(app.Root, "panel/cli"), "/usr/local/sbin/acepanel"); err != nil {
-		return errors.New(r.t.Get("|-Move acepanel tool failed: %v", err))
+	if !io.Exists(filepath.Join(newDir, "ace")) {
+		return rollback(errors.New(r.t.Get("Unzip new version failed, missing file")))
 	}
 
-	if app.IsCli {
-		fmt.Println(r.t.Get("|-Set key file permissions..."))
-	}
-	_ = io.Chmod("/usr/local/sbin/acepanel", 0700)
-	_ = io.Chmod("/etc/systemd/system/acepanel.service", 0644)
-	_ = io.Chmod(filepath.Join(app.Root, "panel"), 0700)
-
-	if app.IsCli {
-		fmt.Println(r.t.Get("|-Update completed"))
+	// 应用
+	progress(r.t.Get("Applying update..."))
+	if err := r.applyUpdate(newDir); err != nil {
+		return rollback(errors.New(r.t.Get("Applying update failed: %v", err)))
 	}
 
+	// 收尾
+	progress(r.t.Get("Finishing up..."))
+	if err := r.finishUpdate(version); err != nil {
+		return rollback(errors.New(r.t.Get("Finishing update failed: %v", err)))
+	}
+
+	_ = io.Remove(workDir)
 	r.log.Info("panel updated", slog.String("version", version))
+	progress(r.t.Get("Update completed"))
 
-	_, _ = shell.Execf("systemctl daemon-reload")
-	_ = io.Remove("/tmp/panel-storage.zip")
-	_ = io.Remove(filepath.Join(app.Root, "panel/config.example.yml"))
+	// 由调用方重启面板
 	if sqlDB, err := r.db.DB(); err == nil {
 		_ = sqlDB.Close()
 	}
-	tools.RestartPanel()
+	return nil
+}
+
+// applyUpdate 用 newDir 下的新版本文件替换 panel/ 中的程序文件
+func (r *backupRepo) applyUpdate(newDir string) error {
+	entries, err := os.ReadDir(newDir)
+	if err != nil {
+		return err
+	}
+	panelDir := filepath.Join(app.Root, "panel")
+	for _, e := range entries {
+		name := e.Name()
+		if name == "storage" {
+			continue
+		}
+		src := filepath.Join(newDir, name)
+		if name == "cli" {
+			// 先 cp 保证原子替换
+			tmp := "/usr/local/sbin/.acepanel.new"
+			if err = io.Cp(src, tmp); err != nil {
+				return err
+			}
+			if err = io.Mv(tmp, "/usr/local/sbin/acepanel"); err != nil {
+				return err
+			}
+			continue
+		}
+		// 其余程序文件
+		if err = io.Mv(src, filepath.Join(panelDir, name)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// finishUpdate 升级收尾
+func (r *backupRepo) finishUpdate(version string) error {
+	panelDir := filepath.Join(app.Root, "panel")
+	serviceFile := "/etc/systemd/system/acepanel.service"
+
+	// 更新 service 文件
+	tmpService := serviceFile + ".new"
+	if _, err := shell.Execf(`wget -O %s https://%s/acepanel.service`, tmpService, r.conf.App.DownloadEndpoint); err == nil {
+		_, _ = shell.Execf(`sed -i "s|/opt/ace|%s|g" %s`, app.Root, tmpService)
+		if out, _ := shell.Execf("grep -c ExecStart %s", tmpService); strings.TrimSpace(out) != "0" {
+			_ = io.Mv(tmpService, serviceFile) // 同在 /etc/systemd/system → 同分区 rename
+		}
+	}
+	_ = io.Remove(tmpService)
+	if !io.Exists(serviceFile) {
+		return errors.New(r.t.Get("panel service file is missing"))
+	}
+	// 校验 unit 指向的主程序确实存在，避免 daemon-reload 后起不来
+	if !io.Exists(filepath.Join(panelDir, "ace")) {
+		return errors.New(r.t.Get("panel binary is missing after update"))
+	}
+	_, _ = shell.Execf("systemctl daemon-reload")
+
+	// 执行后置脚本
+	_, _ = shell.Execf("curl -sSLm 10 --fail --retry 3 https://%s/auto_update.sh | bash", r.conf.App.DownloadEndpoint)
+
+	// 后置脚本之后再写版本号
+	if err := r.setting.Set(biz.SettingKeyVersion, version); err != nil {
+		return err
+	}
+
+	// 设置权限
+	_ = io.Chmod(filepath.Join(panelDir, "ace"), 0700)
+	_ = io.Chmod("/usr/local/sbin/acepanel", 0700)
+	_ = io.Chmod(serviceFile, 0644)
+	_ = io.Remove(filepath.Join(panelDir, "config.example.yml"))
+
+	// 修正可能从 staging 继承的错误 SELinux 上下文
+	_, _ = shell.Execf("restorecon %s /usr/local/sbin/acepanel %s", filepath.Join(panelDir, "ace"), serviceFile)
 
 	return nil
 }

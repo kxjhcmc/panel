@@ -7,10 +7,10 @@ import (
 	"github.com/urfave/cli/v3"
 
 	"github.com/acepanel/panel/v3/internal/app"
-	"github.com/acepanel/panel/v3/internal/route"
 )
 
-func NewCli(t *gotext.Locale, cmd *route.Cli) *cli.Command {
+func NewCli(t *gotext.Locale, commands []*cli.Command) *cli.Command {
+
 	cli.RootCommandHelpTemplate = strings.ReplaceAll(cli.RootCommandHelpTemplate, "NAME", t.Get("NAME"))
 	cli.RootCommandHelpTemplate = strings.ReplaceAll(cli.RootCommandHelpTemplate, "USAGE", t.Get("USAGE"))
 	cli.RootCommandHelpTemplate = strings.ReplaceAll(cli.RootCommandHelpTemplate, "VERSION", t.Get("VERSION"))
@@ -35,9 +35,15 @@ func NewCli(t *gotext.Locale, cmd *route.Cli) *cli.Command {
 	cli.RootCommandHelpTemplate += "\n" + t.Get("QQ Group：12370907") + "\n"
 
 	return &cli.Command{
-		Name:     "acepanel",
-		Usage:    t.Get("AcePanel CLI Tool"),
-		Version:  app.Version,
-		Commands: cmd.Commands(),
+		Name:    "acepanel",
+		Usage:   t.Get("AcePanel CLI Tool"),
+		Version: app.Version,
+		Flags: []cli.Flag{
+			&cli.BoolFlag{
+				Name:  "json",
+				Usage: t.Get("Output in JSON format (list commands only)"),
+			},
+		},
+		Commands: commands,
 	}
 }

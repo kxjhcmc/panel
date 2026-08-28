@@ -7,21 +7,21 @@ import (
 	"github.com/leonelquinteros/gotext"
 
 	"github.com/acepanel/panel/v3/internal/biz"
-	"github.com/acepanel/panel/v3/internal/http/request"
+	"github.com/acepanel/panel/v3/internal/request"
 	"github.com/acepanel/panel/v3/pkg/types"
 )
 
 type EnvironmentService struct {
 	t               *gotext.Locale
-	environmentRepo biz.EnvironmentRepo
-	taskRepo        biz.TaskRepo
+	environmentRepo *biz.EnvironmentUsecase
+	taskRepo        *biz.TaskUsecase
 }
 
-func NewEnvironmentService(t *gotext.Locale, environmentRepo biz.EnvironmentRepo, taskRepo biz.TaskRepo) *EnvironmentService {
+func NewEnvironmentService(environmentUsecase *biz.EnvironmentUsecase, taskUsecase *biz.TaskUsecase, t *gotext.Locale) *EnvironmentService {
 	return &EnvironmentService{
 		t:               t,
-		environmentRepo: environmentRepo,
-		taskRepo:        taskRepo,
+		environmentRepo: environmentUsecase,
+		taskRepo:        taskUsecase,
 	}
 }
 
@@ -48,15 +48,21 @@ func (s *EnvironmentService) List(w http.ResponseWriter, r *http.Request) {
 		if onlyInstalled && !installed {
 			continue
 		}
+		// 性能优化，避免重复探测版本
+		var installedVersion string
+		if installed {
+			installedVersion = s.environmentRepo.InstalledVersion(item.Type, item.Slug)
+		}
 		environments = append(environments, types.EnvironmentDetail{
 			Type:             item.Type,
 			Name:             item.Name,
 			Description:      item.Description,
 			Slug:             item.Slug,
 			Version:          item.Version,
-			InstalledVersion: s.environmentRepo.InstalledVersion(item.Type, item.Slug),
+			InstalledVersion: installedVersion,
 			Installed:        installed,
-			HasUpdate:        s.environmentRepo.HasUpdate(item.Type, item.Slug),
+			HasUpdate:        installed && item.Version != "" && installedVersion != "" && item.Version != installedVersion,
+			CustomSupported:  biz.CustomCompileEnv(item.Type),
 		})
 	}
 

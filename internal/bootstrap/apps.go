@@ -20,6 +20,7 @@ import (
 	"github.com/acepanel/panel/v3/internal/apps/openresty"
 	"github.com/acepanel/panel/v3/internal/apps/opensearch"
 	"github.com/acepanel/panel/v3/internal/apps/percona"
+	"github.com/acepanel/panel/v3/internal/apps/pgadmin"
 	"github.com/acepanel/panel/v3/internal/apps/phpmyadmin"
 	"github.com/acepanel/panel/v3/internal/apps/podman"
 	"github.com/acepanel/panel/v3/internal/apps/postgresql"
@@ -34,39 +35,8 @@ import (
 	"github.com/acepanel/panel/v3/pkg/apploader"
 )
 
-func NewLoader(
-	apache *apache.App,
-	clickhouse *clickhouse.App,
-	codeserver *codeserver.App,
-	docker *docker.App,
-	elasticsearch *elasticsearch.App,
-	fail2ban *fail2ban.App,
-	frp *frp.App,
-	gitea *gitea.App,
-	grafana *grafana.App,
-	kafka *kafka.App,
-	mariadb *mariadb.App,
-	memcached *memcached.App,
-	minio *minio.App,
-	mongodb *mongodb.App,
-	mysql *mysql.App,
-	nginx *nginx.App,
-	openresty *openresty.App,
-	opensearch *opensearch.App,
-	percona *percona.App,
-	phpmyadmin *phpmyadmin.App,
-	podman *podman.App,
-	postgresql *postgresql.App,
-	prometheus *prometheus.App,
-	pureftpd *pureftpd.App,
-	redis *redis.App,
-	rocketmq *rocketmq.App,
-	rsync *rsync.App,
-	s3fs *s3fs.App,
-	supervisor *supervisor.App,
-	valkey *valkey.App,
-) *apploader.Loader {
+func NewLoader(apacheApp *apache.App, clickhouseApp *clickhouse.App, codeserverApp *codeserver.App, dockerApp *docker.App, elasticsearchApp *elasticsearch.App, fail2banApp *fail2ban.App, frpApp *frp.App, giteaApp *gitea.App, grafanaApp *grafana.App, kafkaApp *kafka.App, mariadbApp *mariadb.App, memcachedApp *memcached.App, minioApp *minio.App, mongodbApp *mongodb.App, mysqlApp *mysql.App, nginxApp *nginx.App, openrestyApp *openresty.App, opensearchApp *opensearch.App, perconaApp *percona.App, pgadminApp *pgadmin.App, phpmyadminApp *phpmyadmin.App, podmanApp *podman.App, postgresqlApp *postgresql.App, prometheusApp *prometheus.App, pureftpdApp *pureftpd.App, redisApp *redis.App, rocketmqApp *rocketmq.App, rsyncApp *rsync.App, s3fsApp *s3fs.App, supervisorApp *supervisor.App, valkeyApp *valkey.App) *apploader.Loader {
 	loader := new(apploader.Loader)
-	loader.Add(apache, clickhouse, codeserver, docker, elasticsearch, fail2ban, frp, gitea, grafana, kafka, mariadb, memcached, minio, mongodb, mysql, nginx, openresty, opensearch, percona, phpmyadmin, podman, postgresql, prometheus, pureftpd, redis, rocketmq, rsync, s3fs, supervisor, valkey)
+	loader.Add(apacheApp, clickhouseApp, codeserverApp, dockerApp, elasticsearchApp, fail2banApp, frpApp, giteaApp, grafanaApp, kafkaApp, mariadbApp, memcachedApp, minioApp, mongodbApp, mysqlApp, nginxApp, openrestyApp, opensearchApp, perconaApp, pgadminApp, phpmyadminApp, podmanApp, postgresqlApp, prometheusApp, pureftpdApp, redisApp, rocketmqApp, rsyncApp, s3fsApp, supervisorApp, valkeyApp)
 	return loader
 }

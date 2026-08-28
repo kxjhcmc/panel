@@ -8,39 +8,10 @@ package main
 
 import (
 	"github.com/acepanel/panel/v3/internal/app"
-	"github.com/acepanel/panel/v3/internal/apps/apache"
-	"github.com/acepanel/panel/v3/internal/apps/clickhouse"
-	"github.com/acepanel/panel/v3/internal/apps/codeserver"
-	"github.com/acepanel/panel/v3/internal/apps/docker"
-	"github.com/acepanel/panel/v3/internal/apps/elasticsearch"
-	"github.com/acepanel/panel/v3/internal/apps/fail2ban"
-	"github.com/acepanel/panel/v3/internal/apps/frp"
-	"github.com/acepanel/panel/v3/internal/apps/gitea"
-	"github.com/acepanel/panel/v3/internal/apps/grafana"
-	"github.com/acepanel/panel/v3/internal/apps/kafka"
-	"github.com/acepanel/panel/v3/internal/apps/mariadb"
-	"github.com/acepanel/panel/v3/internal/apps/memcached"
-	"github.com/acepanel/panel/v3/internal/apps/minio"
-	"github.com/acepanel/panel/v3/internal/apps/mongodb"
-	"github.com/acepanel/panel/v3/internal/apps/mysql"
-	"github.com/acepanel/panel/v3/internal/apps/nginx"
-	"github.com/acepanel/panel/v3/internal/apps/openresty"
-	"github.com/acepanel/panel/v3/internal/apps/opensearch"
-	"github.com/acepanel/panel/v3/internal/apps/percona"
-	"github.com/acepanel/panel/v3/internal/apps/phpmyadmin"
-	"github.com/acepanel/panel/v3/internal/apps/podman"
-	"github.com/acepanel/panel/v3/internal/apps/postgresql"
-	"github.com/acepanel/panel/v3/internal/apps/prometheus"
-	"github.com/acepanel/panel/v3/internal/apps/pureftpd"
-	"github.com/acepanel/panel/v3/internal/apps/redis"
-	"github.com/acepanel/panel/v3/internal/apps/rocketmq"
-	"github.com/acepanel/panel/v3/internal/apps/rsync"
-	"github.com/acepanel/panel/v3/internal/apps/s3fs"
-	"github.com/acepanel/panel/v3/internal/apps/supervisor"
-	"github.com/acepanel/panel/v3/internal/apps/valkey"
+	"github.com/acepanel/panel/v3/internal/biz"
 	"github.com/acepanel/panel/v3/internal/bootstrap"
+	"github.com/acepanel/panel/v3/internal/command"
 	"github.com/acepanel/panel/v3/internal/data"
-	"github.com/acepanel/panel/v3/internal/route"
 	"github.com/acepanel/panel/v3/internal/service"
 )
 
@@ -50,70 +21,70 @@ import (
 
 // Injectors from wire.go:
 
-// initCli init command line.
-func initCli() (*app.Cli, error) {
+func initCli() (*app.Cli, func(), error) {
 	config, err := bootstrap.NewConf()
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	locale, err := bootstrap.NewT(config)
-	if err != nil {
-		return nil, err
-	}
+	locale := bootstrap.NewT(config)
 	db, err := bootstrap.NewDB(config)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	logger := bootstrap.NewLog(config)
+	logger, cleanup, err := bootstrap.NewLogger(config)
+	if err != nil {
+		return nil, nil, err
+	}
+	slogLogger := bootstrap.NewSlog(logger)
+	appRepo := data.NewAppRepo(config, db, locale, slogLogger)
 	cacheRepo := data.NewCacheRepo(db)
-	taskRunner := bootstrap.NewRunner(db, logger)
-	taskRepo := data.NewTaskRepo(locale, db, logger, taskRunner)
-	appRepo := data.NewAppRepo(locale, config, db, logger, cacheRepo, taskRepo)
-	userRepo := data.NewUserRepo(locale, db, logger)
+	notifyChannelRepo := data.NewNotifyChannelRepo(db)
+	settingRepo := data.NewSettingRepo(config, db)
+	notifyUsecase := biz.NewNotifyUsecase(locale, slogLogger, notifyChannelRepo, settingRepo)
+	taskRunner := bootstrap.NewRunner(notifyUsecase, db, locale, slogLogger)
+	taskRepo := data.NewTaskRepo(db, locale, slogLogger, taskRunner)
+	appUsecase := biz.NewAppUsecase(locale, appRepo, cacheRepo, taskRepo)
+	websiteRepo := data.NewWebsiteRepo(db, locale, settingRepo)
+	backupRepo := data.NewBackupRepo(config, db, locale, slogLogger, settingRepo, websiteRepo)
+	backupUsecase := biz.NewBackupUsecase(notifyUsecase, locale, slogLogger, backupRepo)
+	cacheUsecase := biz.NewCacheUsecase(cacheRepo)
+	certAccountRepo := data.NewCertAccountRepo(db, locale, slogLogger)
+	userRepo := data.NewUserRepo(db, locale)
+	certAccountUsecase := biz.NewCertAccountUsecase(locale, slogLogger, certAccountRepo, userRepo)
+	certRepo := data.NewCertRepo(db, locale, slogLogger)
+	certUsecase := biz.NewCertUsecase(locale, slogLogger, certRepo, settingRepo)
+	cronRepo := data.NewCronRepo(db, locale)
+	cronUsecase := biz.NewCronUsecase(cronRepo, slogLogger)
+	databaseServerRepo := data.NewDatabaseServerRepo(db)
+	databaseServerUsecase := biz.NewDatabaseServerUsecase(locale, slogLogger, databaseServerRepo)
+	settingUsecase := biz.NewSettingUsecase(locale, slogLogger, settingRepo, taskRepo)
 	userPasskeyRepo := data.NewUserPasskeyRepo(db)
-	settingRepo := data.NewSettingRepo(locale, db, logger, config, taskRepo)
-	databaseServerRepo := data.NewDatabaseServerRepo(locale, db, logger)
-	databaseUserRepo := data.NewDatabaseUserRepo(locale, db, logger, databaseServerRepo)
-	databaseRepo := data.NewDatabaseRepo(locale, db, logger, databaseServerRepo, databaseUserRepo)
-	certRepo := data.NewCertRepo(locale, db, logger, settingRepo)
-	certAccountRepo := data.NewCertAccountRepo(locale, db, userRepo, logger)
-	websiteRepo := data.NewWebsiteRepo(locale, db, logger, cacheRepo, databaseRepo, databaseServerRepo, databaseUserRepo, certRepo, certAccountRepo, settingRepo)
-	backupRepo := data.NewBackupRepo(locale, config, db, logger, settingRepo, websiteRepo)
-	cliService := service.NewCliService(locale, config, db, appRepo, cacheRepo, userRepo, userPasskeyRepo, settingRepo, backupRepo, websiteRepo, databaseServerRepo, certRepo, certAccountRepo)
-	cli := route.NewCli(locale, cliService)
-	command := bootstrap.NewCli(locale, cli)
+	userPasskeyUsecase := biz.NewUserPasskeyUsecase(userPasskeyRepo)
+	userUsecase := biz.NewUserUsecase(locale, slogLogger, userRepo)
+	databaseUserRepo := data.NewDatabaseUserRepo(db)
+	databaseUserUsecase := biz.NewDatabaseUserUsecase(slogLogger, databaseServerRepo, databaseUserRepo)
+	databaseRepo := data.NewDatabaseRepo(db)
+	databaseUsecase := biz.NewDatabaseUsecase(databaseUserUsecase, locale, slogLogger, databaseRepo, databaseServerRepo)
+	tamperRepo, err := data.NewTamperRepo(db)
+	if err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	tamperUsecase := biz.NewTamperUsecase(notifyUsecase, settingUsecase, locale, slogLogger, tamperRepo)
+	websiteStatRepo, err := data.NewWebsiteStatRepo()
+	if err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	websiteStatUsecase := biz.NewWebsiteStatUsecase(websiteStatRepo)
+	websiteUsecase := biz.NewWebsiteUsecase(certAccountUsecase, certUsecase, databaseUsecase, databaseUserUsecase, tamperUsecase, websiteStatUsecase, locale, slogLogger, databaseServerRepo, websiteRepo)
+	validator := bootstrap.NewValidator(config, db)
+	cliService := service.NewCliService(appUsecase, backupUsecase, cacheUsecase, certAccountUsecase, certUsecase, cronUsecase, databaseServerUsecase, notifyUsecase, settingUsecase, userPasskeyUsecase, userUsecase, websiteUsecase, config, db, locale, validator)
+	v := command.Commands(locale, cliService)
+	cliCommand := bootstrap.NewCli(locale, v)
 	gormigrate := bootstrap.NewMigrate(db)
-	apacheApp := apache.NewApp(locale)
-	clickhouseApp := clickhouse.NewApp(locale, settingRepo, databaseServerRepo)
-	codeserverApp := codeserver.NewApp()
-	dockerApp := docker.NewApp()
-	elasticsearchApp := elasticsearch.NewApp(locale)
-	fail2banApp := fail2ban.NewApp(locale, websiteRepo)
-	frpApp := frp.NewApp()
-	giteaApp := gitea.NewApp()
-	grafanaApp := grafana.NewApp(locale)
-	kafkaApp := kafka.NewApp(locale)
-	mariadbApp := mariadb.NewApp(locale, settingRepo, databaseServerRepo)
-	memcachedApp := memcached.NewApp(locale)
-	minioApp := minio.NewApp()
-	mongodbApp := mongodb.NewApp(locale, settingRepo, databaseServerRepo)
-	mysqlApp := mysql.NewApp(locale, settingRepo, databaseServerRepo)
-	nginxApp := nginx.NewApp(locale)
-	openrestyApp := openresty.NewApp(locale)
-	opensearchApp := opensearch.NewApp(locale)
-	perconaApp := percona.NewApp(locale, settingRepo, databaseServerRepo)
-	phpmyadminApp := phpmyadmin.NewApp(locale)
-	podmanApp := podman.NewApp()
-	postgresqlApp := postgresql.NewApp(locale, settingRepo, databaseServerRepo)
-	prometheusApp := prometheus.NewApp(locale, config, taskRepo)
-	pureftpdApp := pureftpd.NewApp(locale)
-	redisApp := redis.NewApp(locale, databaseServerRepo)
-	rocketmqApp := rocketmq.NewApp(locale)
-	rsyncApp := rsync.NewApp(locale)
-	s3fsApp := s3fs.NewApp(locale)
-	supervisorApp := supervisor.NewApp(locale)
-	valkeyApp := valkey.NewApp(locale, databaseServerRepo)
-	loader := bootstrap.NewLoader(apacheApp, clickhouseApp, codeserverApp, dockerApp, elasticsearchApp, fail2banApp, frpApp, giteaApp, grafanaApp, kafkaApp, mariadbApp, memcachedApp, minioApp, mongodbApp, mysqlApp, nginxApp, openrestyApp, opensearchApp, perconaApp, phpmyadminApp, podmanApp, postgresqlApp, prometheusApp, pureftpdApp, redisApp, rocketmqApp, rsyncApp, s3fsApp, supervisorApp, valkeyApp)
-	appCli := app.NewCli(command, gormigrate, loader)
-	return appCli, nil
+	cli := app.NewCli(cliCommand, gormigrate)
+	return cli, func() {
+		cleanup()
+	}, nil
 }

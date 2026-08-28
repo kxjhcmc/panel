@@ -1,0 +1,13 @@
+package request
+
+type ContainerImageID struct {
+	ID string `json:"id" form:"id"`
+}
+
+type ContainerImagePull struct {
+	Name       string `form:"name" json:"name" validate:"required"`
+	Background bool   `form:"background" json:"background"`
+	Auth       bool   `form:"auth" json:"auth"`
+	Username   string `form:"username" json:"username" validate:"required_if:Auth,true"`
+	Password   string `form:"password" json:"password" validate:"required_if:Auth,true"`
+}

@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/leonelquinteros/gotext"
 	"gorm.io/gorm"
 
 	"github.com/acepanel/panel/v3/internal/app"
@@ -15,15 +16,22 @@ import (
 type WebsiteExpire struct {
 	db          *gorm.DB
 	log         *slog.Logger
-	websiteRepo biz.WebsiteRepo
+	websiteRepo *biz.WebsiteUsecase
+	notifyRepo  *biz.NotifyUsecase
+	t           *gotext.Locale
 }
 
-// NewWebsiteExpire 创建网站到期检查任务
-func NewWebsiteExpire(db *gorm.DB, log *slog.Logger, websiteRepo biz.WebsiteRepo) *WebsiteExpire {
-	return &WebsiteExpire{
-		db:          db,
-		log:         log,
-		websiteRepo: websiteRepo,
+// NewWebsiteExpire 构造网站到期检查任务
+func NewWebsiteExpire(notifyUsecase *biz.NotifyUsecase, websiteUsecase *biz.WebsiteUsecase, db *gorm.DB, t *gotext.Locale, log *slog.Logger) Job {
+	return Job{
+		Spec: "* * * * *",
+		Task: &WebsiteExpire{
+			db:          db,
+			log:         log,
+			websiteRepo: websiteUsecase,
+			notifyRepo:  notifyUsecase,
+			t:           t,
+		},
 	}
 }
 
@@ -46,6 +54,10 @@ func (r *WebsiteExpire) Run(_ context.Context) error {
 			continue
 		}
 		r.log.Info("website expired and disabled", slog.String("name", website.Name), slog.Time("expire_at", *website.ExpireAt))
+		r.notifyRepo.SendEvent(biz.NotifyEventWebsiteExpire, r.t.Get("[AcePanel] Website Expired"), biz.NotifyBody(r.t.Get("website expired and has been disabled"), [][2]string{
+			{r.t.Get("Website"), website.Name},
+			{r.t.Get("Expire Time"), website.ExpireAt.Format(time.DateTime)},
+		}))
 	}
 	return nil
 }

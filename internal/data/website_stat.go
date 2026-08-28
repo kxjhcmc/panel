@@ -3,10 +3,12 @@ package data
 import (
 	"time"
 
+	"github.com/go-gormigrate/gormigrate/v2"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 
 	"github.com/acepanel/panel/v3/internal/biz"
+	"github.com/acepanel/panel/v3/internal/migration"
 )
 
 type websiteStatRepo struct {
@@ -15,16 +17,12 @@ type websiteStatRepo struct {
 
 // NewWebsiteStatRepo 创建网站统计数据访问实例
 func NewWebsiteStatRepo() (biz.WebsiteStatRepo, error) {
-	statDB, err := openDB("stat")
+	statDB, err := openSharedDB("stat")
 	if err != nil {
 		return nil, err
 	}
 
-	if err = statDB.AutoMigrate(
-		&biz.WebsiteStat{}, &biz.WebsiteErrorLog{},
-		&biz.WebsiteStatSpider{}, &biz.WebsiteStatClient{},
-		&biz.WebsiteStatIP{}, &biz.WebsiteStatURI{},
-	); err != nil {
+	if err = gormigrate.New(statDB, nil, migration.WebsiteStatMigrations).Migrate(); err != nil {
 		return nil, err
 	}
 
@@ -135,14 +133,27 @@ func (r *websiteStatRepo) Clear() error {
 	return r.db.Where("1 = 1").Delete(&biz.WebsiteStatURI{}).Error
 }
 
+func (r *websiteStatRepo) DeleteBySite(site string) error {
+	if err := r.db.Where("site = ?", site).Delete(&biz.WebsiteStat{}).Error; err != nil {
+		return err
+	}
+	if err := r.db.Where("site = ?", site).Delete(&biz.WebsiteErrorLog{}).Error; err != nil {
+		return err
+	}
+	if err := r.db.Where("site = ?", site).Delete(&biz.WebsiteStatSpider{}).Error; err != nil {
+		return err
+	}
+	if err := r.db.Where("site = ?", site).Delete(&biz.WebsiteStatClient{}).Error; err != nil {
+		return err
+	}
+	if err := r.db.Where("site = ?", site).Delete(&biz.WebsiteStatIP{}).Error; err != nil {
+		return err
+	}
+	return r.db.Where("site = ?", site).Delete(&biz.WebsiteStatURI{}).Error
+}
+
 func (r *websiteStatRepo) VacuumDB() error {
-	if err := r.db.Exec("PRAGMA wal_checkpoint(TRUNCATE)").Error; err != nil {
-		return err
-	}
-	if err := r.db.Exec("VACUUM").Error; err != nil {
-		return err
-	}
-	return r.db.Exec("PRAGMA optimize").Error
+	return vacuumDB(r.db)
 }
 
 // ========== 蜘蛛统计 ==========

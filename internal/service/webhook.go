@@ -3,19 +3,19 @@ package service
 import (
 	"net/http"
 
-	"github.com/libtnb/chix"
+	"github.com/libtnb/chix/v2"
 
 	"github.com/acepanel/panel/v3/internal/biz"
-	"github.com/acepanel/panel/v3/internal/http/request"
+	"github.com/acepanel/panel/v3/internal/request"
 )
 
 type WebHookService struct {
-	webhookRepo biz.WebHookRepo
+	webhookRepo *biz.WebHookUsecase
 }
 
-func NewWebHookService(webhook biz.WebHookRepo) *WebHookService {
+func NewWebHookService(webHookUsecase *biz.WebHookUsecase) *WebHookService {
 	return &WebHookService{
-		webhookRepo: webhook,
+		webhookRepo: webHookUsecase,
 	}
 }
 

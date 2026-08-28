@@ -1,21 +1,32 @@
 package main
 
 import (
+	"errors"
 	"os"
 	_ "time/tzdata"
+
+	"github.com/gookit/color"
 )
 
 func main() {
+	if err := run(); err != nil {
+		color.Errorf("|-%v\n", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
 	if os.Geteuid() != 0 {
-		panic("panel must run as root")
+		return errors.New("panel must run as root")
 	}
 
-	cli, err := initCli()
+	cli, cleanup, err := initCli()
 	if err != nil {
-		panic(err)
+		return err
+	}
+	if cleanup != nil {
+		defer cleanup()
 	}
 
-	if err = cli.Run(); err != nil {
-		panic(err)
-	}
+	return cli.Run()
 }

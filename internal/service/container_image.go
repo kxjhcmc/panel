@@ -3,19 +3,19 @@ package service
 import (
 	"net/http"
 
-	"github.com/libtnb/chix"
+	"github.com/libtnb/chix/v2"
 
 	"github.com/acepanel/panel/v3/internal/biz"
-	"github.com/acepanel/panel/v3/internal/http/request"
+	"github.com/acepanel/panel/v3/internal/request"
 )
 
 type ContainerImageService struct {
-	containerImageRepo biz.ContainerImageRepo
+	containerImageRepo *biz.ContainerImageUsecase
 }
 
-func NewContainerImageService(containerImage biz.ContainerImageRepo) *ContainerImageService {
+func NewContainerImageService(containerImageUsecase *biz.ContainerImageUsecase) *ContainerImageService {
 	return &ContainerImageService{
-		containerImageRepo: containerImage,
+		containerImageRepo: containerImageUsecase,
 	}
 }
 
@@ -54,6 +54,15 @@ func (s *ContainerImageService) Pull(w http.ResponseWriter, r *http.Request) {
 	req, err := Bind[request.ContainerImagePull](r)
 	if err != nil {
 		Error(w, http.StatusUnprocessableEntity, "%v", err)
+		return
+	}
+
+	if req.Background {
+		if err = s.containerImageRepo.PullBackground(req); err != nil {
+			Error(w, http.StatusInternalServerError, "%v", err)
+			return
+		}
+		Success(w, nil)
 		return
 	}
 

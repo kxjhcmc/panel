@@ -1,24 +1,19 @@
 package data
 
 import (
-	"context"
-	"log/slog"
-
 	"gorm.io/gorm"
 
 	"github.com/acepanel/panel/v3/internal/biz"
-	"github.com/acepanel/panel/v3/internal/http/request"
+	"github.com/acepanel/panel/v3/internal/request"
 )
 
 type certDNSRepo struct {
-	db  *gorm.DB
-	log *slog.Logger
+	db *gorm.DB
 }
 
-func NewCertDNSRepo(db *gorm.DB, log *slog.Logger) biz.CertDNSRepo {
+func NewCertDNSRepo(db *gorm.DB) biz.CertDNSRepo {
 	return &certDNSRepo{
-		db:  db,
-		log: log,
+		db: db,
 	}
 }
 
@@ -35,7 +30,7 @@ func (r certDNSRepo) Get(id uint) (*biz.CertDNS, error) {
 	return certDNS, err
 }
 
-func (r certDNSRepo) Create(ctx context.Context, req *request.CertDNSCreate) (*biz.CertDNS, error) {
+func (r certDNSRepo) Create(req *request.CertDNSCreate) (*biz.CertDNS, error) {
 	certDNS := &biz.CertDNS{
 		Name: req.Name,
 		Type: req.Type,
@@ -46,13 +41,10 @@ func (r certDNSRepo) Create(ctx context.Context, req *request.CertDNSCreate) (*b
 		return nil, err
 	}
 
-	// 记录日志
-	r.log.Info("cert dns created", slog.String("type", biz.OperationTypeCert), slog.Uint64("operator_id", getOperatorID(ctx)), slog.Uint64("id", uint64(certDNS.ID)), slog.String("name", req.Name))
-
 	return certDNS, nil
 }
 
-func (r certDNSRepo) Update(ctx context.Context, req *request.CertDNSUpdate) error {
+func (r certDNSRepo) Update(req *request.CertDNSUpdate) error {
 	cert, err := r.Get(req.ID)
 	if err != nil {
 		return err
@@ -66,24 +58,13 @@ func (r certDNSRepo) Update(ctx context.Context, req *request.CertDNSUpdate) err
 		return err
 	}
 
-	// 记录日志
-	r.log.Info("cert dns updated", slog.String("type", biz.OperationTypeCert), slog.Uint64("operator_id", getOperatorID(ctx)), slog.Uint64("id", uint64(req.ID)), slog.String("name", req.Name))
-
 	return nil
 }
 
-func (r certDNSRepo) Delete(ctx context.Context, id uint) error {
-	certDNS, err := r.Get(id)
-	if err != nil {
+func (r certDNSRepo) Delete(id uint) error {
+	if err := r.db.Model(&biz.CertDNS{}).Where("id = ?", id).Delete(&biz.CertDNS{}).Error; err != nil {
 		return err
 	}
-
-	if err = r.db.Model(&biz.CertDNS{}).Where("id = ?", id).Delete(&biz.CertDNS{}).Error; err != nil {
-		return err
-	}
-
-	// 记录日志
-	r.log.Info("cert dns deleted", slog.String("type", biz.OperationTypeCert), slog.Uint64("operator_id", getOperatorID(ctx)), slog.Uint64("id", uint64(id)), slog.String("name", certDNS.Name))
 
 	return nil
 }

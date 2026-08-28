@@ -9,10 +9,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/libtnb/chix"
+	"github.com/libtnb/chix/v2"
 	"github.com/shirou/gopsutil/v4/process"
 
-	"github.com/acepanel/panel/v3/internal/http/request"
+	"github.com/acepanel/panel/v3/internal/request"
 	"github.com/acepanel/panel/v3/pkg/types"
 )
 
@@ -186,8 +186,8 @@ func (s *ProcessService) processProcessFull(proc *process.Process) types.Process
 	data := s.processProcessBasic(proc)
 
 	if ioStat, err := proc.IOCounters(); err == nil {
-		data.DiskWrite = ioStat.WriteBytes
-		data.DiskRead = ioStat.ReadBytes
+		data.DiskWrite = ioStat.DiskWriteBytes
+		data.DiskRead = ioStat.DiskReadBytes
 	}
 
 	data.Connections, _ = proc.Connections()

@@ -11,15 +11,11 @@ import { renderLocalIcon } from '@/utils'
 const { $gettext } = useGettext()
 const { confirmDelete, confirmAction } = useConfirm()
 
-// 运行状态映射
-const statusMap: Record<
-  string,
-  { type: 'success' | 'error' | 'warning' | 'default'; label: string }
-> = {
+// 运行状态映射，无运行状态概念的应用（如挂载工具）不在此列，渲染为 -
+const statusMap: Record<string, { type: 'success' | 'error' | 'warning'; label: string }> = {
   running: { type: 'success', label: $gettext('Running') },
   stopped: { type: 'error', label: $gettext('Stopped') },
   partial: { type: 'warning', label: $gettext('Partial') },
-  'n/a': { type: 'default', label: $gettext('N/A') },
 }
 
 // 应用表格列
@@ -56,7 +52,8 @@ const appColumns: any = [
     key: 'status',
     width: 120,
     render(row: any) {
-      const meta = statusMap[row.status] || statusMap['n/a']!
+      const meta = statusMap[row.status]
+      if (!meta) return '-'
       return h(NTag, { type: meta.type, size: 'small', round: true }, { default: () => meta.label })
     },
   },
@@ -76,7 +73,7 @@ const appColumns: any = [
   {
     title: $gettext('Actions'),
     key: 'actions',
-    width: 350,
+    width: 430,
     hideInExcel: true,
     render(row: any) {
       const targetVersion =
@@ -178,7 +175,7 @@ const envColumns: any = [
   {
     title: $gettext('Actions'),
     key: 'actions',
-    width: 240,
+    width: 320,
     hideInExcel: true,
     render(row: any) {
       return h(NFlex, null, {
@@ -333,7 +330,7 @@ onMounted(() => {
         v-model:pageSize="appPageSize"
         striped
         remote
-        :scroll-x="1420"
+        :scroll-x="1500"
         :loading="appLoading"
         :columns="appColumns"
         :data="appData"
@@ -354,7 +351,7 @@ onMounted(() => {
       <n-h3 prefix="bar">{{ $gettext('Operating Environment') }}</n-h3>
       <n-data-table
         striped
-        :scroll-x="1000"
+        :scroll-x="1080"
         :loading="envLoading"
         :columns="envColumns"
         :data="envData"

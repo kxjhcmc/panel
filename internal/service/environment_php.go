@@ -1,10 +1,14 @@
 package service
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
+	"math"
 	"net/http"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -14,27 +18,30 @@ import (
 	"resty.dev/v3"
 
 	"github.com/acepanel/panel/v3/internal/app"
+	"github.com/acepanel/panel/v3/internal/apps/confval"
 	"github.com/acepanel/panel/v3/internal/biz"
-	"github.com/acepanel/panel/v3/internal/http/request"
+	"github.com/acepanel/panel/v3/internal/request"
 	"github.com/acepanel/panel/v3/pkg/config"
+	"github.com/acepanel/panel/v3/pkg/fastcgi"
 	"github.com/acepanel/panel/v3/pkg/io"
 	"github.com/acepanel/panel/v3/pkg/shell"
+	"github.com/acepanel/panel/v3/pkg/tools"
 	"github.com/acepanel/panel/v3/pkg/types"
 )
 
 type EnvironmentPHPService struct {
 	t               *gotext.Locale
 	conf            *config.Config
-	environmentRepo biz.EnvironmentRepo
-	taskRepo        biz.TaskRepo
+	environmentRepo *biz.EnvironmentUsecase
+	taskRepo        *biz.TaskUsecase
 }
 
-func NewEnvironmentPHPService(t *gotext.Locale, conf *config.Config, environmentRepo biz.EnvironmentRepo, taskRepo biz.TaskRepo) *EnvironmentPHPService {
+func NewEnvironmentPHPService(environmentUsecase *biz.EnvironmentUsecase, taskUsecase *biz.TaskUsecase, conf *config.Config, t *gotext.Locale) *EnvironmentPHPService {
 	return &EnvironmentPHPService{
 		t:               t,
 		conf:            conf,
-		environmentRepo: environmentRepo,
-		taskRepo:        taskRepo,
+		environmentRepo: environmentUsecase,
+		taskRepo:        taskUsecase,
 	}
 }
 
@@ -44,7 +51,7 @@ func (s *EnvironmentPHPService) SetCli(w http.ResponseWriter, r *http.Request) {
 		Error(w, http.StatusUnprocessableEntity, "%v", err)
 		return
 	}
-	if !s.environmentRepo.IsInstalled("php", fmt.Sprintf("%d", req.Version)) {
+	if !s.environmentRepo.IsInstalled("php", strconv.FormatUint(uint64(req.Version), 10)) {
 		Error(w, http.StatusUnprocessableEntity, s.t.Get("PHP-%d is not installed", req.Version))
 		return
 	}
@@ -64,7 +71,7 @@ func (s *EnvironmentPHPService) PHPInfo(w http.ResponseWriter, r *http.Request) 
 		Error(w, http.StatusUnprocessableEntity, "%v", err)
 		return
 	}
-	if !s.environmentRepo.IsInstalled("php", fmt.Sprintf("%d", req.Version)) {
+	if !s.environmentRepo.IsInstalled("php", strconv.FormatUint(uint64(req.Version), 10)) {
 		Error(w, http.StatusUnprocessableEntity, s.t.Get("PHP-%d is not installed", req.Version))
 		return
 	}
@@ -85,7 +92,7 @@ func (s *EnvironmentPHPService) GetConfig(w http.ResponseWriter, r *http.Request
 		Error(w, http.StatusUnprocessableEntity, "%v", err)
 		return
 	}
-	if !s.environmentRepo.IsInstalled("php", fmt.Sprintf("%d", req.Version)) {
+	if !s.environmentRepo.IsInstalled("php", strconv.FormatUint(uint64(req.Version), 10)) {
 		Error(w, http.StatusUnprocessableEntity, s.t.Get("PHP-%d is not installed", req.Version))
 		return
 	}
@@ -105,7 +112,7 @@ func (s *EnvironmentPHPService) UpdateConfig(w http.ResponseWriter, r *http.Requ
 		Error(w, http.StatusUnprocessableEntity, "%v", err)
 		return
 	}
-	if !s.environmentRepo.IsInstalled("php", fmt.Sprintf("%d", req.Version)) {
+	if !s.environmentRepo.IsInstalled("php", strconv.FormatUint(uint64(req.Version), 10)) {
 		Error(w, http.StatusUnprocessableEntity, s.t.Get("PHP-%d is not installed", req.Version))
 		return
 	}
@@ -124,7 +131,7 @@ func (s *EnvironmentPHPService) GetFPMConfig(w http.ResponseWriter, r *http.Requ
 		Error(w, http.StatusUnprocessableEntity, "%v", err)
 		return
 	}
-	if !s.environmentRepo.IsInstalled("php", fmt.Sprintf("%d", req.Version)) {
+	if !s.environmentRepo.IsInstalled("php", strconv.FormatUint(uint64(req.Version), 10)) {
 		Error(w, http.StatusUnprocessableEntity, s.t.Get("PHP-%d is not installed", req.Version))
 		return
 	}
@@ -144,7 +151,7 @@ func (s *EnvironmentPHPService) UpdateFPMConfig(w http.ResponseWriter, r *http.R
 		Error(w, http.StatusUnprocessableEntity, "%v", err)
 		return
 	}
-	if !s.environmentRepo.IsInstalled("php", fmt.Sprintf("%d", req.Version)) {
+	if !s.environmentRepo.IsInstalled("php", strconv.FormatUint(uint64(req.Version), 10)) {
 		Error(w, http.StatusUnprocessableEntity, s.t.Get("PHP-%d is not installed", req.Version))
 		return
 	}
@@ -163,7 +170,7 @@ func (s *EnvironmentPHPService) Load(w http.ResponseWriter, r *http.Request) {
 		Error(w, http.StatusUnprocessableEntity, "%v", err)
 		return
 	}
-	if !s.environmentRepo.IsInstalled("php", fmt.Sprintf("%d", req.Version)) {
+	if !s.environmentRepo.IsInstalled("php", strconv.FormatUint(uint64(req.Version), 10)) {
 		Error(w, http.StatusUnprocessableEntity, s.t.Get("PHP-%d is not installed", req.Version))
 		return
 	}
@@ -228,7 +235,7 @@ func (s *EnvironmentPHPService) Log(w http.ResponseWriter, r *http.Request) {
 		Error(w, http.StatusUnprocessableEntity, "%v", err)
 		return
 	}
-	if !s.environmentRepo.IsInstalled("php", fmt.Sprintf("%d", req.Version)) {
+	if !s.environmentRepo.IsInstalled("php", strconv.FormatUint(uint64(req.Version), 10)) {
 		Error(w, http.StatusUnprocessableEntity, s.t.Get("PHP-%d is not installed", req.Version))
 		return
 	}
@@ -242,7 +249,7 @@ func (s *EnvironmentPHPService) SlowLog(w http.ResponseWriter, r *http.Request) 
 		Error(w, http.StatusUnprocessableEntity, "%v", err)
 		return
 	}
-	if !s.environmentRepo.IsInstalled("php", fmt.Sprintf("%d", req.Version)) {
+	if !s.environmentRepo.IsInstalled("php", strconv.FormatUint(uint64(req.Version), 10)) {
 		Error(w, http.StatusUnprocessableEntity, s.t.Get("PHP-%d is not installed", req.Version))
 		return
 	}
@@ -256,7 +263,7 @@ func (s *EnvironmentPHPService) ModuleList(w http.ResponseWriter, r *http.Reques
 		Error(w, http.StatusUnprocessableEntity, "%v", err)
 		return
 	}
-	if !s.environmentRepo.IsInstalled("php", fmt.Sprintf("%d", req.Version)) {
+	if !s.environmentRepo.IsInstalled("php", strconv.FormatUint(uint64(req.Version), 10)) {
 		Error(w, http.StatusUnprocessableEntity, s.t.Get("PHP-%d is not installed", req.Version))
 		return
 	}
@@ -289,7 +296,7 @@ func (s *EnvironmentPHPService) InstallModule(w http.ResponseWriter, r *http.Req
 		Error(w, http.StatusUnprocessableEntity, "%v", err)
 		return
 	}
-	if !s.environmentRepo.IsInstalled("php", fmt.Sprintf("%d", req.Version)) {
+	if !s.environmentRepo.IsInstalled("php", strconv.FormatUint(uint64(req.Version), 10)) {
 		Error(w, http.StatusUnprocessableEntity, s.t.Get("PHP-%d is not installed", req.Version))
 		return
 	}
@@ -306,6 +313,7 @@ func (s *EnvironmentPHPService) InstallModule(w http.ResponseWriter, r *http.Req
 	}
 
 	task := new(biz.Task)
+	task.Key = fmt.Sprintf("php:module:%d:%s", req.Version, req.Slug)
 	task.Name = s.t.Get("Install PHP-%d %s module", req.Version, req.Slug)
 	task.Status = biz.TaskStatusWaiting
 	task.Shell = cmd
@@ -323,7 +331,7 @@ func (s *EnvironmentPHPService) UninstallModule(w http.ResponseWriter, r *http.R
 		Error(w, http.StatusUnprocessableEntity, "%v", err)
 		return
 	}
-	if !s.environmentRepo.IsInstalled("php", fmt.Sprintf("%d", req.Version)) {
+	if !s.environmentRepo.IsInstalled("php", strconv.FormatUint(uint64(req.Version), 10)) {
 		Error(w, http.StatusUnprocessableEntity, s.t.Get("PHP-%d is not installed", req.Version))
 		return
 	}
@@ -340,10 +348,369 @@ func (s *EnvironmentPHPService) UninstallModule(w http.ResponseWriter, r *http.R
 	}
 
 	task := new(biz.Task)
+	task.Key = fmt.Sprintf("php:module:%d:%s", req.Version, req.Slug)
 	task.Name = s.t.Get("Uninstall PHP-%d %s module", req.Version, req.Slug)
 	task.Status = biz.TaskStatusWaiting
 	task.Shell = cmd
 	if err = s.taskRepo.Push(task); err != nil {
+		Error(w, http.StatusInternalServerError, "%v", err)
+		return
+	}
+
+	Success(w, nil)
+}
+
+// GetConfigTune 获取 PHP 配置调整参数
+func (s *EnvironmentPHPService) GetConfigTune(w http.ResponseWriter, r *http.Request) {
+	req, err := Bind[request.EnvironmentPHPVersion](r)
+	if err != nil {
+		Error(w, http.StatusUnprocessableEntity, "%v", err)
+		return
+	}
+	if !s.environmentRepo.IsInstalled("php", strconv.FormatUint(uint64(req.Version), 10)) {
+		Error(w, http.StatusUnprocessableEntity, s.t.Get("PHP-%d is not installed", req.Version))
+		return
+	}
+
+	iniPath := fmt.Sprintf("%s/server/php/%d/etc/php.ini", app.Root, req.Version)
+	fpmPath := fmt.Sprintf("%s/server/php/%d/etc/php-fpm.conf", app.Root, req.Version)
+
+	ini, err := io.Read(iniPath)
+	if err != nil {
+		Error(w, http.StatusInternalServerError, "%v", err)
+		return
+	}
+	fpm, err := io.Read(fpmPath)
+	if err != nil {
+		Error(w, http.StatusInternalServerError, "%v", err)
+		return
+	}
+
+	tune := request.EnvironmentPHPConfigTune{
+		// php.ini 常规设置
+		ShortOpenTag:   confval.PHPINI.Get(ini, "short_open_tag"),
+		DateTimezone:   confval.PHPINI.Get(ini, "date.timezone"),
+		DisplayErrors:  confval.PHPINI.Get(ini, "display_errors"),
+		ErrorReporting: confval.PHPINI.Get(ini, "error_reporting"),
+		// php.ini 禁用函数
+		DisableFunctions: confval.PHPINI.Get(ini, "disable_functions"),
+		// php.ini 上传限制
+		UploadMaxFilesize: confval.PHPINI.Get(ini, "upload_max_filesize"),
+		PostMaxSize:       confval.PHPINI.Get(ini, "post_max_size"),
+		MaxFileUploads:    confval.PHPINI.Get(ini, "max_file_uploads"),
+		MemoryLimit:       confval.PHPINI.Get(ini, "memory_limit"),
+		// php.ini 超时限制
+		MaxExecutionTime: confval.PHPINI.Get(ini, "max_execution_time"),
+		MaxInputTime:     confval.PHPINI.Get(ini, "max_input_time"),
+		MaxInputVars:     confval.PHPINI.Get(ini, "max_input_vars"),
+		// Session 相关
+		SessionSaveHandler:    confval.PHPINI.Get(ini, "session.save_handler"),
+		SessionSavePath:       confval.PHPINI.Get(ini, "session.save_path"),
+		SessionGcMaxlifetime:  confval.PHPINI.Get(ini, "session.gc_maxlifetime"),
+		SessionCookieLifetime: confval.PHPINI.Get(ini, "session.cookie_lifetime"),
+		// php-fpm.conf 配置
+		Pm:                confval.PHPINI.Get(fpm, "pm"),
+		PmMaxChildren:     confval.PHPINI.Get(fpm, "pm.max_children"),
+		PmStartServers:    confval.PHPINI.Get(fpm, "pm.start_servers"),
+		PmMinSpareServers: confval.PHPINI.Get(fpm, "pm.min_spare_servers"),
+		PmMaxSpareServers: confval.PHPINI.Get(fpm, "pm.max_spare_servers"),
+	}
+
+	Success(w, tune)
+}
+
+// UpdateConfigTune 更新 PHP 配置调整参数
+func (s *EnvironmentPHPService) UpdateConfigTune(w http.ResponseWriter, r *http.Request) {
+	req, err := Bind[request.EnvironmentPHPConfigTune](r)
+	if err != nil {
+		Error(w, http.StatusUnprocessableEntity, "%v", err)
+		return
+	}
+	if !s.environmentRepo.IsInstalled("php", strconv.FormatUint(uint64(req.Version), 10)) {
+		Error(w, http.StatusUnprocessableEntity, s.t.Get("PHP-%d is not installed", req.Version))
+		return
+	}
+
+	iniPath := fmt.Sprintf("%s/server/php/%d/etc/php.ini", app.Root, req.Version)
+	fpmPath := fmt.Sprintf("%s/server/php/%d/etc/php-fpm.conf", app.Root, req.Version)
+
+	ini, err := io.Read(iniPath)
+	if err != nil {
+		Error(w, http.StatusInternalServerError, "%v", err)
+		return
+	}
+	fpm, err := io.Read(fpmPath)
+	if err != nil {
+		Error(w, http.StatusInternalServerError, "%v", err)
+		return
+	}
+
+	// 更新 php.ini 配置
+	ini = confval.PHPINI.Set(ini, "short_open_tag", req.ShortOpenTag)
+	ini = confval.PHPINI.Set(ini, "date.timezone", req.DateTimezone)
+	ini = confval.PHPINI.Set(ini, "display_errors", req.DisplayErrors)
+	ini = confval.PHPINI.Set(ini, "error_reporting", req.ErrorReporting)
+	ini = confval.PHPINI.Set(ini, "disable_functions", req.DisableFunctions)
+	ini = confval.PHPINI.Set(ini, "upload_max_filesize", req.UploadMaxFilesize)
+	ini = confval.PHPINI.Set(ini, "post_max_size", req.PostMaxSize)
+	ini = confval.PHPINI.Set(ini, "max_execution_time", req.MaxExecutionTime)
+	ini = confval.PHPINI.Set(ini, "max_input_time", req.MaxInputTime)
+	ini = confval.PHPINI.Set(ini, "memory_limit", req.MemoryLimit)
+	ini = confval.PHPINI.Set(ini, "max_input_vars", req.MaxInputVars)
+	ini = confval.PHPINI.Set(ini, "max_file_uploads", req.MaxFileUploads)
+	ini = confval.PHPINI.Set(ini, "session.save_handler", req.SessionSaveHandler)
+	ini = confval.PHPINI.Set(ini, "session.save_path", req.SessionSavePath)
+	ini = confval.PHPINI.Set(ini, "session.gc_maxlifetime", req.SessionGcMaxlifetime)
+	ini = confval.PHPINI.Set(ini, "session.cookie_lifetime", req.SessionCookieLifetime)
+
+	// 更新 php-fpm.conf 配置
+	fpm = confval.PHPINI.Set(fpm, "pm", req.Pm)
+	fpm = confval.PHPINI.Set(fpm, "pm.max_children", req.PmMaxChildren)
+	fpm = confval.PHPINI.Set(fpm, "pm.start_servers", req.PmStartServers)
+	fpm = confval.PHPINI.Set(fpm, "pm.min_spare_servers", req.PmMinSpareServers)
+	fpm = confval.PHPINI.Set(fpm, "pm.max_spare_servers", req.PmMaxSpareServers)
+
+	if err = io.Write(iniPath, ini, 0644); err != nil {
+		Error(w, http.StatusInternalServerError, "%v", err)
+		return
+	}
+	if err = io.Write(fpmPath, fpm, 0644); err != nil {
+		Error(w, http.StatusInternalServerError, "%v", err)
+		return
+	}
+
+	Success(w, nil)
+}
+
+// CleanSession 清理 PHP Session 文件
+func (s *EnvironmentPHPService) CleanSession(w http.ResponseWriter, r *http.Request) {
+	req, err := Bind[request.EnvironmentPHPVersion](r)
+	if err != nil {
+		Error(w, http.StatusUnprocessableEntity, "%v", err)
+		return
+	}
+	if !s.environmentRepo.IsInstalled("php", strconv.FormatUint(uint64(req.Version), 10)) {
+		Error(w, http.StatusUnprocessableEntity, s.t.Get("PHP-%d is not installed", req.Version))
+		return
+	}
+
+	iniPath := fmt.Sprintf("%s/server/php/%d/etc/php.ini", app.Root, req.Version)
+	ini, err := io.Read(iniPath)
+	if err != nil {
+		Error(w, http.StatusInternalServerError, "%v", err)
+		return
+	}
+
+	handler := confval.PHPINI.Get(ini, "session.save_handler")
+	if handler != "files" {
+		Error(w, http.StatusUnprocessableEntity, s.t.Get("Session save handler is not files, cannot clean"))
+		return
+	}
+
+	savePath := confval.PHPINI.Get(ini, "session.save_path")
+	if savePath == "" {
+		savePath = "/tmp"
+	}
+
+	if _, err = shell.Execf("find '%s' -name 'sess_*' -type f -delete", savePath); err != nil {
+		Error(w, http.StatusInternalServerError, "%v", err)
+		return
+	}
+
+	Success(w, nil)
+}
+
+// Processes 获取 PHP-FPM 工作进程列表
+func (s *EnvironmentPHPService) Processes(w http.ResponseWriter, r *http.Request) {
+	req, err := Bind[request.EnvironmentPHPVersion](r)
+	if err != nil {
+		Error(w, http.StatusUnprocessableEntity, "%v", err)
+		return
+	}
+	if !s.environmentRepo.IsInstalled("php", strconv.FormatUint(uint64(req.Version), 10)) {
+		Error(w, http.StatusUnprocessableEntity, s.t.Get("PHP-%d is not installed", req.Version))
+		return
+	}
+
+	var raw struct {
+		Processes []struct {
+			PID             int64   `json:"pid"`
+			State           string  `json:"state"`
+			StartSince      int64   `json:"start since"`
+			Requests        int64   `json:"requests"`
+			RequestDuration int64   `json:"request duration"`
+			Method          string  `json:"request method"`
+			URI             string  `json:"request uri"`
+			Script          string  `json:"script"`
+			LastCPU         float64 `json:"last request cpu"`
+			LastMemory      int64   `json:"last request memory"`
+		} `json:"processes"`
+	}
+	client := resty.New().SetTimeout(10 * time.Second)
+	defer func(client *resty.Client) { _ = client.Close() }(client)
+	if _, err = client.R().SetResult(&raw).Get(fmt.Sprintf("http://127.0.0.1/phpfpm_status/%d?json&full", req.Version)); err != nil {
+		Success(w, []types.EnvironmentPHPProcess{})
+		return
+	}
+
+	processes := make([]types.EnvironmentPHPProcess, 0, len(raw.Processes))
+	for _, item := range raw.Processes {
+		processes = append(processes, types.EnvironmentPHPProcess{
+			PID:             item.PID,
+			State:           item.State,
+			StartSince:      item.StartSince,
+			Requests:        item.Requests,
+			RequestDuration: item.RequestDuration,
+			Method:          item.Method,
+			URI:             item.URI,
+			Script:          item.Script,
+			LastRequestCPU:  item.LastCPU,
+			LastRequestMem:  item.LastMemory,
+		})
+	}
+
+	Success(w, processes)
+}
+
+// Opcache 获取 OPcache 状态
+func (s *EnvironmentPHPService) Opcache(w http.ResponseWriter, r *http.Request) {
+	req, err := Bind[request.EnvironmentPHPVersion](r)
+	if err != nil {
+		Error(w, http.StatusUnprocessableEntity, "%v", err)
+		return
+	}
+	if !s.environmentRepo.IsInstalled("php", strconv.FormatUint(uint64(req.Version), 10)) {
+		Error(w, http.StatusUnprocessableEntity, s.t.Get("PHP-%d is not installed", req.Version))
+		return
+	}
+
+	body, err := s.opcacheProbe(r.Context(), req.Version, "")
+	if err != nil {
+		Error(w, http.StatusInternalServerError, s.t.Get("failed to get OPcache status: %v", err))
+		return
+	}
+
+	// OPcache 未启用时探针返回 false，无法解析为对象
+	var raw map[string]any
+	if err = json.Unmarshal(body, &raw); err != nil || raw == nil {
+		Success(w, types.EnvironmentPHPOpcache{Enabled: false})
+		return
+	}
+
+	memory := cast.ToStringMap(raw["memory_usage"])
+	stats := cast.ToStringMap(raw["opcache_statistics"])
+	jit := cast.ToStringMap(raw["jit"])
+
+	Success(w, types.EnvironmentPHPOpcache{
+		Enabled:       cast.ToBool(raw["opcache_enabled"]),
+		MemoryUsed:    tools.FormatBytes(cast.ToFloat64(memory["used_memory"])),
+		MemoryFree:    tools.FormatBytes(cast.ToFloat64(memory["free_memory"])),
+		MemoryWasted:  tools.FormatBytes(cast.ToFloat64(memory["wasted_memory"])),
+		WastedPercent: math.Round(cast.ToFloat64(memory["current_wasted_percentage"])*100) / 100,
+		HitRate:       math.Round(cast.ToFloat64(stats["opcache_hit_rate"])*100) / 100,
+		Hits:          cast.ToInt64(stats["hits"]),
+		Misses:        cast.ToInt64(stats["misses"]),
+		CachedScripts: cast.ToInt64(stats["num_cached_scripts"]),
+		CachedKeys:    cast.ToInt64(stats["num_cached_keys"]),
+		MaxCachedKeys: cast.ToInt64(stats["max_cached_keys"]),
+		OomRestarts:   cast.ToInt64(stats["oom_restarts"]),
+		JitEnabled:    cast.ToBool(jit["enabled"]) && cast.ToBool(jit["on"]),
+		JitBufferSize: tools.FormatBytes(cast.ToFloat64(jit["buffer_size"])),
+		JitBufferFree: tools.FormatBytes(cast.ToFloat64(jit["buffer_free"])),
+	})
+}
+
+// ResetOpcache 重置 OPcache
+func (s *EnvironmentPHPService) ResetOpcache(w http.ResponseWriter, r *http.Request) {
+	req, err := Bind[request.EnvironmentPHPVersion](r)
+	if err != nil {
+		Error(w, http.StatusUnprocessableEntity, "%v", err)
+		return
+	}
+	if !s.environmentRepo.IsInstalled("php", strconv.FormatUint(uint64(req.Version), 10)) {
+		Error(w, http.StatusUnprocessableEntity, s.t.Get("PHP-%d is not installed", req.Version))
+		return
+	}
+
+	body, err := s.opcacheProbe(r.Context(), req.Version, "action=reset")
+	if err != nil {
+		Error(w, http.StatusInternalServerError, s.t.Get("failed to reset OPcache: %v", err))
+		return
+	}
+
+	var raw map[string]any
+	if err = json.Unmarshal(body, &raw); err != nil || !cast.ToBool(raw["reset"]) {
+		Error(w, http.StatusInternalServerError, s.t.Get("failed to reset OPcache, it may not be enabled"))
+		return
+	}
+
+	Success(w, nil)
+}
+
+// Composer 获取 Composer 状态
+func (s *EnvironmentPHPService) Composer(w http.ResponseWriter, r *http.Request) {
+	req, err := Bind[request.EnvironmentPHPVersion](r)
+	if err != nil {
+		Error(w, http.StatusUnprocessableEntity, "%v", err)
+		return
+	}
+
+	composer := types.EnvironmentPHPComposer{Installed: io.Exists("/usr/local/bin/composer")}
+	if composer.Installed {
+		out, outErr := shell.ExecfWithEnv([]string{"COMPOSER_ALLOW_SUPERUSER=1"}, "%s/server/php/%d/bin/php /usr/local/bin/composer --version --no-ansi 2>/dev/null", app.Root, req.Version)
+		// 输出形如 Composer version 2.8.4 2025-01-01 00:00:00
+		if fields := strings.Fields(out); outErr == nil && len(fields) >= 3 {
+			composer.Version = fields[2]
+		}
+		composer.Mirror = s.composerMirror()
+	}
+
+	Success(w, composer)
+}
+
+// InstallComposer 安装/更新 Composer（异步任务）
+func (s *EnvironmentPHPService) InstallComposer(w http.ResponseWriter, r *http.Request) {
+	cmd := fmt.Sprintf(`curl -sSLm 10 --retry 3 'https://%s/php/composer.sh' | bash -s -- 'install'`, s.conf.App.DownloadEndpoint)
+
+	task := new(biz.Task)
+	task.Key = "php:composer"
+	task.Name = s.t.Get("Install Composer")
+	task.Status = biz.TaskStatusWaiting
+	task.Shell = cmd
+	if err := s.taskRepo.Push(task); err != nil {
+		Error(w, http.StatusInternalServerError, "%v", err)
+		return
+	}
+
+	Success(w, nil)
+}
+
+// SetComposerMirror 设置 Composer 全局镜像源
+func (s *EnvironmentPHPService) SetComposerMirror(w http.ResponseWriter, r *http.Request) {
+	req, err := Bind[request.EnvironmentPHPComposerMirror](r)
+	if err != nil {
+		Error(w, http.StatusUnprocessableEntity, "%v", err)
+		return
+	}
+	if !io.Exists("/usr/local/bin/composer") {
+		Error(w, http.StatusUnprocessableEntity, s.t.Get("Composer is not installed"))
+		return
+	}
+
+	php := fmt.Sprintf("%s/server/php/%d/bin/php", app.Root, req.Version)
+	env := []string{"COMPOSER_ALLOW_SUPERUSER=1"}
+	if req.Mirror == "" {
+		// 恢复官方源，未设置过镜像时报错可忽略
+		_, _ = shell.ExecfWithEnv(env, "%s /usr/local/bin/composer config -g --unset repos.packagist", php)
+		Success(w, nil)
+		return
+	}
+
+	if !strings.HasPrefix(req.Mirror, "https://") && !strings.HasPrefix(req.Mirror, "http://") {
+		Error(w, http.StatusUnprocessableEntity, s.t.Get("invalid mirror url"))
+		return
+	}
+	if _, err = shell.ExecfWithEnv(env, "%s /usr/local/bin/composer config -g repos.packagist composer '%s'", php, req.Mirror); err != nil {
 		Error(w, http.StatusInternalServerError, "%v", err)
 		return
 	}
@@ -598,242 +965,58 @@ func (s *EnvironmentPHPService) checkModule(version uint, slug string) bool {
 	})
 }
 
-// GetConfigTune 获取 PHP 配置调整参数
-func (s *EnvironmentPHPService) GetConfigTune(w http.ResponseWriter, r *http.Request) {
-	req, err := Bind[request.EnvironmentPHPVersion](r)
-	if err != nil {
-		Error(w, http.StatusUnprocessableEntity, "%v", err)
-		return
-	}
-	if !s.environmentRepo.IsInstalled("php", fmt.Sprintf("%d", req.Version)) {
-		Error(w, http.StatusUnprocessableEntity, s.t.Get("PHP-%d is not installed", req.Version))
-		return
-	}
-
-	iniPath := fmt.Sprintf("%s/server/php/%d/etc/php.ini", app.Root, req.Version)
-	fpmPath := fmt.Sprintf("%s/server/php/%d/etc/php-fpm.conf", app.Root, req.Version)
-
-	ini, err := io.Read(iniPath)
-	if err != nil {
-		Error(w, http.StatusInternalServerError, "%v", err)
-		return
-	}
-	fpm, err := io.Read(fpmPath)
-	if err != nil {
-		Error(w, http.StatusInternalServerError, "%v", err)
-		return
+// opcacheProbe 通过 FastCGI 请求 PHP-FPM 执行 OPcache 探针脚本
+func (s *EnvironmentPHPService) opcacheProbe(ctx context.Context, version uint, query string) ([]byte, error) {
+	probePath := "/tmp/acepanel_opcache_probe.php"
+	probe := `<?php
+if (($_GET['action'] ?? '') === 'reset') {
+    echo json_encode(['reset' => function_exists('opcache_reset') && opcache_reset()]);
+    exit;
+}
+echo json_encode(function_exists('opcache_get_status') ? opcache_get_status(false) : false);
+`
+	// FPM 以 www 用户执行，探针放在 /tmp 保证可读，每次覆盖写入保证内容正确
+	if err := io.Write(probePath, probe, 0644); err != nil {
+		return nil, err
 	}
 
-	tune := request.EnvironmentPHPConfigTune{
-		// php.ini 常规设置
-		ShortOpenTag:   s.getINIValue(ini, "short_open_tag"),
-		DateTimezone:   s.getINIValue(ini, "date.timezone"),
-		DisplayErrors:  s.getINIValue(ini, "display_errors"),
-		ErrorReporting: s.getINIValue(ini, "error_reporting"),
-		// php.ini 禁用函数
-		DisableFunctions: s.getINIValue(ini, "disable_functions"),
-		// php.ini 上传限制
-		UploadMaxFilesize: s.getINIValue(ini, "upload_max_filesize"),
-		PostMaxSize:       s.getINIValue(ini, "post_max_size"),
-		MaxFileUploads:    s.getINIValue(ini, "max_file_uploads"),
-		MemoryLimit:       s.getINIValue(ini, "memory_limit"),
-		// php.ini 超时限制
-		MaxExecutionTime: s.getINIValue(ini, "max_execution_time"),
-		MaxInputTime:     s.getINIValue(ini, "max_input_time"),
-		MaxInputVars:     s.getINIValue(ini, "max_input_vars"),
-		// Session 相关
-		SessionSaveHandler:    s.getINIValue(ini, "session.save_handler"),
-		SessionSavePath:       s.getINIValue(ini, "session.save_path"),
-		SessionGcMaxlifetime:  s.getINIValue(ini, "session.gc_maxlifetime"),
-		SessionCookieLifetime: s.getINIValue(ini, "session.cookie_lifetime"),
-		// php-fpm.conf 配置
-		Pm:                s.getINIValue(fpm, "pm"),
-		PmMaxChildren:     s.getINIValue(fpm, "pm.max_children"),
-		PmStartServers:    s.getINIValue(fpm, "pm.start_servers"),
-		PmMinSpareServers: s.getINIValue(fpm, "pm.min_spare_servers"),
-		PmMaxSpareServers: s.getINIValue(fpm, "pm.max_spare_servers"),
-	}
-
-	Success(w, tune)
+	timeoutCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	return fastcgi.Request(timeoutCtx, "unix", fmt.Sprintf("/tmp/php-cgi-%d.sock", version), map[string]string{
+		"SCRIPT_FILENAME":   probePath,
+		"SCRIPT_NAME":       "/acepanel_opcache_probe.php",
+		"REQUEST_METHOD":    "GET",
+		"QUERY_STRING":      query,
+		"SERVER_PROTOCOL":   "HTTP/1.1",
+		"GATEWAY_INTERFACE": "CGI/1.1",
+		"REMOTE_ADDR":       "127.0.0.1",
+		"SERVER_ADDR":       "127.0.0.1",
+		"SERVER_PORT":       "80",
+		"SERVER_NAME":       "localhost",
+	})
 }
 
-// UpdateConfigTune 更新 PHP 配置调整参数
-func (s *EnvironmentPHPService) UpdateConfigTune(w http.ResponseWriter, r *http.Request) {
-	req, err := Bind[request.EnvironmentPHPConfigTune](r)
-	if err != nil {
-		Error(w, http.StatusUnprocessableEntity, "%v", err)
-		return
-	}
-	if !s.environmentRepo.IsInstalled("php", fmt.Sprintf("%d", req.Version)) {
-		Error(w, http.StatusUnprocessableEntity, s.t.Get("PHP-%d is not installed", req.Version))
-		return
-	}
-
-	iniPath := fmt.Sprintf("%s/server/php/%d/etc/php.ini", app.Root, req.Version)
-	fpmPath := fmt.Sprintf("%s/server/php/%d/etc/php-fpm.conf", app.Root, req.Version)
-
-	ini, err := io.Read(iniPath)
-	if err != nil {
-		Error(w, http.StatusInternalServerError, "%v", err)
-		return
-	}
-	fpm, err := io.Read(fpmPath)
-	if err != nil {
-		Error(w, http.StatusInternalServerError, "%v", err)
-		return
-	}
-
-	// 更新 php.ini 配置
-	ini = s.setINIValue(ini, "short_open_tag", req.ShortOpenTag)
-	ini = s.setINIValue(ini, "date.timezone", req.DateTimezone)
-	ini = s.setINIValue(ini, "display_errors", req.DisplayErrors)
-	ini = s.setINIValue(ini, "error_reporting", req.ErrorReporting)
-	ini = s.setINIValue(ini, "disable_functions", req.DisableFunctions)
-	ini = s.setINIValue(ini, "upload_max_filesize", req.UploadMaxFilesize)
-	ini = s.setINIValue(ini, "post_max_size", req.PostMaxSize)
-	ini = s.setINIValue(ini, "max_execution_time", req.MaxExecutionTime)
-	ini = s.setINIValue(ini, "max_input_time", req.MaxInputTime)
-	ini = s.setINIValue(ini, "memory_limit", req.MemoryLimit)
-	ini = s.setINIValue(ini, "max_input_vars", req.MaxInputVars)
-	ini = s.setINIValue(ini, "max_file_uploads", req.MaxFileUploads)
-	ini = s.setINIValue(ini, "session.save_handler", req.SessionSaveHandler)
-	ini = s.setINIValue(ini, "session.save_path", req.SessionSavePath)
-	ini = s.setINIValue(ini, "session.gc_maxlifetime", req.SessionGcMaxlifetime)
-	ini = s.setINIValue(ini, "session.cookie_lifetime", req.SessionCookieLifetime)
-
-	// 更新 php-fpm.conf 配置
-	fpm = s.setINIValue(fpm, "pm", req.Pm)
-	fpm = s.setINIValue(fpm, "pm.max_children", req.PmMaxChildren)
-	fpm = s.setINIValue(fpm, "pm.start_servers", req.PmStartServers)
-	fpm = s.setINIValue(fpm, "pm.min_spare_servers", req.PmMinSpareServers)
-	fpm = s.setINIValue(fpm, "pm.max_spare_servers", req.PmMaxSpareServers)
-
-	if err = io.Write(iniPath, ini, 0644); err != nil {
-		Error(w, http.StatusInternalServerError, "%v", err)
-		return
-	}
-	if err = io.Write(fpmPath, fpm, 0644); err != nil {
-		Error(w, http.StatusInternalServerError, "%v", err)
-		return
-	}
-
-	Success(w, nil)
-}
-
-// CleanSession 清理 PHP Session 文件
-func (s *EnvironmentPHPService) CleanSession(w http.ResponseWriter, r *http.Request) {
-	req, err := Bind[request.EnvironmentPHPVersion](r)
-	if err != nil {
-		Error(w, http.StatusUnprocessableEntity, "%v", err)
-		return
-	}
-	if !s.environmentRepo.IsInstalled("php", fmt.Sprintf("%d", req.Version)) {
-		Error(w, http.StatusUnprocessableEntity, s.t.Get("PHP-%d is not installed", req.Version))
-		return
-	}
-
-	iniPath := fmt.Sprintf("%s/server/php/%d/etc/php.ini", app.Root, req.Version)
-	ini, err := io.Read(iniPath)
-	if err != nil {
-		Error(w, http.StatusInternalServerError, "%v", err)
-		return
-	}
-
-	handler := s.getINIValue(ini, "session.save_handler")
-	if handler != "files" {
-		Error(w, http.StatusUnprocessableEntity, s.t.Get("Session save handler is not files, cannot clean"))
-		return
-	}
-
-	savePath := s.getINIValue(ini, "session.save_path")
-	if savePath == "" {
-		savePath = "/tmp"
-	}
-
-	if _, err = shell.Execf("find '%s' -name 'sess_*' -type f -delete", savePath); err != nil {
-		Error(w, http.StatusInternalServerError, "%v", err)
-		return
-	}
-
-	Success(w, nil)
-}
-
-// getINIValue 从 INI 格式内容中获取指定键的值
-func (s *EnvironmentPHPService) getINIValue(content string, key string) string {
-	lines := strings.SplitSeq(content, "\n")
-	for line := range lines {
-		trimmed := strings.TrimSpace(line)
-		// 跳过注释行和空行
-		if trimmed == "" || strings.HasPrefix(trimmed, ";") || strings.HasPrefix(trimmed, "#") {
+// composerMirror 读取 Composer 全局镜像源配置，未设置时返回空
+func (s *EnvironmentPHPService) composerMirror() string {
+	for _, path := range []string{"/root/.config/composer/config.json", "/root/.composer/config.json"} {
+		content, err := io.Read(path)
+		if err != nil {
 			continue
 		}
-		// 跳过 section 行
-		if strings.HasPrefix(trimmed, "[") {
+		var cfg struct {
+			Repositories map[string]struct {
+				URL string `json:"url"`
+			} `json:"repositories"`
+		}
+		if json.Unmarshal([]byte(content), &cfg) != nil {
 			continue
 		}
-		parts := strings.SplitN(trimmed, "=", 2)
-		if len(parts) != 2 {
-			continue
-		}
-		k := strings.TrimSpace(parts[0])
-		if k == key {
-			return strings.TrimSpace(parts[1])
+		for _, key := range []string{"packagist", "packagist.org"} {
+			if repo, ok := cfg.Repositories[key]; ok && repo.URL != "" {
+				return repo.URL
+			}
 		}
 	}
+
 	return ""
-}
-
-// setINIValue 在 INI 格式内容中设置指定键的值
-func (s *EnvironmentPHPService) setINIValue(content string, key string, value string) string {
-	// 过滤值中的换行符，防止破坏 INI 文件结构
-	value = strings.ReplaceAll(value, "\n", "")
-	value = strings.ReplaceAll(value, "\r", "")
-
-	lines := strings.Split(content, "\n")
-	found := false
-	result := make([]string, 0, len(lines))
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		// 跳过空行和 section 行
-		if trimmed == "" || strings.HasPrefix(trimmed, "[") {
-			result = append(result, line)
-			continue
-		}
-		// 处理注释行（可能是被注释掉的配置）
-		checkLine := trimmed
-		if strings.HasPrefix(checkLine, ";") {
-			checkLine = strings.TrimSpace(checkLine[1:])
-		} else if strings.HasPrefix(checkLine, "#") {
-			checkLine = strings.TrimSpace(checkLine[1:])
-		}
-		parts := strings.SplitN(checkLine, "=", 2)
-		if len(parts) != 2 {
-			result = append(result, line)
-			continue
-		}
-		k := strings.TrimSpace(parts[0])
-		if k == key {
-			if found {
-				// 如果已经找到并替换过，跳过重复行
-				continue
-			}
-			found = true
-			// 值为空时注释掉该配置项
-			if value == "" {
-				if !strings.HasPrefix(trimmed, ";") && !strings.HasPrefix(trimmed, "#") {
-					result = append(result, ";"+line)
-				} else {
-					result = append(result, line)
-				}
-				continue
-			}
-			result = append(result, key+" = "+value)
-		} else {
-			result = append(result, line)
-		}
-	}
-	if !found && value != "" {
-		result = append(result, key+" = "+value)
-	}
-	return strings.Join(result, "\n")
 }

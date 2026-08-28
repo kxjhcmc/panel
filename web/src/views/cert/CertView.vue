@@ -37,7 +37,7 @@ const updateModel = ref<any>({
   type: 'P256',
   dns_id: null,
   account_id: null,
-  website_id: null,
+  website_ids: [],
   auto_renewal: true,
   cert: '',
   key: '',
@@ -73,9 +73,73 @@ const deployModel = ref<any>({
   websites: [],
   enable_https: true,
 })
+const deployDomains = ref<string[]>([])
+const deployWebsiteOptions = computed(() =>
+  websites.value.map((website: any) => ({
+    label: website.domains?.length
+      ? `${website.label} (${website.domains.join(', ')})`
+      : website.label,
+    value: website.value,
+  })),
+)
 const obtain = ref(false)
 const obtainCert = ref(0)
 const obtainMode = ref<'obtain' | 'renew'>('obtain')
+
+const normalizeDomain = (domain: string) => {
+  const value = domain.trim().toLowerCase().replace(/\.$/, '')
+  const wildcard = value.startsWith('*.')
+  const hostname = wildcard ? value.slice(2) : value
+
+  try {
+    const normalized = new URL(`http://${hostname}`).hostname
+    return wildcard ? `*.${normalized}` : normalized
+  } catch {
+    return value
+  }
+}
+
+const isDomainCovered = (certDomain: string, websiteDomain: string) => {
+  const cert = normalizeDomain(certDomain)
+  const domain = normalizeDomain(websiteDomain)
+  if (cert === domain) return true
+  if (!cert.startsWith('*.')) return false
+
+  const suffix = cert.slice(2)
+  if (!domain.endsWith(`.${suffix}`)) return false
+
+  const prefix = domain.slice(0, -(suffix.length + 1))
+  return prefix !== '' && !prefix.includes('.')
+}
+
+const handleOpenDeploy = (row: any) => {
+  deployModel.value.id = row.id
+  deployModel.value.websites = row.website_ids || []
+  deployModel.value.enable_https = true
+  deployDomains.value = row.domains || []
+  deployModal.value = true
+}
+
+const handleMatchWebsites = () => {
+  const matched = websites.value
+    .filter((website: any) => {
+      const domains = website.domains?.filter(Boolean) || []
+      return (
+        domains.length > 0 &&
+        domains.every((domain: string) =>
+          deployDomains.value.some((certDomain) => isDomainCovered(certDomain, domain)),
+        )
+      )
+    })
+    .map((website: any) => website.value)
+
+  if (matched.length === 0) {
+    window.$message.warning($gettext('No matching websites found'))
+    return
+  }
+
+  deployModel.value.websites = [...new Set([...deployModel.value.websites, ...matched])]
+}
 
 const columns: any = [
   {
@@ -142,6 +206,30 @@ const columns: any = [
         return $gettext('None')
       }
       return accounts.value?.find((item: any) => item.value === row.account_id)?.label
+    },
+  },
+  {
+    title: $gettext('Associated Website'),
+    key: 'website_ids',
+    minWidth: 200,
+    resizable: true,
+    render(row: any) {
+      if (!row.website_ids?.length) {
+        return h(NTag, null, { default: () => $gettext('None') })
+      }
+      return h(NFlex, null, {
+        default: () =>
+          row.website_ids.map((id: number) =>
+            h(
+              NTag,
+              { type: 'success' },
+              {
+                default: () =>
+                  websites.value?.find((item: any) => item.value === id)?.label ?? String(id),
+              },
+            ),
+          ),
+      })
     },
   },
   {
@@ -216,13 +304,7 @@ const columns: any = [
             {
               size: 'small',
               type: 'info',
-              onClick: () => {
-                deployModel.value.id = row.id
-                if (row.website_id != 0) {
-                  deployModel.value.websites = [row.website_id]
-                }
-                deployModal.value = true
-              },
+              onClick: () => handleOpenDeploy(row),
             },
             { default: () => $gettext('Deploy') },
           ),
@@ -275,7 +357,7 @@ const columns: any = [
               updateModel.value.type = row.type
               updateModel.value.dns_id = row.dns_id == 0 ? null : row.dns_id
               updateModel.value.account_id = row.account_id == 0 ? null : row.account_id
-              updateModel.value.website_id = row.website_id == 0 ? null : row.website_id
+              updateModel.value.website_ids = row.website_ids || []
               updateModel.value.auto_renewal = row.auto_renewal
               updateModel.value.cert = row.cert
               updateModel.value.key = row.key
@@ -313,7 +395,7 @@ const columns: any = [
   },
 ]
 
-const { loading, data, page, total, pageSize, pageCount, refresh } = usePagination(
+const { loading, data, page, total, pageSize, refresh } = usePagination(
   (page, pageSize) => cert.certs(page, pageSize),
   {
     initialData: { total: 0, list: [] },
@@ -334,7 +416,7 @@ const handleUpdateCert = () => {
       updateModel.value.type = 'P256'
       updateModel.value.dns_id = null
       updateModel.value.account_id = null
-      updateModel.value.website_id = null
+      updateModel.value.website_ids = []
       updateModel.value.auto_renewal = true
       updateModel.value.cert = ''
       updateModel.value.key = ''
@@ -353,7 +435,7 @@ const handleAutoRenewalUpdate = (row: any) => {
   updateModel.value.type = row.type
   updateModel.value.dns_id = row.dns_id == 0 ? null : row.dns_id
   updateModel.value.account_id = row.account_id == 0 ? null : row.account_id
-  updateModel.value.website_id = row.website_id == 0 ? null : row.website_id
+  updateModel.value.website_ids = row.website_ids || []
   updateModel.value.auto_renewal = !row.auto_renewal
   updateModel.value.cert = row.cert
   updateModel.value.key = row.key
@@ -369,7 +451,7 @@ const handleAutoRenewalUpdate = (row: any) => {
       updateModel.value.type = 'P256'
       updateModel.value.dns_id = null
       updateModel.value.account_id = null
-      updateModel.value.website_id = null
+      updateModel.value.website_ids = []
       updateModel.value.auto_renewal = true
       updateModel.value.cert = ''
       updateModel.value.key = ''
@@ -378,17 +460,18 @@ const handleAutoRenewalUpdate = (row: any) => {
     })
 }
 
-const handleDeployCert = async () => {
-  const promises = deployModel.value.websites.map((website: any) =>
-    cert.deploy(deployModel.value.id, website, deployModel.value.enable_https),
-  )
-  await Promise.all(promises)
-
-  deployModal.value = false
-  deployModel.value.id = null
-  deployModel.value.websites = []
-  deployModel.value.enable_https = true
-  window.$message.success($gettext('Deployment successful'))
+const handleDeployCert = () => {
+  useRequest(
+    cert.deploy(deployModel.value.id, deployModel.value.websites, deployModel.value.enable_https),
+  ).onSuccess(() => {
+    refresh()
+    deployModal.value = false
+    deployModel.value.id = null
+    deployModel.value.websites = []
+    deployModel.value.enable_https = true
+    deployDomains.value = []
+    window.$message.success($gettext('Deployment successful'))
+  })
 }
 
 const handleShowModalClose = () => {
@@ -415,7 +498,7 @@ onUnmounted(() => {
       v-model:pageSize="pageSize"
       striped
       remote
-      :scroll-x="1800"
+      :scroll-x="2000"
       :loading="loading"
       :columns="columns"
       :data="data"
@@ -464,10 +547,11 @@ onUnmounted(() => {
             :options="algorithms"
           />
         </n-form-item>
-        <n-form-item path="website_id" :label="$gettext('Website')">
+        <n-form-item path="website_ids" :label="$gettext('Website')">
           <n-select
-            v-model:value="updateModel.website_id"
-            :placeholder="$gettext('Select website for certificate deployment')"
+            v-model:value="updateModel.website_ids"
+            :placeholder="$gettext('Select websites for certificate deployment')"
+            multiple
             clearable
             :options="websites"
           />
@@ -580,20 +664,41 @@ onUnmounted(() => {
   >
     <n-flex vertical>
       <n-form :model="deployModel">
-        <n-form-item path="website_id" :label="$gettext('Website')">
-          <n-select
-            v-model:value="deployModel.websites"
-            :placeholder="$gettext('Select websites to deploy the certificate')"
-            clearable
-            multiple
-            :options="websites"
-          />
+        <n-form-item path="websites" :label="$gettext('Website')">
+          <n-flex vertical class="w-full">
+            <n-flex justify="end">
+              <n-button
+                type="primary"
+                secondary
+                :disabled="deployDomains.length === 0 || websites.length === 0"
+                @click="handleMatchWebsites"
+              >
+                {{ $gettext('Match Websites') }}
+              </n-button>
+            </n-flex>
+            <n-transfer
+              v-model:value="deployModel.websites"
+              :options="deployWebsiteOptions"
+              :source-title="$gettext('Available')"
+              :target-title="$gettext('Selected')"
+              source-filterable
+              target-filterable
+              virtual-scroll
+            />
+          </n-flex>
         </n-form-item>
         <n-form-item path="enable_https" :label="$gettext('Enable HTTPS')">
           <n-switch v-model:value="deployModel.enable_https" />
         </n-form-item>
       </n-form>
-      <n-button type="info" block @click="handleDeployCert">{{ $gettext('Submit') }}</n-button>
+      <n-button
+        type="info"
+        block
+        :disabled="deployModel.websites.length === 0"
+        @click="handleDeployCert"
+      >
+        {{ $gettext('Submit') }}
+      </n-button>
     </n-flex>
   </n-modal>
   <n-modal

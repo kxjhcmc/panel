@@ -12,6 +12,7 @@ export function translateTitle(key: string): string {
     Files: $gettext('Files'),
     Firewall: $gettext('Firewall'),
     Home: $gettext('Home'),
+    Security: $gettext('Security'),
     Logs: $gettext('Logs'),
     Monitoring: $gettext('Monitoring'),
     Project: $gettext('Project'),

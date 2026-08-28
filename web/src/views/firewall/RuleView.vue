@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { NButton, NDataTable, NPopover, NSpin, NTag } from 'naive-ui'
+import { NButton, NDataTable, NPopover, NRadioButton, NRadioGroup, NSpin, NTag } from 'naive-ui'
 import { useGettext } from 'vue3-gettext'
 
 import firewall from '@/api/panel/firewall'
@@ -9,6 +9,29 @@ import CreateModal from '@/views/firewall/CreateModal.vue'
 const { $gettext } = useGettext()
 const { confirmDelete } = useConfirm()
 const createModalShow = ref(false)
+const strategyUpdating = ref<Record<string, boolean>>({})
+
+const strategyOptions = [
+  { label: $gettext('Accept'), value: 'accept' },
+  { label: $gettext('Drop'), value: 'drop' },
+  { label: $gettext('Reject'), value: 'reject' },
+]
+
+const handleStrategyUpdate = (row: any, strategy: string) => {
+  if (row.strategy === strategy) return
+
+  const key = JSON.stringify(row)
+  if (strategyUpdating.value[key]) return
+  strategyUpdating.value[key] = true
+  useRequest(firewall.updateRuleStrategy(row, strategy))
+    .onSuccess(() => {
+      refresh()
+      window.$message.success($gettext('Modified successfully'))
+    })
+    .onComplete(() => {
+      delete strategyUpdating.value[key]
+    })
+}
 
 // 端口进程信息缓存
 const portUsageCache = ref<Record<string, any>>({})
@@ -154,29 +177,38 @@ const columns: any = [
   {
     title: $gettext('Strategy'),
     key: 'strategy',
-    width: 150,
+    width: 280,
     render(row: any): any {
+      if (strategyOptions.some((option) => option.value === row.strategy)) {
+        const key = JSON.stringify(row)
+        return h(
+          NRadioGroup,
+          {
+            value: row.strategy,
+            name: `strategy-${row.family}-${row.protocol}-${row.port_start}-${row.port_end}-${row.address}-${row.direction}`,
+            size: 'small',
+            disabled: strategyUpdating.value[key],
+            onUpdateValue: (strategy: string) => handleStrategyUpdate(row, strategy),
+          },
+          {
+            default: () =>
+              strategyOptions.map((option) =>
+                h(NRadioButton, {
+                  key: option.value,
+                  label: option.label,
+                  value: option.value,
+                }),
+              ),
+          },
+        )
+      }
+
       return h(
         NTag,
-        {
-          type:
-            row.strategy === 'accept'
-              ? 'success'
-              : row.strategy === 'drop'
-                ? 'warning'
-                : row.strategy === 'reject'
-                  ? 'error'
-                  : 'default',
-        },
+        { type: 'default' },
         {
           default: () => {
             switch (row.strategy) {
-              case 'accept':
-                return $gettext('Accept')
-              case 'drop':
-                return $gettext('Drop')
-              case 'reject':
-                return $gettext('Reject')
               case 'mark':
                 return $gettext('Mark')
               default:
@@ -251,7 +283,7 @@ const columns: any = [
   },
 ]
 
-const { loading, data, page, total, pageSize, pageCount, refresh } = usePagination(
+const { loading, data, page, total, pageSize, refresh } = usePagination(
   (page, pageSize) => firewall.rules(page, pageSize),
   {
     initialData: { total: 0, list: [] },
@@ -262,6 +294,27 @@ const { loading, data, page, total, pageSize, pageCount, refresh } = usePaginati
 )
 
 const selectedRowKeys = ref<any>([])
+const importing = ref(false)
+
+// 从 xlsx 导入规则
+const handleImport = ({ file }: any) => {
+  const formData = new FormData()
+  formData.append('file', file.file)
+  importing.value = true
+  useRequest(firewall.importRules(formData))
+    .onSuccess(({ data }: any) => {
+      window.$message.success(
+        $gettext('Import finished: %{succeeded} succeeded, %{failed} failed', {
+          succeeded: data.succeeded,
+          failed: data.failed,
+        }),
+      )
+      refresh()
+    })
+    .onComplete(() => {
+      importing.value = false
+    })
+}
 
 const handleDelete = async (row: any) => {
   useRequest(firewall.deleteRule(row)).onSuccess(() => {
@@ -287,10 +340,6 @@ const batchDelete = async () => {
   window.$message.success($gettext('Deleted successfully'))
 }
 
-watch(createModalShow, () => {
-  refresh()
-})
-
 onMounted(() => {
   refresh()
 })
@@ -313,6 +362,20 @@ onMounted(() => {
           </n-button>
         </template>
       </ConfirmDialog>
+      <n-button tag="a" :href="firewall.ruleExportUrl" target="_blank" ghost>
+        {{ $gettext('Export') }}
+      </n-button>
+      <!-- n-upload 默认占满整行,收窄避免按钮组换行 -->
+      <n-upload
+        accept=".xlsx"
+        :show-file-list="false"
+        :custom-request="handleImport"
+        style="width: auto"
+      >
+        <n-button :loading="importing" :disabled="importing" ghost>
+          {{ $gettext('Import') }}
+        </n-button>
+      </n-upload>
     </n-flex>
     <n-data-table
       v-model:checked-row-keys="selectedRowKeys"
@@ -320,7 +383,7 @@ onMounted(() => {
       v-model:pageSize="pageSize"
       striped
       remote
-      :scroll-x="1500"
+      :scroll-x="1650"
       :loading="loading"
       :columns="columns"
       :data="data"
@@ -335,7 +398,7 @@ onMounted(() => {
       }"
     />
   </n-flex>
-  <create-modal v-model:show="createModalShow" />
+  <create-modal v-model:show="createModalShow" @created="refresh" />
 </template>
 
 <style scoped lang="scss"></style>

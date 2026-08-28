@@ -3,19 +3,19 @@ package service
 import (
 	"net/http"
 
-	"github.com/libtnb/chix"
+	"github.com/libtnb/chix/v2"
 
 	"github.com/acepanel/panel/v3/internal/biz"
-	"github.com/acepanel/panel/v3/internal/http/request"
+	"github.com/acepanel/panel/v3/internal/request"
 )
 
 type SSHService struct {
-	sshRepo biz.SSHRepo
+	sshRepo *biz.SSHUsecase
 }
 
-func NewSSHService(ssh biz.SSHRepo) *SSHService {
+func NewSSHService(sshUsecase *biz.SSHUsecase) *SSHService {
 	return &SSHService{
-		sshRepo: ssh,
+		sshRepo: sshUsecase,
 	}
 }
 
@@ -92,6 +92,37 @@ func (s *SSHService) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err = s.sshRepo.Delete(r.Context(), req.ID); err != nil {
+		Error(w, http.StatusInternalServerError, "%v", err)
+		return
+	}
+
+	Success(w, nil)
+}
+
+func (s *SSHService) ListFiles(w http.ResponseWriter, r *http.Request) {
+	req, err := Bind[request.SSHFile](r)
+	if err != nil {
+		Error(w, http.StatusUnprocessableEntity, "%v", err)
+		return
+	}
+
+	files, err := s.sshRepo.ListFiles(req.ID, req.Path)
+	if err != nil {
+		Error(w, http.StatusInternalServerError, "%v", err)
+		return
+	}
+
+	Success(w, files)
+}
+
+func (s *SSHService) Mkdir(w http.ResponseWriter, r *http.Request) {
+	req, err := Bind[request.SSHFile](r)
+	if err != nil {
+		Error(w, http.StatusUnprocessableEntity, "%v", err)
+		return
+	}
+
+	if err = s.sshRepo.Mkdir(req.ID, req.Path); err != nil {
 		Error(w, http.StatusInternalServerError, "%v", err)
 		return
 	}

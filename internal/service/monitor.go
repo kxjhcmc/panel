@@ -8,19 +8,19 @@ import (
 	"github.com/samber/lo"
 
 	"github.com/acepanel/panel/v3/internal/biz"
-	"github.com/acepanel/panel/v3/internal/http/request"
+	"github.com/acepanel/panel/v3/internal/request"
 	"github.com/acepanel/panel/v3/pkg/types"
 )
 
 type MonitorService struct {
-	settingRepo biz.SettingRepo
-	monitorRepo biz.MonitorRepo
+	settingRepo *biz.SettingUsecase
+	monitorRepo *biz.MonitorUsecase
 }
 
-func NewMonitorService(setting biz.SettingRepo, monitor biz.MonitorRepo) *MonitorService {
+func NewMonitorService(monitorUsecase *biz.MonitorUsecase, settingUsecase *biz.SettingUsecase) *MonitorService {
 	return &MonitorService{
-		settingRepo: setting,
-		monitorRepo: monitor,
+		settingRepo: settingUsecase,
+		monitorRepo: monitorUsecase,
 	}
 }
 

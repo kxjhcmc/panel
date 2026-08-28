@@ -1,33 +1,52 @@
 package redis
 
 import (
+	"context"
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
+	redigo "github.com/gomodule/redigo/redis"
 	"github.com/leonelquinteros/gotext"
 	"github.com/samber/lo"
+	"github.com/spf13/cast"
 
 	"github.com/acepanel/panel/v3/internal/app"
+	"github.com/acepanel/panel/v3/internal/apps/common"
+	"github.com/acepanel/panel/v3/internal/apps/confval"
 	"github.com/acepanel/panel/v3/internal/biz"
 	"github.com/acepanel/panel/v3/internal/service"
+	"github.com/acepanel/panel/v3/pkg/db"
 	"github.com/acepanel/panel/v3/pkg/io"
 	"github.com/acepanel/panel/v3/pkg/shell"
 	"github.com/acepanel/panel/v3/pkg/systemctl"
+	"github.com/acepanel/panel/v3/pkg/tools"
 	"github.com/acepanel/panel/v3/pkg/types"
 )
 
 type App struct {
 	t                  *gotext.Locale
 	databaseServerRepo biz.DatabaseServerRepo
+	taskRepo           biz.TaskRepo
+	slug               string // 服务名与配置目录名，如 redis、valkey
+	name               string // 展示名，如 Redis、Valkey
 }
 
-func NewApp(t *gotext.Locale, databaseServer biz.DatabaseServerRepo) *App {
+func NewApp(t *gotext.Locale, databaseServerRepo biz.DatabaseServerRepo, taskRepo biz.TaskRepo) *App {
+	return New("redis", "Redis", t, databaseServerRepo, taskRepo)
+}
+
+func New(slug, name string, t *gotext.Locale, databaseServerRepo biz.DatabaseServerRepo, taskRepo biz.TaskRepo) *App {
 	return &App{
 		t:                  t,
-		databaseServerRepo: databaseServer,
+		databaseServerRepo: databaseServerRepo,
+		taskRepo:           taskRepo,
+		slug:               slug,
+		name:               name,
 	}
 }
 
@@ -37,17 +56,24 @@ func (s *App) Route(r chi.Router) {
 	r.Post("/config", s.UpdateConfig)
 	r.Get("/config_tune", s.GetConfigTune)
 	r.Post("/config_tune", s.UpdateConfigTune)
+	// 性能诊断
+	r.Get("/slow_log", s.SlowLog)
+	r.Post("/slow_log/reset", s.ResetSlowLog)
+	r.Get("/clients", s.ClientList)
+	r.Post("/clients/kill", s.KillClient)
+	r.Get("/memory", s.MemoryStatus)
+	r.Post("/bigkeys", s.ScanBigKeys)
 }
 
 func (s *App) Status() string {
-	ok, _ := systemctl.Status("redis")
+	ok, _ := systemctl.Status(s.slug)
 	return types.AggregateAppStatus(ok)
 }
 
 func (s *App) Load(w http.ResponseWriter, r *http.Request) {
-	status, err := systemctl.Status("redis")
+	status, err := systemctl.Status(s.slug)
 	if err != nil {
-		service.Error(w, http.StatusInternalServerError, s.t.Get("failed to get redis status: %v", err))
+		service.Error(w, http.StatusInternalServerError, s.t.Get("failed to get %s status: %v", s.name, err))
 		return
 	}
 	if !status {
@@ -55,9 +81,9 @@ func (s *App) Load(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 检查 Redis 密码
+	// 检查密码
 	withPassword := ""
-	config, err := io.Read(fmt.Sprintf("%s/server/redis/redis.conf", app.Root))
+	config, err := io.Read(s.confPath())
 	if err != nil {
 		service.Error(w, http.StatusInternalServerError, "%v", err)
 		return
@@ -68,9 +94,9 @@ func (s *App) Load(w http.ResponseWriter, r *http.Request) {
 		withPassword = " -a " + matches[1]
 	}
 
-	raw, err := shell.Execf("redis-cli%s info", withPassword)
+	raw, err := shell.Execf("%s%s info", s.slug+"-cli", withPassword)
 	if err != nil {
-		service.Error(w, http.StatusInternalServerError, s.t.Get("failed to get redis info: %v", err))
+		service.Error(w, http.StatusInternalServerError, s.t.Get("failed to get %s info: %v", s.name, err))
 		return
 	}
 
@@ -102,60 +128,38 @@ func (s *App) Load(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *App) GetConfig(w http.ResponseWriter, r *http.Request) {
-	config, err := io.Read(fmt.Sprintf("%s/server/redis/redis.conf", app.Root))
-	if err != nil {
-		service.Error(w, http.StatusInternalServerError, "%v", err)
-		return
-	}
-
-	service.Success(w, config)
+	common.ServeConfig(w, s.confPath())
 }
 
 func (s *App) UpdateConfig(w http.ResponseWriter, r *http.Request) {
-	req, err := service.Bind[UpdateConfig](r)
-	if err != nil {
-		service.Error(w, http.StatusUnprocessableEntity, "%v", err)
-		return
-	}
-
-	if err = io.Write(fmt.Sprintf("%s/server/redis/redis.conf", app.Root), req.Config, 0644); err != nil {
-		service.Error(w, http.StatusInternalServerError, "%v", err)
-		return
-	}
-
-	if err = systemctl.Restart("redis"); err != nil {
-		service.Error(w, http.StatusInternalServerError, "%v", err)
-		return
-	}
-
-	service.Success(w, nil)
+	common.SaveConfig(w, r, s.confPath(), s.slug)
 }
 
-// GetConfigTune 获取 Redis 配置调整参数
+// GetConfigTune 获取配置调整参数
 func (s *App) GetConfigTune(w http.ResponseWriter, r *http.Request) {
-	config, err := io.Read(fmt.Sprintf("%s/server/redis/redis.conf", app.Root))
+	config, err := io.Read(s.confPath())
 	if err != nil {
 		service.Error(w, http.StatusInternalServerError, "%v", err)
 		return
 	}
 
 	tune := ConfigTune{
-		Bind:            s.getRedisValue(config, "bind"),
-		Port:            s.getRedisValue(config, "port"),
-		Databases:       s.getRedisValue(config, "databases"),
-		Requirepass:     s.getRedisValue(config, "requirepass"),
-		Timeout:         s.getRedisValue(config, "timeout"),
-		TCPKeepalive:    s.getRedisValue(config, "tcp-keepalive"),
-		Maxmemory:       s.getRedisValue(config, "maxmemory"),
-		MaxmemoryPolicy: s.getRedisValue(config, "maxmemory-policy"),
-		Appendonly:      s.getRedisValue(config, "appendonly"),
-		Appendfsync:     s.getRedisValue(config, "appendfsync"),
+		Bind:            confval.Directive.Get(config, "bind"),
+		Port:            confval.Directive.Get(config, "port"),
+		Databases:       confval.Directive.Get(config, "databases"),
+		Requirepass:     confval.Directive.Get(config, "requirepass"),
+		Timeout:         confval.Directive.Get(config, "timeout"),
+		TCPKeepalive:    confval.Directive.Get(config, "tcp-keepalive"),
+		Maxmemory:       confval.Directive.Get(config, "maxmemory"),
+		MaxmemoryPolicy: confval.Directive.Get(config, "maxmemory-policy"),
+		Appendonly:      confval.Directive.Get(config, "appendonly"),
+		Appendfsync:     confval.Directive.Get(config, "appendfsync"),
 	}
 
 	service.Success(w, tune)
 }
 
-// UpdateConfigTune 更新 Redis 配置调整参数
+// UpdateConfigTune 更新配置调整参数
 func (s *App) UpdateConfigTune(w http.ResponseWriter, r *http.Request) {
 	req, err := service.Bind[ConfigTune](r)
 	if err != nil {
@@ -163,96 +167,290 @@ func (s *App) UpdateConfigTune(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	confPath := fmt.Sprintf("%s/server/redis/redis.conf", app.Root)
+	confPath := s.confPath()
 	config, err := io.Read(confPath)
 	if err != nil {
 		service.Error(w, http.StatusInternalServerError, "%v", err)
 		return
 	}
 
-	config = s.setRedisValue(config, "bind", req.Bind)
-	config = s.setRedisValue(config, "port", req.Port)
-	config = s.setRedisValue(config, "databases", req.Databases)
-	config = s.setRedisValue(config, "requirepass", req.Requirepass)
-	config = s.setRedisValue(config, "timeout", req.Timeout)
-	config = s.setRedisValue(config, "tcp-keepalive", req.TCPKeepalive)
-	config = s.setRedisValue(config, "maxmemory", req.Maxmemory)
-	config = s.setRedisValue(config, "maxmemory-policy", req.MaxmemoryPolicy)
-	config = s.setRedisValue(config, "appendonly", req.Appendonly)
-	config = s.setRedisValue(config, "appendfsync", req.Appendfsync)
+	config = confval.Directive.Set(config, "bind", req.Bind)
+	config = confval.Directive.Set(config, "port", req.Port)
+	config = confval.Directive.Set(config, "databases", req.Databases)
+	config = confval.Directive.Set(config, "requirepass", req.Requirepass)
+	config = confval.Directive.Set(config, "timeout", req.Timeout)
+	config = confval.Directive.Set(config, "tcp-keepalive", req.TCPKeepalive)
+	config = confval.Directive.Set(config, "maxmemory", req.Maxmemory)
+	config = confval.Directive.Set(config, "maxmemory-policy", req.MaxmemoryPolicy)
+	config = confval.Directive.Set(config, "appendonly", req.Appendonly)
+	config = confval.Directive.Set(config, "appendfsync", req.Appendfsync)
 
 	if err = io.Write(confPath, config, 0644); err != nil {
 		service.Error(w, http.StatusInternalServerError, "%v", err)
 		return
 	}
 
-	if err = systemctl.Restart("redis"); err != nil {
+	if err = systemctl.Restart(s.slug); err != nil {
 		service.Error(w, http.StatusInternalServerError, "%v", err)
 		return
 	}
 
 	// 同步密码到数据库服务器记录
-	_ = s.databaseServerRepo.UpdatePassword("local_redis", req.Requirepass)
+	_ = s.databaseServerRepo.UpdatePassword("local_"+s.slug, req.Requirepass)
 
 	service.Success(w, nil)
 }
 
-// getRedisValue 从 Redis 配置内容中获取指定键的值
-func (s *App) getRedisValue(content string, key string) string {
-	lines := strings.SplitSeq(content, "\n")
-	for line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+// SlowLog 获取慢日志
+func (s *App) SlowLog(w http.ResponseWriter, r *http.Request) {
+	conn, err := s.connect(r.Context())
+	if err != nil {
+		service.Error(w, http.StatusInternalServerError, "%v", err)
+		return
+	}
+	defer conn.Close()
+
+	reply, err := conn.Exec("SLOWLOG", "GET", 50)
+	if err != nil {
+		service.Error(w, http.StatusInternalServerError, "%v", err)
+		return
+	}
+	rows, err := redigo.Values(reply, nil)
+	if err != nil {
+		service.Error(w, http.StatusInternalServerError, "%v", err)
+		return
+	}
+
+	entries := make([]SlowLogEntry, 0, len(rows))
+	for _, row := range rows {
+		item, itemErr := redigo.Values(row, nil)
+		if itemErr != nil || len(item) < 4 {
 			continue
 		}
-		parts := strings.Fields(trimmed)
-		if len(parts) >= 2 && parts[0] == key {
-			return strings.Join(parts[1:], " ")
+		entry := SlowLogEntry{}
+		entry.ID, _ = redigo.Int64(item[0], nil)
+		if ts, tsErr := redigo.Int64(item[1], nil); tsErr == nil {
+			entry.Time = time.Unix(ts, 0).Format(time.DateTime)
 		}
+		entry.DurationUs, _ = redigo.Int64(item[2], nil)
+		if cmd, cmdErr := redigo.Strings(item[3], nil); cmdErr == nil {
+			entry.Command = strings.Join(cmd, " ")
+		}
+		if len(item) > 4 {
+			entry.Client, _ = redigo.String(item[4], nil)
+		}
+		entries = append(entries, entry)
 	}
-	return ""
+
+	service.Success(w, entries)
 }
 
-// setRedisValue 在 Redis 配置内容中设置指定键的值
-func (s *App) setRedisValue(content string, key string, value string) string {
-	value = strings.ReplaceAll(value, "\n", "")
-	value = strings.ReplaceAll(value, "\r", "")
+// ResetSlowLog 重置慢日志
+func (s *App) ResetSlowLog(w http.ResponseWriter, r *http.Request) {
+	conn, err := s.connect(r.Context())
+	if err != nil {
+		service.Error(w, http.StatusInternalServerError, "%v", err)
+		return
+	}
+	defer conn.Close()
 
-	lines := strings.Split(content, "\n")
-	result := make([]string, 0, len(lines))
-	found := false
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if trimmed == "" {
-			result = append(result, line)
+	if _, err = conn.Exec("SLOWLOG", "RESET"); err != nil {
+		service.Error(w, http.StatusInternalServerError, "%v", err)
+		return
+	}
+
+	service.Success(w, nil)
+}
+
+// ClientList 获取客户端连接列表
+func (s *App) ClientList(w http.ResponseWriter, r *http.Request) {
+	conn, err := s.connect(r.Context())
+	if err != nil {
+		service.Error(w, http.StatusInternalServerError, "%v", err)
+		return
+	}
+	defer conn.Close()
+
+	raw, err := redigo.String(conn.Exec("CLIENT", "LIST"))
+	if err != nil {
+		service.Error(w, http.StatusInternalServerError, "%v", err)
+		return
+	}
+
+	clients := make([]Client, 0)
+	for line := range strings.SplitSeq(strings.TrimSpace(raw), "\n") {
+		if line == "" {
 			continue
 		}
-		checkLine := trimmed
-		if strings.HasPrefix(checkLine, "#") {
-			checkLine = strings.TrimSpace(checkLine[1:])
+		fields := map[string]string{}
+		for kv := range strings.FieldsSeq(line) {
+			if key, value, found := strings.Cut(kv, "="); found {
+				fields[key] = value
+			}
 		}
-		parts := strings.Fields(checkLine)
-		if len(parts) >= 1 && parts[0] == key {
-			if found {
-				continue
-			}
-			found = true
-			// 值为空时注释掉该配置项
-			if value == "" {
-				if !strings.HasPrefix(trimmed, "#") {
-					result = append(result, "# "+trimmed)
-				} else {
-					result = append(result, line)
-				}
-				continue
-			}
-			result = append(result, key+" "+value)
-		} else {
-			result = append(result, line)
+		clients = append(clients, Client{
+			ID:   fields["id"],
+			Addr: fields["addr"],
+			Name: fields["name"],
+			DB:   fields["db"],
+			Age:  fields["age"],
+			Idle: fields["idle"],
+			Cmd:  fields["cmd"],
+		})
+	}
+
+	service.Success(w, clients)
+}
+
+// KillClient 踢除客户端连接
+func (s *App) KillClient(w http.ResponseWriter, r *http.Request) {
+	req, err := service.Bind[ClientKill](r)
+	if err != nil {
+		service.Error(w, http.StatusUnprocessableEntity, "%v", err)
+		return
+	}
+
+	conn, err := s.connect(r.Context())
+	if err != nil {
+		service.Error(w, http.StatusInternalServerError, "%v", err)
+		return
+	}
+	defer conn.Close()
+
+	killed, err := redigo.Int64(conn.Exec("CLIENT", "KILL", "ID", req.ID))
+	if err != nil {
+		service.Error(w, http.StatusInternalServerError, "%v", err)
+		return
+	}
+	if killed == 0 {
+		service.Error(w, http.StatusUnprocessableEntity, s.t.Get("client %d not found", req.ID))
+		return
+	}
+
+	service.Success(w, nil)
+}
+
+// MemoryStatus 获取内存诊断信息
+func (s *App) MemoryStatus(w http.ResponseWriter, r *http.Request) {
+	conn, err := s.connect(r.Context())
+	if err != nil {
+		service.Error(w, http.StatusInternalServerError, "%v", err)
+		return
+	}
+	defer conn.Close()
+
+	memory := Memory{Items: make([]types.NV, 0)}
+	memory.Doctor, err = redigo.String(conn.Exec("MEMORY", "DOCTOR"))
+	if err != nil {
+		service.Error(w, http.StatusInternalServerError, "%v", err)
+		return
+	}
+	// 空库与无问题时返回的是电影梗彩蛋文案，无展示价值
+	if strings.HasPrefix(memory.Doctor, "Hi Sam,") || strings.Contains(memory.Doctor, "can't find any memory issue") {
+		memory.Doctor = ""
+	}
+
+	// 未限制内存上限时给出预警
+	if maxmemory, mmErr := redigo.Strings(conn.Exec("CONFIG", "GET", "maxmemory")); mmErr == nil && len(maxmemory) == 2 && maxmemory[1] == "0" {
+		memory.NoLimit = true
+	}
+
+	reply, err := conn.Exec("MEMORY", "STATS")
+	if err != nil {
+		service.Error(w, http.StatusInternalServerError, "%v", err)
+		return
+	}
+	values, err := redigo.Values(reply, nil)
+	if err != nil {
+		service.Error(w, http.StatusInternalServerError, "%v", err)
+		return
+	}
+	stats := map[string]string{}
+	for i := 0; i+1 < len(values); i += 2 {
+		key, keyErr := redigo.String(values[i], nil)
+		if keyErr != nil {
+			continue
+		}
+		// 值可能为整数或字符串，嵌套数组（如 db.0）跳过
+		if v, vErr := redigo.Int64(values[i+1], nil); vErr == nil {
+			stats[key] = cast.ToString(v)
+			continue
+		}
+		if v, vErr := redigo.String(values[i+1], nil); vErr == nil {
+			stats[key] = v
 		}
 	}
-	if !found && value != "" {
-		result = append(result, key+" "+value)
+
+	// 各版本键名存在差异，仅展示存在的指标
+	items := []struct {
+		key   string
+		name  string
+		bytes bool
+	}{
+		{"peak.allocated", s.t.Get("Peak Allocated"), true},
+		{"total.allocated", s.t.Get("Total Allocated"), true},
+		{"startup.allocated", s.t.Get("Startup Allocated"), true},
+		{"dataset.bytes", s.t.Get("Dataset Size"), true},
+		{"dataset.percentage", s.t.Get("Dataset Percentage"), false},
+		{"keys.count", s.t.Get("Keys Count"), false},
+		{"keys.bytes-per-key", s.t.Get("Bytes Per Key"), true},
+		{"allocator-fragmentation.ratio", s.t.Get("Allocator Fragmentation Ratio"), false},
+		{"fragmentation", s.t.Get("Fragmentation Ratio"), false},
 	}
-	return strings.Join(result, "\n")
+	for _, item := range items {
+		value, ok := stats[item.key]
+		if !ok {
+			continue
+		}
+		if item.bytes {
+			value = tools.FormatBytes(cast.ToFloat64(value))
+		}
+		memory.Items = append(memory.Items, types.NV{Name: item.name, Value: value})
+	}
+
+	service.Success(w, memory)
+}
+
+// ScanBigKeys 扫描大 Key（异步任务）
+func (s *App) ScanBigKeys(w http.ResponseWriter, r *http.Request) {
+	config, err := io.Read(s.confPath())
+	if err != nil {
+		service.Error(w, http.StatusInternalServerError, "%v", err)
+		return
+	}
+	withPassword := ""
+	if password := confval.Directive.Get(config, "requirepass"); password != "" {
+		withPassword = " -a " + password
+	}
+
+	task := new(biz.Task)
+	task.Key = s.slug + ":bigkeys"
+	task.Name = s.t.Get("Scan %s big keys", s.name)
+	task.Status = biz.TaskStatusWaiting
+	task.Shell = fmt.Sprintf("%s-cli%s --bigkeys", s.slug, withPassword)
+	if err = s.taskRepo.Push(task); err != nil {
+		service.Error(w, http.StatusInternalServerError, "%v", err)
+		return
+	}
+
+	service.Success(w, nil)
+}
+
+// connect 从配置文件读取端口与密码建立连接
+func (s *App) connect(ctx context.Context) (*db.Redis, error) {
+	config, err := io.Read(s.confPath())
+	if err != nil {
+		return nil, err
+	}
+	port := confval.Directive.Get(config, "port")
+	if port == "" {
+		port = "6379"
+	}
+	password := confval.Directive.Get(config, "requirepass")
+
+	return db.NewRedis(ctx, "", password, "127.0.0.1:"+port)
+}
+
+func (s *App) confPath() string {
+	return filepath.Join(app.Root, "server", s.slug, s.slug+".conf")
 }

@@ -1,5 +1,4 @@
 <script setup lang="ts">
-import type { MessageReactive } from 'naive-ui'
 import { NButton, NDataTable, NFlex } from 'naive-ui'
 import { useGettext } from 'vue3-gettext'
 
@@ -15,8 +14,6 @@ import UploadModal from '@/views/backup/UploadModal.vue'
 const { $gettext } = useGettext()
 const { confirmDelete } = useConfirm()
 const type = defineModel<string>('type', { type: String, required: true })
-
-let messageReactive: MessageReactive | null = null
 
 const uploadModal = ref(false)
 const createLoading = ref(false)
@@ -65,10 +62,22 @@ const columns: any = [
   {
     title: $gettext('Actions'),
     key: 'actions',
-    width: 260,
+    width: 320,
     hideInExcel: true,
     render(row: any) {
       return h(NFlex, { size: 'small', align: 'center' }, () => [
+        h(
+          NButton,
+          {
+            size: 'small',
+            type: 'primary',
+            secondary: true,
+            onClick: () => {
+              window.open(`/api/backup/${type.value}/download?file=${encodeURIComponent(row.name)}`)
+            },
+          },
+          { default: () => $gettext('Download') },
+        ),
         h(
           NButton,
           {
@@ -101,7 +110,7 @@ const columns: any = [
   },
 ]
 
-const { loading, data, page, total, pageSize, pageCount, refresh } = usePagination(
+const { loading, data, page, total, pageSize, refresh } = usePagination(
   (page, pageSize) => backup.list(type.value, page, pageSize),
   {
     initialData: { total: 0, list: [] },
@@ -128,17 +137,15 @@ const handleCreate = () => {
 
 const handleRestore = () => {
   restoreLoading.value = true
-  messageReactive = window.$message.loading($gettext('Restoring...'), {
-    duration: 0,
-  })
-
   useRequest(backup.restore(type.value, restoreModel.value.file, restoreModel.value.target))
     .onSuccess(() => {
-      refresh()
-      window.$message.success($gettext('Restored successfully'))
+      restoreModal.value = false
+      window.$bus.emit('backup:refresh')
+      window.$message.success(
+        $gettext('Restore task created, please check the progress in background tasks'),
+      )
     })
     .onComplete(() => {
-      messageReactive?.destroy()
       restoreLoading.value = false
     })
 }

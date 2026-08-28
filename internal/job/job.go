@@ -4,6 +4,7 @@ import (
 	"log/slog"
 
 	"github.com/google/wire"
+	"github.com/leonelquinteros/gotext"
 	"github.com/libtnb/cron"
 	"gorm.io/gorm"
 
@@ -12,61 +13,48 @@ import (
 	"github.com/acepanel/panel/v3/pkg/websitestat"
 )
 
-var ProviderSet = wire.NewSet(NewJobs)
-
-type Jobs struct {
-	conf        *config.Config
-	db          *gorm.DB
-	log         *slog.Logger
-	aggregator  *websitestat.Aggregator
-	setting     biz.SettingRepo
-	cert        biz.CertRepo
-	certAccount biz.CertAccountRepo
-	backup      biz.BackupRepo
-	cache       biz.CacheRepo
-	task        biz.TaskRepo
-	scan        biz.ScanEventRepo
-	stat        biz.WebsiteStatRepo
-	website     biz.WebsiteRepo
+// Job 声明一个定时任务
+type Job struct {
+	Spec      string   // cron 表达式
+	Task      cron.Job // 任务体
+	Immediate bool     // 调度器启动后立即执行一次,不等首个调度点
 }
 
-func NewJobs(conf *config.Config, db *gorm.DB, log *slog.Logger, aggregator *websitestat.Aggregator, setting biz.SettingRepo, cert biz.CertRepo, certAccount biz.CertAccountRepo, backup biz.BackupRepo, cache biz.CacheRepo, task biz.TaskRepo, scan biz.ScanEventRepo, stat biz.WebsiteStatRepo, website biz.WebsiteRepo) *Jobs {
-	return &Jobs{
-		conf:        conf,
-		db:          db,
-		log:         log,
-		aggregator:  aggregator,
-		setting:     setting,
-		cert:        cert,
-		certAccount: certAccount,
-		backup:      backup,
-		cache:       cache,
-		task:        task,
-		scan:        scan,
-		stat:        stat,
-		website:     website,
-	}
+var ProviderSet = wire.NewSet(wire.Struct(new(Dependencies), "*"), NewJobs)
+
+// Dependencies 汇总定时任务依赖，Wire 会在生成期校验完整性。
+type Dependencies struct {
+	Alert       *biz.AlertUsecase
+	Backup      *biz.BackupUsecase
+	Cache       *biz.CacheUsecase
+	Cert        *biz.CertUsecase
+	CertAccount *biz.CertAccountUsecase
+	FileShare   *biz.FileShareUsecase
+	Monitor     *biz.MonitorUsecase
+	Notify      *biz.NotifyUsecase
+	ScanEvent   *biz.ScanEventUsecase
+	Setting     *biz.SettingUsecase
+	Tamper      *biz.TamperUsecase
+	Task        *biz.TaskUsecase
+	Website     *biz.WebsiteUsecase
+	WebsiteStat *biz.WebsiteStatUsecase
+	Conf        *config.Config
+	DB          *gorm.DB
+	T           *gotext.Locale
+	Log         *slog.Logger
+	Aggregator  *websitestat.Aggregator
 }
 
-func (r *Jobs) Register(c *cron.Cron) error {
-	if _, err := c.Add("* * * * *", NewMonitoring(r.db, r.log, r.setting)); err != nil {
-		return err
+func NewJobs(d *Dependencies) []Job {
+	return []Job{
+		NewAlert(d.Alert, d.Log),
+		NewMonitoring(d.Setting, d.Monitor, d.Log),
+		NewFirewallScan(d.ScanEvent, d.Setting, d.Log),
+		NewCertRenew(d.CertAccount, d.Cert, d.Notify, d.Setting, d.Conf, d.DB, d.T, d.Log),
+		NewFileShareClean(d.FileShare, d.Log),
+		NewPanelTask(d.Backup, d.Cache, d.Monitor, d.ScanEvent, d.Setting, d.Tamper, d.Task, d.WebsiteStat, d.Conf, d.DB, d.Log),
+		NewWebsiteStat(d.Setting, d.WebsiteStat, d.Log, d.Aggregator),
+		NewWebsiteExpire(d.Notify, d.Website, d.DB, d.T, d.Log),
+		NewTamper(d.Tamper, d.Log),
 	}
-	if _, err := c.Add("*/2 * * * *", NewFirewallScan(r.log, r.setting, r.scan)); err != nil {
-		return err
-	}
-	if _, err := c.Add("0 4 * * *", NewCertRenew(r.conf, r.db, r.log, r.setting, r.cert, r.certAccount)); err != nil {
-		return err
-	}
-	if _, err := c.Add("0 2 * * *", NewPanelTask(r.conf, r.db, r.log, r.backup, r.cache, r.task, r.setting, r.scan, r.stat)); err != nil {
-		return err
-	}
-	if _, err := c.Add("* * * * *", NewWebsiteStat(r.log, r.setting, r.stat, r.aggregator)); err != nil {
-		return err
-	}
-	if _, err := c.Add("* * * * *", NewWebsiteExpire(r.db, r.log, r.website)); err != nil {
-		return err
-	}
-
-	return nil
 }

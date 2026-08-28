@@ -5,6 +5,8 @@ defineOptions({
 
 import { useGettext } from 'vue3-gettext'
 
+import { kbToPair, postgresqlPreset, type TuneProfile } from '@/utils/tunepreset'
+
 import postgresql from '@/api/apps/postgresql'
 
 const { $gettext } = useGettext()
@@ -51,6 +53,40 @@ const logTimezone = ref('')
 const ioMethod = ref('')
 
 const saveLoading = ref(false)
+const showPresetModal = ref(false)
+const presetScenarios = computed(() => [
+  { label: $gettext('Web Application'), value: 'web' },
+  { label: 'OLTP', value: 'oltp' },
+  { label: $gettext('Data Warehouse'), value: 'dw' },
+  { label: $gettext('Mixed'), value: 'mixed' },
+])
+
+const handlePreset = (profile: TuneProfile) => {
+  const r = postgresqlPreset(profile)
+  maxConnections.value = r.maxConnections
+  sharedBuffersNum.value = r.sharedBuffers.num
+  sharedBuffersUnit.value = r.sharedBuffers.unit
+  effectiveCacheSizeNum.value = r.effectiveCacheSize.num
+  effectiveCacheSizeUnit.value = r.effectiveCacheSize.unit
+  maintenanceWorkMemNum.value = r.maintenanceWorkMem.num
+  maintenanceWorkMemUnit.value = r.maintenanceWorkMem.unit
+  const workMem = kbToPair(r.workMemKB)
+  workMemNum.value = workMem.num
+  workMemUnit.value = workMem.unit
+  const walBuffers = kbToPair(r.walBuffersKB)
+  walBuffersNum.value = walBuffers.num
+  walBuffersUnit.value = walBuffers.unit
+  minWalSizeNum.value = r.minWalSizeGB
+  minWalSizeUnit.value = 'GB'
+  maxWalSizeNum.value = r.maxWalSizeGB
+  maxWalSizeUnit.value = 'GB'
+  checkpointCompletionTarget.value = r.checkpointCompletionTarget
+  defaultStatisticsTarget.value = r.defaultStatisticsTarget
+  randomPageCost.value = r.randomPageCost
+  effectiveIoConcurrency.value = r.effectiveIoConcurrency
+  hugePages.value = r.hugePages
+  window.$message.success($gettext('Generated, review the values and save'))
+}
 
 // PostgreSQL 容量单位选项
 const sizeUnitOptions = [
@@ -170,7 +206,8 @@ const handleSave = () => {
 </script>
 
 <template>
-  <n-tabs v-model:value="currentTab" type="line" placement="left" animated>
+  <n-flex vertical>
+    <n-tabs v-model:value="currentTab" type="line" placement="left" animated>
     <n-tab-pane name="connection" :tab="$gettext('Connection')">
       <n-flex vertical>
         <n-alert type="info">
@@ -219,6 +256,9 @@ const handleSave = () => {
             @click="handleSave"
           >
             {{ $gettext('Save') }}
+          </n-button>
+          <n-button type="info" @click="showPresetModal = true">
+            {{ $gettext('Generate Recommended Configuration') }}
           </n-button>
         </n-flex>
       </n-flex>
@@ -298,6 +338,9 @@ const handleSave = () => {
           >
             {{ $gettext('Save') }}
           </n-button>
+          <n-button type="info" @click="showPresetModal = true">
+            {{ $gettext('Generate Recommended Configuration') }}
+          </n-button>
         </n-flex>
       </n-flex>
     </n-tab-pane>
@@ -364,6 +407,9 @@ const handleSave = () => {
           >
             {{ $gettext('Save') }}
           </n-button>
+          <n-button type="info" @click="showPresetModal = true">
+            {{ $gettext('Generate Recommended Configuration') }}
+          </n-button>
         </n-flex>
       </n-flex>
     </n-tab-pane>
@@ -402,6 +448,9 @@ const handleSave = () => {
           >
             {{ $gettext('Save') }}
           </n-button>
+          <n-button type="info" @click="showPresetModal = true">
+            {{ $gettext('Generate Recommended Configuration') }}
+          </n-button>
         </n-flex>
       </n-flex>
     </n-tab-pane>
@@ -435,6 +484,9 @@ const handleSave = () => {
           >
             {{ $gettext('Save') }}
           </n-button>
+          <n-button type="info" @click="showPresetModal = true">
+            {{ $gettext('Generate Recommended Configuration') }}
+          </n-button>
         </n-flex>
       </n-flex>
     </n-tab-pane>
@@ -457,8 +509,19 @@ const handleSave = () => {
           >
             {{ $gettext('Save') }}
           </n-button>
+          <n-button type="info" @click="showPresetModal = true">
+            {{ $gettext('Generate Recommended Configuration') }}
+          </n-button>
         </n-flex>
       </n-flex>
     </n-tab-pane>
-  </n-tabs>
+    </n-tabs>
+    <tune-preset-modal
+      v-model:show="showPresetModal"
+      :fields="['memory', 'cpu', 'disk', 'connections']"
+      :scenario-options="presetScenarios"
+      :memory-ratio="0.75"
+      @generate="handlePreset"
+    />
+  </n-flex>
 </template>

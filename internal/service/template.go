@@ -4,23 +4,23 @@ import (
 	"net/http"
 
 	"github.com/leonelquinteros/gotext"
-	"github.com/libtnb/chix"
+	"github.com/libtnb/chix/v2"
 
 	"github.com/acepanel/panel/v3/internal/biz"
-	"github.com/acepanel/panel/v3/internal/http/request"
+	"github.com/acepanel/panel/v3/internal/request"
 )
 
 type TemplateService struct {
 	t            *gotext.Locale
-	templateRepo biz.TemplateRepo
-	settingRepo  biz.SettingRepo
+	templateRepo *biz.TemplateUsecase
+	settingRepo  *biz.SettingUsecase
 }
 
-func NewTemplateService(t *gotext.Locale, template biz.TemplateRepo, setting biz.SettingRepo) *TemplateService {
+func NewTemplateService(settingUsecase *biz.SettingUsecase, templateUsecase *biz.TemplateUsecase, t *gotext.Locale) *TemplateService {
 	return &TemplateService{
 		t:            t,
-		templateRepo: template,
-		settingRepo:  setting,
+		templateRepo: templateUsecase,
+		settingRepo:  settingUsecase,
 	}
 }
 

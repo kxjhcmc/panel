@@ -13,6 +13,9 @@ import (
 	"github.com/acepanel/panel/v3/pkg/types"
 )
 
+// composeEnv 禁用 Podman Compose 的警告日志
+var composeEnv = []string{"PODMAN_COMPOSE_WARNING_LOGS=false"}
+
 type containerComposeRepo struct{}
 
 func NewContainerComposeRepo() biz.ContainerComposeRepo {
@@ -21,9 +24,8 @@ func NewContainerComposeRepo() biz.ContainerComposeRepo {
 
 // List 列出所有编排
 func (r *containerComposeRepo) List() ([]types.ContainerCompose, error) {
-	_ = os.Setenv("PODMAN_COMPOSE_WARNING_LOGS", "false") // 禁用 Podman Compose 的警告日志
-	raw, err := shell.Execf("docker compose ls -a --format json")
-	_ = os.Unsetenv("PODMAN_COMPOSE_WARNING_LOGS")
+	// PODMAN_COMPOSE_WARNING_LOGS 禁用 Podman Compose 的警告日志
+	raw, err := shell.ExecfWithEnv(composeEnv, "docker compose ls -a --format json")
 	if err != nil {
 		return nil, err
 	}
@@ -91,7 +93,7 @@ func (r *containerComposeRepo) Get(name string) (string, []types.KV, error) {
 // Create 创建编排文件
 func (r *containerComposeRepo) Create(name, compose string, envs []types.KV) error {
 	dir := filepath.Join(app.Root, "compose", name)
-	if err := os.MkdirAll(dir, 0644); err != nil {
+	if err := os.MkdirAll(dir, 0755); err != nil {
 		return err
 	}
 	if err := os.WriteFile(filepath.Join(dir, "docker-compose.yml"), []byte(compose), 0644); err != nil {
@@ -140,26 +142,19 @@ func (r *containerComposeRepo) Up(name string, force bool) error {
 	if force {
 		cmd += " --pull always" // 强制拉取镜像
 	}
-	_ = os.Setenv("PODMAN_COMPOSE_WARNING_LOGS", "false") // 禁用 Podman Compose 的警告日志
-	_, err := shell.Execf(cmd, file)
-	_ = os.Unsetenv("PODMAN_COMPOSE_WARNING_LOGS")
+	_, err := shell.ExecfWithEnv(composeEnv, cmd, file)
 	return err
 }
 
 // Down 停止编排
 func (r *containerComposeRepo) Down(name string) error {
 	file := filepath.Join(app.Root, "compose", name, "docker-compose.yml")
-	_ = os.Setenv("PODMAN_COMPOSE_WARNING_LOGS", "false") // 禁用 Podman Compose 的警告日志
-	_, err := shell.Execf("docker compose -f %s down", file)
-	_ = os.Unsetenv("PODMAN_COMPOSE_WARNING_LOGS")
+	_, err := shell.ExecfWithEnv(composeEnv, "docker compose -f %s down", file)
 	return err
 }
 
-// Remove 删除编排
-func (r *containerComposeRepo) Remove(name string) error {
-	if err := r.Down(name); err != nil {
-		return err
-	}
+// RemoveDir 删除编排目录
+func (r *containerComposeRepo) RemoveDir(name string) error {
 	dir := filepath.Join(app.Root, "compose", name)
 	return os.RemoveAll(dir)
 }

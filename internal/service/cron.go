@@ -3,19 +3,19 @@ package service
 import (
 	"net/http"
 
-	"github.com/libtnb/chix"
+	"github.com/libtnb/chix/v2"
 
 	"github.com/acepanel/panel/v3/internal/biz"
-	"github.com/acepanel/panel/v3/internal/http/request"
+	"github.com/acepanel/panel/v3/internal/request"
 )
 
 type CronService struct {
-	cronRepo biz.CronRepo
+	cronRepo *biz.CronUsecase
 }
 
-func NewCronService(cron biz.CronRepo) *CronService {
+func NewCronService(cronUsecase *biz.CronUsecase) *CronService {
 	return &CronService{
-		cronRepo: cron,
+		cronRepo: cronUsecase,
 	}
 }
 

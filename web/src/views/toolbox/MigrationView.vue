@@ -1,841 +1,647 @@
 <script setup lang="ts">
 defineOptions({
-  name: 'toolbox-migration',
+  name: 'toolbox-migration'
 })
 
+import type { DataTableColumns } from 'naive-ui'
+import { NButton, NInput, NTag, NText } from 'naive-ui'
 import { useRequest } from 'alova/client'
 import { useGettext } from 'vue3-gettext'
 
-import home from '@/api/panel/home'
-import migration from '@/api/panel/toolbox-migration'
+import migration, {
+  type MigrationConnection,
+  type MigrationPanel,
+  type MigrationResource,
+  type MigrationResult
+} from '@/api/panel/toolbox-migration'
 import ws from '@/api/ws'
 
 const { $gettext } = useGettext()
 
-// 步骤状态
-const currentStep = ref(1)
+const step = ref(0)
 const loading = ref(false)
-
-// 第一步：连接信息
-const connectionForm = ref({
+const connection = ref<MigrationConnection>({
+  source_panel: 'acepanel',
   url: '',
   token_id: 1,
   token: '',
+  api_key: ''
 })
 
-// 第二步：环境对比
-const localEnv = ref<any>(null)
-const remoteEnv = ref<any>(null)
-const envCheckPassed = ref(false)
-const envWarnings = ref<string[]>([])
+const source = ref<Record<string, any> | null>(null)
+const resources = ref<MigrationResource[]>([])
+const selected = ref<string[]>([])
+const targetPaths = ref<Record<string, string>>({})
+const targetUsers = ref<Record<string, string>>({})
+const skipBlocked = ref(false)
+const stopSource = ref(false)
 
-// 第三步：迁移项选择
-const websites = ref<any[]>([])
-const databases = ref<any[]>([])
-const databaseUsers = ref<any[]>([])
-const projects = ref<any[]>([])
-const selectedWebsites = ref<number[]>([])
-const selectedDatabases = ref<string[]>([])
-const selectedDatabaseUsers = ref<number[]>([])
-const selectedProjects = ref<number[]>([])
-const stopOnMig = ref(true)
+const logs = ref<string[]>([])
+const results = ref<MigrationResult[]>([])
+const running = ref(false)
+const startedAt = ref<string | null>(null)
+const endedAt = ref<string | null>(null)
+const now = ref(Date.now())
 
-// 第四步：迁移进度
-const migrationLogs = ref<string[]>([])
-const migrationResults = ref<any[]>([])
-const migrationRunning = ref(false)
-
-// 第五步：迁移结果
-const migrationStartedAt = ref<string | null>(null)
-const migrationEndedAt = ref<string | null>(null)
-
-// WebSocket 连接
 let progressWs: WebSocket | null = null
+let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+let clock: ReturnType<typeof setInterval> | null = null
 
-// 日志容器引用
-const logContainer = ref<HTMLElement | null>(null)
+const panels = computed(() => [
+  {
+    value: 'acepanel' as MigrationPanel,
+    title: $gettext('AcePanel → AcePanel'),
+    description: $gettext('Push websites, databases, users and projects to another AcePanel.')
+  },
+  {
+    value: 'baota' as MigrationPanel,
+    title: $gettext('BaoTa → AcePanel'),
+    description: $gettext('Pull websites, databases and projects from BT Panel.')
+  },
+  {
+    value: 'onepanel' as MigrationPanel,
+    title: $gettext('1Panel → AcePanel'),
+    description: $gettext('Pull websites and databases from 1Panel.')
+  }
+])
 
-// 初始化：检查是否有正在进行的迁移
-const checkStatus = () => {
-  useRequest(migration.status()).onSuccess(({ data }: any) => {
-    if (data.step === 'running') {
-      currentStep.value = 4
-      migrationRunning.value = true
-      connectProgressWs()
-    } else if (data.step === 'done') {
-      currentStep.value = 5
-      migrationResults.value = data.results || []
-      migrationStartedAt.value = data.started_at
-      migrationEndedAt.value = data.ended_at
+const currentDescription = computed(
+  () => panels.value.find((panel) => panel.value === connection.value.source_panel)?.description ?? ''
+)
+
+const isPush = computed(() => connection.value.source_panel === 'acepanel')
+
+const typeLabels = computed<Record<string, string>>(() => ({
+  website: $gettext('Website'),
+  database: $gettext('Database'),
+  database_user: $gettext('Database User'),
+  project: $gettext('Project')
+}))
+
+const statusLabels = computed<Record<string, string>>(() => ({
+  pending: $gettext('Pending'),
+  running: $gettext('Running'),
+  success: $gettext('Success'),
+  partial: $gettext('Completed with warnings'),
+  failed: $gettext('Failed'),
+  skipped: $gettext('Skipped')
+}))
+
+const stageLabels = computed<Record<string, string>>(() => ({
+  backup: $gettext('Creating backup'),
+  transfer: $gettext('Transferring'),
+  import: $gettext('Importing'),
+  done: $gettext('Done')
+}))
+
+const blockedOf = (item: MigrationResource) => [
+  ...item.blockers,
+  ...item.depends_on
+    .filter((key) => !selected.value.includes(key))
+    .map(() => $gettext('a required dependency was not selected'))
+]
+
+const selectedBlocked = computed(
+  () => resources.value.filter((item) => selected.value.includes(item.key) && blockedOf(item).length)
+    .length
+)
+
+const stats = computed(() => {
+  const counters = { success: 0, partial: 0, failed: 0, skipped: 0 }
+  for (const result of results.value) {
+    if (result.status in counters) counters[result.status as keyof typeof counters]++
+  }
+  return counters
+})
+
+const progress = computed(() => {
+  if (!results.value.length) return 0
+  const done = results.value.filter((item) => item.stage === 'done').length
+  return Math.round((done / results.value.length) * 100)
+})
+
+const columns = computed<DataTableColumns<MigrationResource>>(() => [
+  { type: 'selection', disabled: (row) => !skipBlocked.value && row.blockers.length > 0 },
+  {
+    title: $gettext('Type'),
+    key: 'type',
+    width: 120,
+    render: (row) => typeLabels.value[row.type] ?? row.type
+  },
+  {
+    title: $gettext('Name'),
+    key: 'name',
+    minWidth: 200,
+    render: (row) =>
+      h('div', null, [
+        h('div', null, row.name),
+        row.subtype ? h(NText, { depth: 3, style: 'font-size: 12px' }, () => row.subtype) : null
+      ])
+  },
+  {
+    title: $gettext('Status'),
+    key: 'status',
+    width: 100,
+    render: (row) =>
+      h(
+        NTag,
+        { type: row.status === 'running' ? 'success' : 'default', size: 'small' },
+        () => (row.status === 'running' ? $gettext('Running') : $gettext('Stopped'))
+      )
+  },
+  {
+    title: $gettext('Size'),
+    key: 'size',
+    width: 100,
+    render: (row) => (row.size > 0 ? formatSize(row.size) : '—')
+  },
+  {
+    title: $gettext('Target'),
+    key: 'target',
+    minWidth: 260,
+    render: (row) => {
+      if (row.type !== 'project') return row.target_name
+      return h('div', { style: 'display: flex; gap: 8px' }, [
+        h(NInput, {
+          size: 'small',
+          value: targetPaths.value[row.key] ?? row.target_path,
+          placeholder: $gettext('Target directory'),
+          onUpdateValue: (value: string) => (targetPaths.value[row.key] = value)
+        }),
+        h(NInput, {
+          size: 'small',
+          style: 'width: 120px',
+          value: targetUsers.value[row.key] ?? '',
+          placeholder: $gettext('Run as'),
+          onUpdateValue: (value: string) => (targetUsers.value[row.key] = value)
+        })
+      ])
     }
-  })
+  },
+  {
+    title: $gettext('Notes'),
+    key: 'notes',
+    minWidth: 240,
+    render: (row) => {
+      const notes = [
+        ...blockedOf(row).map((text) => ({ type: 'error' as const, text })),
+        ...row.warnings.map((text) => ({ type: 'warning' as const, text }))
+      ]
+      if (!notes.length) return '—'
+      return h(
+        'div',
+        { style: 'display: flex; flex-direction: column; gap: 4px' },
+        notes.map((note) => h(NText, { type: note.type, style: 'font-size: 12px' }, () => note.text))
+      )
+    }
+  }
+])
+
+const resultColumns = computed<DataTableColumns<MigrationResult>>(() => [
+  {
+    title: $gettext('Type'),
+    key: 'type',
+    width: 120,
+    render: (row) => typeLabels.value[row.type] ?? row.type
+  },
+  { title: $gettext('Name'), key: 'name', minWidth: 180 },
+  {
+    title: $gettext('Status'),
+    key: 'status',
+    width: 160,
+    render: (row) =>
+      h(NTag, { type: statusType(row.status), size: 'small' }, () => statusLabels.value[row.status])
+  },
+  {
+    title: $gettext('Stage'),
+    key: 'stage',
+    width: 140,
+    render: (row) => stageLabels.value[row.stage] ?? '—'
+  },
+  {
+    title: $gettext('Duration'),
+    key: 'duration',
+    width: 100,
+    render: (row) => (row.duration > 0 ? `${row.duration.toFixed(1)}s` : '—')
+  },
+  {
+    title: $gettext('Detail'),
+    key: 'detail',
+    minWidth: 260,
+    render: (row) => {
+      const lines = [
+        ...(row.error ? [{ type: 'error' as const, text: row.error }] : []),
+        ...row.warnings.map((text) => ({ type: 'warning' as const, text }))
+      ]
+      if (!lines.length) return '—'
+      return h(
+        'div',
+        { style: 'display: flex; flex-direction: column; gap: 4px' },
+        lines.map((line) => h(NText, { type: line.type, style: 'font-size: 12px' }, () => line.text))
+      )
+    }
+  }
+])
+
+const statusType = (status: string) => {
+  if (status === 'success') return 'success'
+  if (status === 'partial') return 'warning'
+  if (status === 'failed') return 'error'
+  if (status === 'running') return 'info'
+  return 'default'
 }
 
-onMounted(() => {
-  checkStatus()
-})
-
-onUnmounted(() => {
-  if (progressWs) {
-    progressWs.close()
-    progressWs = null
+const formatSize = (bytes: number) => {
+  const units = ['B', 'KB', 'MB', 'GB', 'TB']
+  let value = bytes
+  let unit = 0
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024
+    unit++
   }
+  return `${value.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`
+}
+
+const formatDate = (value: string | null) => (value ? new Date(value).toLocaleString() : '—')
+
+const formatDuration = (seconds: number) => {
+  const hours = Math.floor(seconds / 3600)
+  const minutes = String(Math.floor(seconds / 60) % 60)
+  const rest = String(seconds % 60).padStart(2, '0')
+  return hours > 0 ? `${hours}:${minutes.padStart(2, '0')}:${rest}` : `${minutes}:${rest}`
+}
+
+// 运行中显示实时累计耗时，结束后显示时间区间与总耗时
+const timeLabel = computed(() => {
+  if (!startedAt.value) return ''
+  const started = formatDate(startedAt.value)
+  const end = endedAt.value ? new Date(endedAt.value).getTime() : now.value
+  const elapsed = formatDuration(
+    Math.max(0, Math.round((end - new Date(startedAt.value).getTime()) / 1000))
+  )
+  return endedAt.value
+    ? `${started} — ${formatDate(endedAt.value)} (${elapsed})`
+    : $gettext('%{ started }, running for %{ elapsed }', { started, elapsed })
 })
 
-// 第一步：连接并预检查
-const handlePreCheck = () => {
-  if (!connectionForm.value.url || !connectionForm.value.token_id || !connectionForm.value.token) {
-    window.$message.error($gettext('Please fill in all connection fields'))
+const handleConnect = () => {
+  if (!connection.value.url) {
+    window.$message.error($gettext('Please enter the panel address.'))
+    return
+  }
+  if (isPush.value && (!connection.value.token_id || !connection.value.token)) {
+    window.$message.error($gettext('Please enter the AcePanel Token ID and access token.'))
+    return
+  }
+  if (!isPush.value && !connection.value.api_key) {
+    window.$message.error($gettext('Please enter the source panel API key.'))
     return
   }
 
   loading.value = true
-  useRequest(migration.precheck(connectionForm.value))
+  useRequest(migration.precheck(connection.value))
     .onSuccess(({ data }: any) => {
-      remoteEnv.value = data.remote
-      // 同时获取本地环境信息
-      useRequest(home.installedEnvironment()).onSuccess(({ data: localData }: any) => {
-        localEnv.value = localData
-        checkEnvironment()
-        currentStep.value = 2
-        loading.value = false
-      })
+      source.value = data.source
+      handleItems()
     })
-    .onComplete(() => {
-      loading.value = false
-    })
+    .onComplete(() => (loading.value = false))
 }
 
-// 第二步：刷新环境检查
-const handleRefreshPreCheck = () => {
-  if (!connectionForm.value.url || !connectionForm.value.token_id || !connectionForm.value.token) {
-    window.$message.error($gettext('Please fill in all connection fields'))
-    return
-  }
-
-  loading.value = true
-  useRequest(migration.precheck(connectionForm.value))
-    .onSuccess(({ data }: any) => {
-      remoteEnv.value = data.remote
-      useRequest(home.installedEnvironment()).onSuccess(({ data: localData }: any) => {
-        localEnv.value = localData
-        checkEnvironment()
-        loading.value = false
-        window.$message.success($gettext('Environment check refreshed'))
-      })
-    })
-    .onComplete(() => {
-      loading.value = false
-    })
-}
-
-// 环境检查逻辑
-const checkEnvironment = () => {
-  const warnings: string[] = []
-  let passed = true
-
-  if (!localEnv.value || !remoteEnv.value) return
-
-  // webserver 必须一致
-  if (localEnv.value.webserver !== remoteEnv.value.webserver) {
-    warnings.push(
-      $gettext(
-        'Web server mismatch: local is %{local}, remote is %{remote}. Migration cannot proceed.',
-        {
-          local: localEnv.value.webserver || $gettext('none'),
-          remote: remoteEnv.value.webserver || $gettext('none'),
-        },
-      ),
-    )
-    passed = false
-  }
-
-  // 检查其他环境差异
-  const envTypes = ['go', 'java', 'nodejs', 'php', 'python']
-  for (const envType of envTypes) {
-    const localItems = localEnv.value[envType] || []
-    const remoteItems = remoteEnv.value[envType] || []
-    if (localItems.length > 0 && remoteItems.length === 0) {
-      warnings.push(
-        $gettext(
-          '%{type} is installed locally but not on the remote server. Related projects may need reconfiguration.',
-          {
-            type: envType.toUpperCase(),
-          },
-        ),
-      )
-    }
-  }
-
-  // 检查数据库差异
-  const localDBTypes = (localEnv.value.db || [])
-    .map((d: any) => d.value)
-    .filter((v: string) => v !== '0')
-  const remoteDBTypes = (remoteEnv.value.db || [])
-    .map((d: any) => d.value)
-    .filter((v: string) => v !== '0')
-  for (const dbType of localDBTypes) {
-    if (!remoteDBTypes.includes(dbType)) {
-      warnings.push(
-        $gettext(
-          '%{type} is installed locally but not on the remote server. Database migration for this type will be skipped.',
-          {
-            type: dbType.toUpperCase(),
-          },
-        ),
-      )
-    }
-  }
-
-  envWarnings.value = warnings
-  envCheckPassed.value = passed
-}
-
-// 第二步：获取可迁移项列表
-const handleGetItems = () => {
+const handleItems = () => {
   loading.value = true
   useRequest(migration.items())
     .onSuccess(({ data }: any) => {
-      websites.value = data.websites || []
-      databases.value = data.databases || []
-      databaseUsers.value = data.database_users || []
-      projects.value = data.projects || []
-      currentStep.value = 3
-      loading.value = false
+      resources.value = (data.items || []).map((item: MigrationResource) => ({
+        ...item,
+        blockers: item.blockers || [],
+        warnings: item.warnings || [],
+        depends_on: item.depends_on || []
+      }))
+      targetPaths.value = Object.fromEntries(
+        resources.value.map((item) => [item.key, item.target_path || ''])
+      )
+      targetUsers.value = {}
+      selected.value = []
+      step.value = 1
     })
-    .onComplete(() => {
-      loading.value = false
-    })
+    .onComplete(() => (loading.value = false))
 }
 
-// 第三步：开始迁移
-const handleStartMigration = () => {
-  const selectedItems = {
-    websites: websites.value
-      .filter((_: any, i: number) => selectedWebsites.value.includes(i))
-      .map((w: any) => ({ id: w.id, name: w.name, path: w.path })),
-    databases: databases.value
-      .filter((_: any, i: number) => selectedDatabases.value.includes(String(i)))
-      .map((d: any) => ({
-        type: d.type,
-        name: d.name,
-        server_id: d.server_id,
-        server: d.server,
-      })),
-    database_users: databaseUsers.value
-      .filter((_: any, i: number) => selectedDatabaseUsers.value.includes(i))
-      .map((u: any) => ({
-        id: u.id,
-        username: u.username,
-        password: u.password,
-        host: u.host,
-        server_id: u.server_id,
-        server: u.server?.name,
-        type: u.server?.type,
-      })),
-    projects: projects.value
-      .filter((_: any, i: number) => selectedProjects.value.includes(i))
-      .map((p: any) => ({ id: p.id, name: p.name, path: p.root_dir || p.path })),
-    stop_on_mig: stopOnMig.value,
+const handleStart = () => {
+  if (!selected.value.length) {
+    window.$message.warning($gettext('Please select at least one resource to migrate.'))
+    return
   }
-
-  if (
-    selectedItems.websites.length === 0 &&
-    selectedItems.databases.length === 0 &&
-    selectedItems.database_users.length === 0 &&
-    selectedItems.projects.length === 0
-  ) {
-    window.$message.warning($gettext('Please select at least one item to migrate'))
+  if (selectedBlocked.value > 0 && !skipBlocked.value) {
+    window.$message.error(
+      $gettext('The selection contains blocked resources. Resolve them or enable skipping first.')
+    )
     return
   }
 
   window.$dialog.warning({
-    title: $gettext('Confirm Migration'),
-    content: $gettext(
-      'Are you sure you want to start migration? This will transfer the selected items to the remote server.',
-    ),
-    positiveText: $gettext('Start'),
+    title: $gettext('Start migration'),
+    content: $gettext('Are you sure you want to start migrating the selected resources?'),
+    positiveText: $gettext('Start migration'),
     negativeText: $gettext('Cancel'),
     onPositiveClick: () => {
       loading.value = true
-      migrationLogs.value = []
-      migrationResults.value = []
-
-      useRequest(migration.start(selectedItems))
+      logs.value = []
+      results.value = []
+      useRequest(
+        migration.start({
+          items: selected.value.map((key) => ({
+            key,
+            target_path: targetPaths.value[key],
+            target_user: targetUsers.value[key]
+          })),
+          skip_blocked: skipBlocked.value,
+          stop_source: stopSource.value
+        })
+      )
         .onSuccess(() => {
-          currentStep.value = 4
-          migrationRunning.value = true
-          loading.value = false
-          connectProgressWs()
+          step.value = 2
+          running.value = true
+          connectProgress()
         })
-        .onComplete(() => {
-          loading.value = false
-        })
-    },
+        .onComplete(() => (loading.value = false))
+    }
   })
 }
 
-// 连接 WebSocket 获取进度
-const connectProgressWs = async () => {
+const connectProgress = async () => {
   try {
     progressWs = await ws.migrationProgress()
     progressWs.onmessage = (event: MessageEvent) => {
       const data = JSON.parse(event.data)
-      migrationResults.value = data.results || []
-      migrationStartedAt.value = data.started_at
-      migrationEndedAt.value = data.ended_at
-
-      if (data.new_logs) {
-        migrationLogs.value.push(...data.new_logs)
-        // 限制日志行数
-        if (migrationLogs.value.length > 1000) {
-          migrationLogs.value = migrationLogs.value.slice(-1000)
-        }
-        // 自动滚动到底部
-        nextTick(() => {
-          if (logContainer.value) {
-            logContainer.value.scrollTop = logContainer.value.scrollHeight
-          }
-        })
+      results.value = data.results || []
+      startedAt.value = data.started_at
+      endedAt.value = data.ended_at
+      if (data.new_logs?.length) {
+        logs.value.push(...data.new_logs)
+        if (logs.value.length > 1500) logs.value = logs.value.slice(-1500)
       }
-
       if (data.step === 'done') {
-        migrationRunning.value = false
-        currentStep.value = 5
-        if (progressWs) {
-          progressWs.close()
-          progressWs = null
-        }
+        running.value = false
+        step.value = 3
+        closeProgress()
       }
     }
     progressWs.onclose = () => {
-      if (migrationRunning.value) {
-        // 连接意外断开，尝试重连
-        setTimeout(connectProgressWs, 3000)
-      }
+      progressWs = null
+      if (running.value) reconnectTimer = setTimeout(connectProgress, 3000)
     }
   } catch {
-    // 如果 WebSocket 连接失败，回退到轮询
-    pollProgress()
+    window.$message.error($gettext('Failed to subscribe to migration progress.'))
   }
 }
 
-// 轮询进度（备用方案）
-const pollProgress = () => {
-  const timer = setInterval(() => {
-    useRequest(migration.results()).onSuccess(({ data }: any) => {
-      migrationResults.value = data.results || []
-      migrationStartedAt.value = data.started_at
-      migrationEndedAt.value = data.ended_at
-      if (data.logs) {
-        migrationLogs.value = data.logs
-      }
-      if (data.step === 'done') {
-        migrationRunning.value = false
-        currentStep.value = 5
-        clearInterval(timer)
-      }
-    })
-  }, 2000)
+const closeProgress = () => {
+  if (progressWs) {
+    progressWs.onclose = null
+    progressWs.close()
+    progressWs = null
+  }
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer)
+    reconnectTimer = null
+  }
 }
 
-// 重置迁移
 const handleReset = () => {
   window.$dialog.warning({
-    title: $gettext('Reset Migration'),
-    content: $gettext('Are you sure you want to reset the migration state?'),
-    positiveText: $gettext('Confirm'),
+    title: $gettext('Start a new migration'),
+    content: $gettext('The current migration results and logs will be cleared.'),
+    positiveText: $gettext('Reset'),
     negativeText: $gettext('Cancel'),
     onPositiveClick: () => {
       useRequest(migration.reset()).onSuccess(() => {
-        currentStep.value = 1
-        connectionForm.value = { url: '', token_id: 1, token: '' }
-        localEnv.value = null
-        remoteEnv.value = null
-        envCheckPassed.value = false
-        envWarnings.value = []
-        websites.value = []
-        databases.value = []
-        databaseUsers.value = []
-        projects.value = []
-        selectedWebsites.value = []
-        selectedDatabases.value = []
-        selectedDatabaseUsers.value = []
-        selectedProjects.value = []
-        migrationLogs.value = []
-        migrationResults.value = []
-        migrationStartedAt.value = null
-        migrationEndedAt.value = null
-        window.$message.success($gettext('Migration state has been reset'))
+        closeProgress()
+        step.value = 0
+        connection.value = { source_panel: 'acepanel', url: '', token_id: 1, token: '', api_key: '' }
+        source.value = null
+        resources.value = []
+        selected.value = []
+        targetPaths.value = {}
+        targetUsers.value = {}
+        skipBlocked.value = false
+        stopSource.value = false
+        logs.value = []
+        results.value = []
+        startedAt.value = null
+        endedAt.value = null
       })
-    },
+    }
   })
 }
 
-// 获取状态标签类型
-const getStatusType = (status: string) => {
-  switch (status) {
-    case 'success':
-      return 'success'
-    case 'failed':
-      return 'error'
-    case 'running':
-      return 'warning'
-    case 'skipped':
-      return 'default'
-    default:
-      return 'info'
-  }
-}
+// 迁移在后台执行，进入页面时恢复正在进行或已结束的任务
+onMounted(() => {
+  useRequest(migration.status()).onSuccess(({ data }: any) => {
+    results.value = data.results || []
+    logs.value = data.logs || []
+    startedAt.value = data.started_at
+    endedAt.value = data.ended_at
+    if (data.step === 'running') {
+      step.value = 2
+      running.value = true
+      connectProgress()
+    } else if (data.step === 'done') {
+      step.value = 3
+    }
+  })
+})
 
-// 格式化耗时
-const formatDuration = (seconds: number) => {
-  if (seconds < 60) return `${seconds.toFixed(1)}s`
-  const mins = Math.floor(seconds / 60)
-  const secs = (seconds % 60).toFixed(1)
-  return `${mins}m ${secs}s`
-}
+// 迁移进行中才需要走时，结束后停掉避免空转
+watch(
+  running,
+  (value) => {
+    if (clock) {
+      clearInterval(clock)
+      clock = null
+    }
+    if (value) {
+      now.value = Date.now()
+      clock = setInterval(() => (now.value = Date.now()), 1000)
+    }
+  },
+  { immediate: true }
+)
+
+onUnmounted(() => {
+  closeProgress()
+  if (clock) clearInterval(clock)
+})
+
+watch(
+  () => connection.value.source_panel,
+  () => {
+    connection.value.url = ''
+    connection.value.token = ''
+    connection.value.api_key = ''
+  }
+)
 </script>
 
 <template>
-  <n-flex vertical>
-    <!-- 步骤指示器 -->
-    <n-card>
-      <n-steps :current="currentStep" size="small">
-        <n-step
-          :title="$gettext('Connection')"
-          :description="$gettext('Enter remote server info')"
-        />
-        <n-step :title="$gettext('Pre-check')" :description="$gettext('Verify environment')" />
-        <n-step
-          :title="$gettext('Select Items')"
-          :description="$gettext('Choose what to migrate')"
-        />
-        <n-step :title="$gettext('Migrating')" :description="$gettext('Transfer in progress')" />
-        <n-step :title="$gettext('Complete')" :description="$gettext('View results')" />
-      </n-steps>
-    </n-card>
+  <n-flex vertical :size="16">
+    <n-steps :current="step + 1" size="small">
+      <n-step :title="$gettext('Connect')" />
+      <n-step :title="$gettext('Select resources')" />
+      <n-step :title="$gettext('Migrating')" />
+      <n-step :title="$gettext('Done')" />
+    </n-steps>
 
-    <!-- 第一步：连接信息 -->
-    <n-card v-if="currentStep === 1" :title="$gettext('Remote Server Connection')">
-      <n-form label-placement="left" label-width="auto">
-        <n-form-item :label="$gettext('Panel URL')">
-          <n-input
-            v-model:value="connectionForm.url"
-            :placeholder="$gettext('e.g. https://remote-server:8888')"
-          />
-        </n-form-item>
-        <n-form-item :label="$gettext('Token ID')">
-          <n-input-number
-            v-model:value="connectionForm.token_id"
-            :placeholder="$gettext('API Token ID')"
-            :min="1"
-            style="width: 100%"
-          />
-        </n-form-item>
-        <n-form-item :label="$gettext('Access Token')">
-          <n-input
-            v-model:value="connectionForm.token"
-            type="password"
-            show-password-on="click"
-            :placeholder="$gettext('API Access Token')"
-          />
-        </n-form-item>
-      </n-form>
-      <n-flex justify="end">
-        <n-button type="primary" :loading="loading" :disabled="loading" @click="handlePreCheck">
-          {{ $gettext('Next') }}
-        </n-button>
-      </n-flex>
-    </n-card>
+    <n-card v-if="step === 0" :title="$gettext('Migration source')">
+      <n-flex vertical :size="16">
+        <n-flex vertical :size="8">
+          <n-radio-group v-model:value="connection.source_panel" size="large">
+            <n-radio-button v-for="panel in panels" :key="panel.value" :value="panel.value">
+              {{ panel.title }}
+            </n-radio-button>
+          </n-radio-group>
+          <n-text depth="3">{{ currentDescription }}</n-text>
+        </n-flex>
 
-    <!-- 第二步：环境预检查 -->
-    <n-card v-if="currentStep === 2" :title="$gettext('Environment Pre-check')">
-      <!-- 警告信息 -->
-      <n-flex v-if="envWarnings.length > 0" vertical class="mb-4">
-        <n-alert
-          v-for="(warning, index) in envWarnings"
-          :key="index"
-          :type="envCheckPassed ? 'warning' : 'error'"
-          class="mb-2"
-        >
-          {{ warning }}
+        <n-form label-placement="left" :label-width="120">
+          <n-form-item
+            :label="isPush ? $gettext('Target address') : $gettext('Source address')"
+            required
+          >
+            <n-input
+              v-model:value="connection.url"
+              placeholder="https://192.168.1.100:8888"
+              @keydown.enter.prevent="handleConnect"
+            />
+          </n-form-item>
+          <template v-if="isPush">
+            <n-form-item :label="$gettext('Token ID')" required>
+              <n-input-number v-model:value="connection.token_id" :min="1" w-full />
+            </n-form-item>
+            <n-form-item :label="$gettext('Access token')" required>
+              <n-input
+                v-model:value="connection.token"
+                type="password"
+                show-password-on="click"
+                :placeholder="$gettext('Access token of the target AcePanel')"
+              />
+            </n-form-item>
+          </template>
+          <n-form-item v-else :label="$gettext('API key')" required>
+            <n-input
+              v-model:value="connection.api_key"
+              type="password"
+              show-password-on="click"
+              :placeholder="$gettext('API key of the source panel')"
+            />
+          </n-form-item>
+        </n-form>
+
+        <n-alert type="info" :show-icon="false">
+          {{
+            isPush
+              ? $gettext(
+                  'The target address must include the access entrance and allow this server address.'
+                )
+              : $gettext('The source panel API must be enabled and allow this server address.')
+          }}
         </n-alert>
+
+        <n-flex justify="end">
+          <n-button type="primary" :loading="loading" @click="handleConnect">
+            {{ $gettext('Connect and read resources') }}
+          </n-button>
+        </n-flex>
       </n-flex>
+    </n-card>
 
-      <!-- 环境对比表 -->
-      <n-table :bordered="true" :single-line="false" size="small">
-        <thead>
-          <tr>
-            <th>{{ $gettext('Environment') }}</th>
-            <th>{{ $gettext('Local') }}</th>
-            <th>{{ $gettext('Remote') }}</th>
-            <th>{{ $gettext('Status') }}</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr>
-            <td>{{ $gettext('Web Server') }}</td>
-            <td>{{ localEnv?.webserver || $gettext('None') }}</td>
-            <td>{{ remoteEnv?.webserver || $gettext('None') }}</td>
-            <td>
-              <n-tag
-                :type="localEnv?.webserver === remoteEnv?.webserver ? 'success' : 'error'"
-                size="small"
-              >
-                {{
-                  localEnv?.webserver === remoteEnv?.webserver
-                    ? $gettext('Match')
-                    : $gettext('Mismatch')
-                }}
-              </n-tag>
-            </td>
-          </tr>
-          <tr v-for="envType in ['go', 'java', 'nodejs', 'php', 'python']" :key="envType">
-            <td>{{ envType.toUpperCase() }}</td>
-            <td>
-              <template v-if="(localEnv?.[envType] || []).length > 0">
-                <n-tag
-                  v-for="item in localEnv[envType]"
-                  :key="item.value"
-                  size="small"
-                  style="margin: 2px"
-                >
-                  {{ item.label }}
-                </n-tag>
-              </template>
-              <template v-else>
-                <n-text depth="3">{{ $gettext('Not installed') }}</n-text>
-              </template>
-            </td>
-            <td>
-              <template v-if="(remoteEnv?.[envType] || []).length > 0">
-                <n-tag
-                  v-for="item in remoteEnv[envType]"
-                  :key="item.value"
-                  size="small"
-                  style="margin: 2px"
-                >
-                  {{ item.label }}
-                </n-tag>
-              </template>
-              <template v-else>
-                <n-text depth="3">{{ $gettext('Not installed') }}</n-text>
-              </template>
-            </td>
-            <td>
-              <n-tag
-                :type="
-                  JSON.stringify(localEnv?.[envType] || []) ===
-                  JSON.stringify(remoteEnv?.[envType] || [])
-                    ? 'success'
-                    : 'warning'
-                "
-                size="small"
-              >
-                {{
-                  JSON.stringify(localEnv?.[envType] || []) ===
-                  JSON.stringify(remoteEnv?.[envType] || [])
-                    ? $gettext('Match')
-                    : $gettext('Different')
-                }}
-              </n-tag>
-            </td>
-          </tr>
-          <tr>
-            <td>{{ $gettext('Database') }}</td>
-            <td>
-              <template v-if="(localEnv?.db || []).filter((d: any) => d.value !== '0').length > 0">
-                <n-tag
-                  v-for="item in localEnv.db.filter((d: any) => d.value !== '0')"
-                  :key="item.value"
-                  size="small"
-                  style="margin: 2px"
-                >
-                  {{ item.label }}
-                </n-tag>
-              </template>
-              <template v-else>
-                <n-text depth="3">{{ $gettext('None') }}</n-text>
-              </template>
-            </td>
-            <td>
-              <template v-if="(remoteEnv?.db || []).filter((d: any) => d.value !== '0').length > 0">
-                <n-tag
-                  v-for="item in remoteEnv.db.filter((d: any) => d.value !== '0')"
-                  :key="item.value"
-                  size="small"
-                  style="margin: 2px"
-                >
-                  {{ item.label }}
-                </n-tag>
-              </template>
-              <template v-else>
-                <n-text depth="3">{{ $gettext('None') }}</n-text>
-              </template>
-            </td>
-            <td>
-              <n-tag :type="'info'" size="small">-</n-tag>
-            </td>
-          </tr>
-        </tbody>
-      </n-table>
-
-      <n-flex justify="space-between" class="mt-4">
-        <n-flex>
-          <n-button @click="currentStep = 1">{{ $gettext('Previous') }}</n-button>
-          <n-button :loading="loading" :disabled="loading" @click="handleRefreshPreCheck">
+    <n-card v-if="step === 1" :title="$gettext('Select resources')">
+      <template #header-extra>
+        <n-flex align="center" :size="12">
+          <n-text depth="3">
+            {{ $gettext('Source: %{ panel }', { panel: source?.panel ?? '' }) }}
+            {{ source?.version }}
+          </n-text>
+          <n-button size="small" :loading="loading" @click="handleItems">
             {{ $gettext('Refresh') }}
           </n-button>
         </n-flex>
-        <n-button
-          type="primary"
-          :disabled="!envCheckPassed || loading"
-          :loading="loading"
-          @click="handleGetItems"
-        >
-          {{ $gettext('Next') }}
-        </n-button>
-      </n-flex>
-    </n-card>
-
-    <!-- 第三步：选择迁移项 -->
-    <n-card v-if="currentStep === 3" :title="$gettext('Select Migration Items')">
-      <!-- 网站 -->
-      <n-card :title="$gettext('Websites')" size="small" embedded class="mb-3">
-        <template v-if="websites.length > 0">
-          <n-checkbox-group v-model:value="selectedWebsites">
-            <n-flex vertical>
-              <n-checkbox v-for="(site, index) in websites" :key="site.id" :value="index">
-                {{ site.name }}
-                <n-text depth="3" class="ml-2">{{ site.path }}</n-text>
-              </n-checkbox>
-            </n-flex>
-          </n-checkbox-group>
-        </template>
-        <n-empty v-else :description="$gettext('No websites found')" />
-      </n-card>
-
-      <!-- 数据库 -->
-      <n-card :title="$gettext('Databases')" size="small" embedded class="mb-3">
-        <template v-if="databases.length > 0">
-          <n-checkbox-group v-model:value="selectedDatabases">
-            <n-flex vertical>
-              <n-checkbox v-for="(db, index) in databases" :key="db.name" :value="String(index)">
-                {{ db.name }}
-                <n-tag size="small" class="ml-2">{{ db.type }}</n-tag>
-                <n-text depth="3" class="ml-2">{{ db.server }}</n-text>
-              </n-checkbox>
-            </n-flex>
-          </n-checkbox-group>
-        </template>
-        <n-empty v-else :description="$gettext('No databases found')" />
-      </n-card>
-
-      <!-- 数据库用户 -->
-      <n-card :title="$gettext('Database Users')" size="small" embedded class="mb-3">
-        <template v-if="databaseUsers.length > 0">
-          <n-checkbox-group v-model:value="selectedDatabaseUsers">
-            <n-flex vertical>
-              <n-checkbox v-for="(user, index) in databaseUsers" :key="user.id" :value="index">
-                {{ user.username }}
-                <n-text v-if="user.host" depth="3" class="ml-1">@{{ user.host }}</n-text>
-                <n-tag size="small" class="ml-2">{{ user.server?.type }}</n-tag>
-                <n-text depth="3" class="ml-2">{{ user.server?.name }}</n-text>
-              </n-checkbox>
-            </n-flex>
-          </n-checkbox-group>
-        </template>
-        <n-empty v-else :description="$gettext('No database users found')" />
-      </n-card>
-
-      <!-- 项目 -->
-      <n-card :title="$gettext('Projects')" size="small" embedded class="mb-3">
-        <template v-if="projects.length > 0">
-          <n-checkbox-group v-model:value="selectedProjects">
-            <n-flex vertical>
-              <n-checkbox v-for="(proj, index) in projects" :key="proj.id" :value="index">
-                {{ proj.name }}
-                <n-tag size="small" class="ml-2">{{ proj.type }}</n-tag>
-                <n-text depth="3" class="ml-2">{{ proj.root_dir || proj.path }}</n-text>
-              </n-checkbox>
-            </n-flex>
-          </n-checkbox-group>
-        </template>
-        <n-empty v-else :description="$gettext('No projects found')" />
-      </n-card>
-
-      <!-- 选项 -->
-      <n-card size="small" embedded class="mb-3">
-        <n-checkbox v-model:checked="stopOnMig">
-          {{ $gettext('Stop services during migration to ensure data consistency (recommended)') }}
-        </n-checkbox>
-      </n-card>
-
-      <n-flex justify="space-between">
-        <n-button @click="currentStep = 2">{{ $gettext('Previous') }}</n-button>
-        <n-button
-          type="primary"
-          :loading="loading"
-          :disabled="loading"
-          @click="handleStartMigration"
-        >
-          {{ $gettext('Start Migration') }}
-        </n-button>
-      </n-flex>
-    </n-card>
-
-    <!-- 第四步：迁移进度 -->
-    <n-card v-if="currentStep === 4" :title="$gettext('Migration Progress')">
-      <!-- 迁移项状态 -->
-      <n-table :bordered="true" :single-line="false" size="small" class="mb-3">
-        <thead>
-          <tr>
-            <th>{{ $gettext('Type') }}</th>
-            <th>{{ $gettext('Name') }}</th>
-            <th>{{ $gettext('Status') }}</th>
-            <th>{{ $gettext('Duration') }}</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="(result, index) in migrationResults" :key="index">
-            <td>
-              <n-tag size="small">{{ result.type }}</n-tag>
-            </td>
-            <td>{{ result.name }}</td>
-            <td>
-              <n-tag :type="getStatusType(result.status)" size="small">
-                {{ result.status }}
-              </n-tag>
-            </td>
-            <td>{{ result.duration ? formatDuration(result.duration) : '-' }}</td>
-          </tr>
-        </tbody>
-      </n-table>
-
-      <!-- 实时日志 -->
-      <n-card :title="$gettext('Migration Logs')" size="small" embedded>
-        <template #header-extra>
-          <n-button
-            size="small"
-            :disabled="migrationLogs.length === 0"
-            tag="a"
-            :href="migration.logUrl"
-            target="_blank"
-          >
-            {{ $gettext('Download Log') }}
+      </template>
+      <n-flex vertical :size="16">
+        <n-data-table
+          v-model:checked-row-keys="selected"
+          :columns="columns"
+          :data="resources"
+          :row-key="(row: MigrationResource) => row.key"
+          :pagination="{ pageSize: 20 }"
+          size="small"
+          striped
+        />
+        <n-flex align="center" :size="24">
+          <n-checkbox v-model:checked="skipBlocked">
+            {{ $gettext('Skip blocked resources during migration') }}
+          </n-checkbox>
+          <n-checkbox v-model:checked="stopSource">
+            {{ $gettext('Stop running services while backups are created') }}
+          </n-checkbox>
+        </n-flex>
+        <n-flex justify="space-between">
+          <n-button @click="step = 0">{{ $gettext('Back') }}</n-button>
+          <n-button type="primary" :loading="loading" @click="handleStart">
+            {{ $gettext('Start migration (%{ count })', { count: String(selected.length) }) }}
           </n-button>
-        </template>
-        <div
-          ref="logContainer"
-          style="
-            height: 400px;
-            overflow-y: auto;
-            font-family: monospace;
-            font-size: 13px;
-            line-height: 1.6;
-            background: var(--n-color);
-            padding: 8px;
-            border-radius: 4px;
-          "
-        >
-          <div
-            v-for="(log, index) in migrationLogs"
-            :key="index"
-            style="white-space: pre-wrap; word-break: break-all"
-          >
-            {{ log }}
-          </div>
-          <div v-if="migrationRunning" style="color: var(--n-text-color-3)">
-            {{ $gettext('Migration in progress...') }}
-          </div>
-        </div>
-      </n-card>
+        </n-flex>
+      </n-flex>
     </n-card>
 
-    <!-- 第五步：迁移完成 -->
-    <n-card v-if="currentStep === 5" :title="$gettext('Migration Complete')">
-      <n-result
-        :status="migrationResults.every((r: any) => r.status === 'success') ? 'success' : 'warning'"
-        :title="
-          migrationResults.every((r: any) => r.status === 'success')
-            ? $gettext('All items migrated successfully')
-            : $gettext('Migration completed with some issues')
-        "
-      >
-        <template #footer>
-          <n-flex vertical>
-            <n-text v-if="migrationStartedAt && migrationEndedAt">
-              {{ $gettext('Started') }}: {{ new Date(migrationStartedAt).toLocaleString() }}
-              &nbsp;|&nbsp;
-              {{ $gettext('Ended') }}: {{ new Date(migrationEndedAt).toLocaleString() }}
-            </n-text>
-          </n-flex>
-        </template>
-      </n-result>
-
-      <!-- 详细结果表 -->
-      <n-table :bordered="true" :single-line="false" size="small" class="mt-4">
-        <thead>
-          <tr>
-            <th>{{ $gettext('Type') }}</th>
-            <th>{{ $gettext('Name') }}</th>
-            <th>{{ $gettext('Status') }}</th>
-            <th>{{ $gettext('Duration') }}</th>
-            <th>{{ $gettext('Details') }}</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr v-for="(result, index) in migrationResults" :key="index">
-            <td>
-              <n-tag size="small">{{ result.type }}</n-tag>
-            </td>
-            <td>{{ result.name }}</td>
-            <td>
-              <n-tag :type="getStatusType(result.status)" size="small">
-                {{ result.status }}
-              </n-tag>
-            </td>
-            <td>{{ result.duration ? formatDuration(result.duration) : '-' }}</td>
-            <td>
-              <n-text v-if="result.error" type="error">{{ result.error }}</n-text>
-              <n-text v-else-if="result.status === 'success' && result.ended_at" type="success">
-                {{ $gettext('Migration succeeded') }} -
-                {{ new Date(result.ended_at).toLocaleString() }}
-              </n-text>
-              <n-text v-else-if="result.ended_at">
-                {{ new Date(result.ended_at).toLocaleString() }}
-              </n-text>
-              <n-text v-else>-</n-text>
-            </td>
-          </tr>
-        </tbody>
-      </n-table>
-
-      <!-- 环境差异提醒 -->
-      <n-alert
-        v-if="envWarnings.length > 0"
-        type="warning"
-        :title="$gettext('Reminder')"
-        class="mt-4"
-      >
-        {{
-          $gettext(
-            'Some environments differ between local and remote servers. You may need to adjust settings on the remote server otherwise related items may not work properly after migration.',
-          )
-        }}
-      </n-alert>
-
-      <n-flex justify="center" class="mt-4">
-        <n-button tag="a" :href="migration.logUrl" target="_blank">
-          {{ $gettext('Download Log') }}
-        </n-button>
-        <n-button type="primary" @click="handleReset">
-          {{ $gettext('Start New Migration') }}
-        </n-button>
+    <n-card v-if="step >= 2" :title="running ? $gettext('Migrating') : $gettext('Migration done')">
+      <template #header-extra>
+        <n-flex align="center" :size="12">
+          <n-text depth="3">{{ timeLabel }}</n-text>
+          <n-button v-if="!running" tag="a" :href="migration.logUrl" size="small">
+            {{ $gettext('Download log') }}
+          </n-button>
+          <n-button v-if="!running" size="small" type="primary" @click="handleReset">
+            {{ $gettext('Start a new migration') }}
+          </n-button>
+        </n-flex>
+      </template>
+      <n-flex vertical :size="16">
+        <n-progress
+          type="line"
+          :percentage="progress"
+          :status="stats.failed > 0 ? 'error' : running ? 'default' : 'success'"
+        />
+        <n-flex :size="12">
+          <n-tag type="success" size="small">
+            {{ $gettext('Success: %{ count }', { count: String(stats.success) }) }}
+          </n-tag>
+          <n-tag type="warning" size="small">
+            {{ $gettext('With warnings: %{ count }', { count: String(stats.partial) }) }}
+          </n-tag>
+          <n-tag type="error" size="small">
+            {{ $gettext('Failed: %{ count }', { count: String(stats.failed) }) }}
+          </n-tag>
+          <n-tag size="small">
+            {{ $gettext('Skipped: %{ count }', { count: String(stats.skipped) }) }}
+          </n-tag>
+        </n-flex>
+        <n-data-table
+          :columns="resultColumns"
+          :data="results"
+          :row-key="(row: MigrationResult) => row.key"
+          size="small"
+          striped
+        />
+        <n-log :lines="logs" :rows="16" language="naive-log" />
       </n-flex>
     </n-card>
   </n-flex>
 </template>
 
-<style scoped lang="scss"></style>
+<style scoped>
+/* 末步去除空白 */
+:deep(.n-step:last-child) {
+  flex: 0 0 auto;
+}
+</style>

@@ -20,7 +20,6 @@ func init() {
 				&biz.Cron{},
 				&biz.DatabaseServer{},
 				&biz.DatabaseUser{},
-				&biz.Monitor{},
 				&biz.Setting{},
 				&biz.SSH{},
 				&biz.Task{},
@@ -39,7 +38,6 @@ func init() {
 				&biz.Cron{},
 				&biz.DatabaseServer{},
 				&biz.DatabaseUser{},
-				&biz.Monitor{},
 				&biz.Setting{},
 				&biz.SSH{},
 				&biz.Task{},
@@ -120,6 +118,88 @@ func init() {
 		},
 		Rollback: func(tx *gorm.DB) error {
 			return nil
+		},
+	})
+	Migrations = append(Migrations, &gormigrate.Migration{
+		ID: "20260720-add-tamper-rules",
+		Migrate: func(tx *gorm.DB) error {
+			return tx.AutoMigrate(&biz.TamperRule{})
+		},
+		Rollback: func(tx *gorm.DB) error {
+			return tx.Migrator().DropTable(&biz.TamperRule{})
+		},
+	})
+	Migrations = append(Migrations, &gormigrate.Migration{
+		ID: "20260720-add-file-share",
+		Migrate: func(tx *gorm.DB) error {
+			return tx.AutoMigrate(&biz.FileShare{})
+		},
+		Rollback: func(tx *gorm.DB) error {
+			return tx.Migrator().DropTable(&biz.FileShare{})
+		},
+	})
+	Migrations = append(Migrations, &gormigrate.Migration{
+		ID: "20260720-update-task-fields",
+		Migrate: func(tx *gorm.DB) error {
+			return tx.AutoMigrate(&biz.Task{})
+		},
+		Rollback: func(tx *gorm.DB) error {
+			return nil
+		},
+	})
+	Migrations = append(Migrations, &gormigrate.Migration{
+		ID: "20260725-add-notify-and-alert",
+		Migrate: func(tx *gorm.DB) error {
+			return tx.AutoMigrate(&biz.NotifyChannel{}, &biz.AlertRule{}, &biz.Alert{})
+		},
+		Rollback: func(tx *gorm.DB) error {
+			return tx.Migrator().DropTable(&biz.NotifyChannel{}, &biz.AlertRule{}, &biz.Alert{})
+		},
+	})
+	Migrations = append(Migrations, &gormigrate.Migration{
+		ID: "20260814-move-monitor",
+		Migrate: func(tx *gorm.DB) error {
+			if !tx.Migrator().HasTable("monitors") {
+				return nil
+			}
+			if err := tx.Migrator().DropTable("monitors"); err != nil {
+				return err
+			}
+			return vacuumDB(tx)
+		},
+	})
+	Migrations = append(Migrations, &gormigrate.Migration{
+		ID: "20260814-remove-main-scan-events",
+		Migrate: func(tx *gorm.DB) error {
+			if !tx.Migrator().HasTable("scan_events") {
+				return nil
+			}
+			return tx.Migrator().DropTable("scan_events")
+		},
+	})
+	Migrations = append(Migrations, &gormigrate.Migration{
+		ID: "20260815-cert-multi-websites",
+		Migrate: func(tx *gorm.DB) error {
+			if err := tx.AutoMigrate(&biz.Cert{}, &biz.Website{}); err != nil {
+				return err
+			}
+
+			// 证书与网站的关系反转到网站表，取最早的一张
+			if tx.Migrator().HasColumn(&biz.Cert{}, "website_id") {
+				if err := tx.Exec(`UPDATE websites SET cert_id = (
+					SELECT MIN(certs.id) FROM certs WHERE certs.website_id = websites.id
+				) WHERE EXISTS (SELECT 1 FROM certs WHERE certs.website_id = websites.id)`).Error; err != nil {
+					return err
+				}
+				if err := tx.Migrator().DropColumn(&biz.Cert{}, "website_id"); err != nil {
+					return err
+				}
+			}
+
+			return nil
+		},
+		Rollback: func(tx *gorm.DB) error {
+			return tx.Migrator().DropColumn(&biz.Website{}, "cert_id")
 		},
 	})
 }

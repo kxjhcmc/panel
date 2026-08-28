@@ -4,23 +4,23 @@ import (
 	"net/http"
 
 	"github.com/leonelquinteros/gotext"
-	"github.com/libtnb/chix"
+	"github.com/libtnb/chix/v2"
 
 	"github.com/acepanel/panel/v3/internal/biz"
-	"github.com/acepanel/panel/v3/internal/http/request"
+	"github.com/acepanel/panel/v3/internal/request"
 	"github.com/acepanel/panel/v3/pkg/acme"
 	"github.com/acepanel/panel/v3/pkg/types"
 )
 
 type CertService struct {
 	t        *gotext.Locale
-	certRepo biz.CertRepo
+	certRepo *biz.CertUsecase
 }
 
-func NewCertService(t *gotext.Locale, cert biz.CertRepo) *CertService {
+func NewCertService(certUsecase *biz.CertUsecase, t *gotext.Locale) *CertService {
 	return &CertService{
 		t:        t,
-		certRepo: cert,
+		certRepo: certUsecase,
 	}
 }
 
@@ -268,7 +268,7 @@ func (s *CertService) Deploy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err = s.certRepo.Deploy(req.ID, req.WebsiteID, req.EnableHTTPS)
+	err = s.certRepo.Deploy(req.ID, req.WebsiteIDs, req.EnableHTTPS)
 	if err != nil {
 		Error(w, http.StatusInternalServerError, "%v", err)
 		return

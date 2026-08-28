@@ -1,16 +1,46 @@
 package service
 
 import (
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	"net/netip"
 	"slices"
 	"strings"
 
-	"github.com/gookit/validate"
-	"github.com/libtnb/chix"
+	"github.com/libtnb/chix/v2"
+	"github.com/libtnb/validator"
 
-	"github.com/acepanel/panel/v3/internal/http/request"
+	"github.com/acepanel/panel/v3/internal/request"
 )
+
+// defaultValidator Bind 使用的校验器，启动时经 SetValidator 换成带自定义规则的实例
+var defaultValidator = validator.Default()
+
+// SetValidator 设置 Bind 使用的校验器
+func SetValidator(v *validator.Validator) {
+	defaultValidator = v
+}
+
+// clientIP 提取客户端 IP，优先取配置的真实 IP 头
+// 代理头通常给的是裸 IP，只有 RemoteAddr 带端口，两种形态都要能解析
+func clientIP(r *http.Request, ipHeader string) string {
+	ip := r.RemoteAddr
+	if ipHeader != "" && r.Header.Get(ipHeader) != "" {
+		ip = strings.Split(r.Header.Get(ipHeader), ",")[0]
+	}
+	ip = strings.TrimSpace(ip)
+
+	if addr, err := netip.ParseAddr(ip); err == nil {
+		return addr.String()
+	}
+	if host, _, err := net.SplitHostPort(ip); err == nil {
+		return host
+	}
+
+	return r.RemoteAddr
+}
 
 // SuccessResponse 通用成功响应
 type SuccessResponse struct {
@@ -80,46 +110,49 @@ func Bind[T any](r *http.Request) (*T, error) {
 	}
 
 	// 准备验证
-	df, err := validate.FromStruct(req)
-	if err != nil {
-		return nil, err
-	}
-	v := df.Create()
-
 	if reqWithPrepare, ok := any(req).(request.WithPrepare); ok {
-		if err = reqWithPrepare.Prepare(r); err != nil {
+		if err := reqWithPrepare.Prepare(r); err != nil {
 			return nil, err
 		}
 	}
 	if reqWithAuthorize, ok := any(req).(request.WithAuthorize); ok {
-		if err = reqWithAuthorize.Authorize(r); err != nil {
+		if err := reqWithAuthorize.Authorize(r); err != nil {
 			return nil, err
 		}
+	}
+
+	vd, err := defaultValidator.Struct(req)
+	if err != nil {
+		return nil, err
 	}
 	if reqWithRules, ok := any(req).(request.WithRules); ok {
 		if rules := reqWithRules.Rules(r); rules != nil {
 			for key, value := range rules {
-				v.StringRule(key, value)
+				if err := vd.AddRules(key, value); err != nil {
+					return nil, err
+				}
 			}
 		}
 	}
 	if reqWithFilters, ok := any(req).(request.WithFilters); ok {
 		if filters := reqWithFilters.Filters(r); filters != nil {
-			v.FilterRules(filters)
-		}
-	}
-	if reqWithMessages, ok := any(req).(request.WithMessages); ok {
-		if messages := reqWithMessages.Messages(r); messages != nil {
-			v.AddMessages(messages)
+			for key, value := range filters {
+				if err := vd.AddFilters(key, value); err != nil {
+					return nil, err
+				}
+			}
 		}
 	}
 
 	// 开始验证
-	if v.Validate() && v.IsSuccess() {
-		return req, nil
+	if err = vd.Validate(r.Context()); err != nil {
+		return nil, err
+	}
+	if vd.Fails() {
+		return nil, errors.New(vd.Errors().One())
 	}
 
-	return nil, v.Errors.OneError()
+	return req, nil
 }
 
 // Paginate 取分页条目

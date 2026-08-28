@@ -2,11 +2,12 @@ package service
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"os"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -14,28 +15,27 @@ import (
 	"github.com/leonelquinteros/gotext"
 
 	"github.com/acepanel/panel/v3/internal/biz"
-	"github.com/acepanel/panel/v3/internal/http/request"
+	"github.com/acepanel/panel/v3/internal/request"
 	"github.com/acepanel/panel/v3/pkg/shell"
+	"github.com/acepanel/panel/v3/pkg/sshlog"
 	"github.com/acepanel/panel/v3/pkg/types"
 )
 
-// SSH 日志正则
-var (
-	sshAccepted    = regexp.MustCompile(`Accepted\s+(\S+)\s+for\s+(\S+)\s+from\s+(\S+)\s+port\s+(\d+)`)
-	sshFailed      = regexp.MustCompile(`Failed\s+(\S+)\s+for\s+(?:invalid user\s+)?(\S+)\s+from\s+(\S+)\s+port\s+(\d+)`)
-	sshInvalidUser = regexp.MustCompile(`Invalid user\s+(\S+)\s+from\s+(\S+)\s+port\s+(\d+)`)
-	sshDisconnect  = regexp.MustCompile(`Disconnected from\s+(?:authenticating\s+)?user\s+(\S+)\s+(\S+)\s+port\s+(\d+)`)
+// SSH 日志反向分块读取参数：首块 512 KB 起，每次翻倍，单块上限 64 MB
+const (
+	sshLogChunkInitial int64 = 512 * 1024
+	sshLogChunkMax     int64 = 64 * 1024 * 1024
 )
 
 type LogService struct {
 	t       *gotext.Locale
-	logRepo biz.LogRepo
+	logRepo *biz.LogUsecase
 }
 
-func NewLogService(t *gotext.Locale, logRepo biz.LogRepo) *LogService {
+func NewLogService(logUsecase *biz.LogUsecase, t *gotext.Locale) *LogService {
 	return &LogService{
 		t:       t,
-		logRepo: logRepo,
+		logRepo: logUsecase,
 	}
 }
 
@@ -117,7 +117,7 @@ func (s *LogService) sshFromJournalctl(limit int) ([]types.SSHLoginLog, error) {
 			continue
 		}
 
-		record := parseSSHMessage(entry.Message)
+		record := sshlog.ParseMessage(entry.Message)
 		if record == nil {
 			continue
 		}
@@ -155,91 +155,47 @@ func (s *LogService) sshFromLogFile(limit int) ([]types.SSHLoginLog, error) {
 	}
 	defer func(file *os.File) { _ = file.Close() }(file)
 
-	// 读取所有匹配行后取最后 limit 条（日志文件按时间正序）
-	var logs []types.SSHLoginLog
-	scanner := bufio.NewScanner(file)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if !strings.Contains(line, "sshd[") {
-			continue
-		}
-
-		record := parseSSHMessage(line)
-		if record == nil {
-			continue
-		}
-
-		// 从行首解析 syslog 时间戳（如 "Feb 11 08:30:01"）
-		record.Time = parseSSHLogTime(line)
-
-		logs = append(logs, *record)
+	stat, err := file.Stat()
+	if err != nil {
+		return nil, err
 	}
 
-	// 取最后 limit 条
+	// 从末尾反向分块读取，直到收集满 limit 条或读到文件头
+	var logs []types.SSHLoginLog
+	offset := stat.Size()
+	window := sshLogChunkInitial
+	for offset > 0 && len(logs) < limit {
+		if window > sshLogChunkMax {
+			window = sshLogChunkMax
+		}
+		readSize := min(window, offset)
+		offset -= readSize
+
+		buf := make([]byte, readSize)
+		if _, err = file.ReadAt(buf, offset); err != nil && !errors.Is(err, io.EOF) {
+			return nil, err
+		}
+
+		// 若块开头是残行（前一字节不是换行），丢到本块第一个换行为止
+		if offset > 0 {
+			var prev [1]byte
+			if _, err = file.ReadAt(prev[:], offset-1); err == nil && prev[0] != '\n' {
+				if idx := bytes.IndexByte(buf, '\n'); idx >= 0 {
+					buf = buf[idx+1:]
+				} else {
+					buf = nil
+				}
+			}
+		}
+
+		// 新读的块时间上更早，前置到已收集 logs 之前
+		logs = append(sshlog.ParseChunk(buf), logs...)
+		window *= 2
+	}
+
 	if len(logs) > limit {
 		logs = logs[len(logs)-limit:]
 	}
 
 	return logs, nil
-}
-
-// parseSSHMessage 从日志消息中提取 SSH 登录信息
-func parseSSHMessage(msg string) *types.SSHLoginLog {
-	if m := sshAccepted.FindStringSubmatch(msg); m != nil {
-		return &types.SSHLoginLog{
-			Method: m[1],
-			User:   m[2],
-			IP:     m[3],
-			Port:   m[4],
-			Status: "accepted",
-		}
-	}
-	if m := sshFailed.FindStringSubmatch(msg); m != nil {
-		return &types.SSHLoginLog{
-			Method: m[1],
-			User:   m[2],
-			IP:     m[3],
-			Port:   m[4],
-			Status: "failed",
-		}
-	}
-	if m := sshInvalidUser.FindStringSubmatch(msg); m != nil {
-		return &types.SSHLoginLog{
-			User:   m[1],
-			IP:     m[2],
-			Port:   m[3],
-			Method: "-",
-			Status: "invalid_user",
-		}
-	}
-	if m := sshDisconnect.FindStringSubmatch(msg); m != nil {
-		return &types.SSHLoginLog{
-			User:   m[1],
-			IP:     m[2],
-			Port:   m[3],
-			Method: "-",
-			Status: "disconnected",
-		}
-	}
-	return nil
-}
-
-// parseSSHLogTime 从 syslog 格式行中解析时间
-func parseSSHLogTime(line string) string {
-	// syslog 格式：Mon DD HH:MM:SS（前 15 个字符）
-	if len(line) < 15 {
-		return "-"
-	}
-	ts := line[:15]
-	// 使用当前年份补全
-	t, err := time.Parse("Jan  2 15:04:05", ts)
-	if err != nil {
-		t, err = time.Parse("Jan 2 15:04:05", ts)
-		if err != nil {
-			return "-"
-		}
-	}
-	t = t.AddDate(time.Now().Year(), 0, 0)
-	return t.Format("2006-01-02 15:04:05")
 }
